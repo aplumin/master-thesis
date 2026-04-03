@@ -1,3 +1,7 @@
+# Project-specific
+results/
+scripts/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -77,6 +81,10 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# Quarto
+.quarto
+*.quarto_ipynb
 
 # IPython
 profile_default/
@@ -205,3 +213,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# MacOS
+.DS_Store
+
+# Snakemake
+.snakemake/
