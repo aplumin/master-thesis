@@ -1,8 +1,13 @@
+"""
+Parameter class for compartmental models and utility functions.
+"""
+
 import jax.numpy as jnp
 from typing import NamedTuple
 
 
 class Params(NamedTuple):
+    """Parameters for compartmental models."""
     R_0: float       # basic reproductive number
     beta: float      # transmission rate
     gamma_inv: float # exposed period (inverse of become infectious rate)
@@ -19,7 +24,7 @@ class Params(NamedTuple):
     rho: float       # isolation reduction factor
     
     @classmethod
-    def for_SEIPAR(cls, # sars-cov-2 params
+    def for_SEIPAR(cls,
             R_0: float = 2.5,
             phi: float = 0.1,
             gamma_inv: float = 3.0,
@@ -33,7 +38,10 @@ class Params(NamedTuple):
             R_crit: float = 1.0,
             tau: float = 7.0,
         ) -> "Params":
-        """Parameters for the full model with presymptomatic transmission."""
+        """
+        Parameters for the full model with presymptomatic and asymptomatic transmission.
+        Uses SARS-CoV-2 parameters by default.
+        """
         r = p * phi * mu_a_inv + (1-p)*(sigma_inv + mu_s_inv)
         r_eps = p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
         beta = R_0 / r
@@ -45,7 +53,7 @@ class Params(NamedTuple):
         )
 
     @classmethod
-    def for_SEIAR(cls, # flu params
+    def for_SEIAR(cls,
             R_0: float = 1.5,
             phi: float = 0.5,
             gamma_inv: float = 2.0,
@@ -58,6 +66,10 @@ class Params(NamedTuple):
             R_crit: float = 1.0,
             tau: float = 7.0,
         ) -> "Params":
+        """
+        Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
+        Uses Influenza A parameters by default.
+        """
         r = p * phi * mu_a_inv + (1-p) * mu_s_inv
         r_eps = p * phi * mu_a_inv + (1-p) * ((1-epsilon_s) * mu_s_inv)
         beta = R_0 / r
@@ -79,6 +91,10 @@ class Params(NamedTuple):
             R_crit: float = 1.0,
             tau: float = 7.0,
         ) -> "Params":
+        """
+        Parameters for the SEIR model without asymptomatic or presymptomatic transmission.
+        Uses Ebola parameters by default.
+        """
         beta = R_0 / mu_s_inv
         rho = 1 - epsilon_s
         return cls(

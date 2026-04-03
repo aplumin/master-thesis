@@ -1,3 +1,10 @@
+"""
+Deterministic compartmental models:
+    - SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
+    - SEIAR_W with presymptomatic transmission and wastewater feedback
+    - SEIR_W with no presymptomatic or asymptomatic transmission and wastewater feedback
+"""
+
 import jax
 import jax.numpy as jnp
 from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, PIDController
@@ -38,6 +45,19 @@ def SEIPAR_W(t, y, params):
 
     return jnp.array([dS, dE, dIa, dIp, dIs, dR, dW1, dW2, dW3])
 
+@partial(jax.jit, static_argnames=['t1'])
+def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
+    solution = diffeqsolve(
+        ODETerm(SEIPAR_W), Tsit5(),
+        t0 = 0.0, t1 = t1,  dt0 = 0.1,
+        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        args = params, 
+        saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
+        stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
+    )
+    return solution.ts, solution.ys
+
+
 def SEIAR_W(t, y, params):
     """Simplified compartmental model without presymptomatic transmission."""
     S, E, Ia, Is, R, W1, W2, W3 = y
@@ -62,6 +82,19 @@ def SEIAR_W(t, y, params):
     dW3 = delay_rate * (W2 - W3)
     return jnp.array([dS, dE, dIa, dIs, dR, dW1, dW2, dW3])
 
+@partial(jax.jit, static_argnames=['t1'])
+def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
+    solution = diffeqsolve(
+        ODETerm(SEIAR_W), Tsit5(),
+        t0 = 0.0, t1 = t1, dt0 = 0.1,
+        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        args = params, 
+        saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
+        stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
+    )
+    return solution.ts, solution.ys
+
+
 def SEIR_W(t, y, params):
     """Simplified compartmental model without presymptomatic or asymptomatic transmission."""
     S, E, II, R, W1, W2, W3 = y
@@ -84,31 +117,6 @@ def SEIR_W(t, y, params):
     dW3 = delay_rate * (W2 - W3)
     return jnp.array([dS, dE, dI, dR, dW1, dW2, dW3])
 
-
-@partial(jax.jit, static_argnames=['t1'])
-def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
-    solution = diffeqsolve(
-        ODETerm(SEIPAR_W), Tsit5(),
-        t0 = 0.0, t1 = t1,  dt0 = 0.1,
-        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        args = params, 
-        saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
-        stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
-    )
-    return solution.ts, solution.ys
-
-@partial(jax.jit, static_argnames=['t1'])
-def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
-    solution = diffeqsolve(
-        ODETerm(SEIAR_W), Tsit5(),
-        t0 = 0.0, t1 = t1, dt0 = 0.1,
-        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        args = params, 
-        saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
-        stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
-    )
-    return solution.ts, solution.ys
-
 @partial(jax.jit, static_argnames=['t1'])
 def simulate_SEIR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
     solution = diffeqsolve(
@@ -122,6 +130,7 @@ def simulate_SEIR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0:
     return solution.ts, solution.ys
 
 
+# PLOTTING FUNCTIONS
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: float, t1: float = 100.0, E0: float = 1e-6):
     """Compute a 2D grid of Rt values with wastewater warning response efficacy on the x axis and isolation efficacy on the y axis."""
@@ -132,6 +141,10 @@ def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: 
     return jax.vmap(jax.vmap(final_R, in_axes=(None, 0)), in_axes=(0, None))(eps_ww, eps_ss)
 
 def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, E0=1e-6, title=None):
+    """
+    Plot a grid of the reproductive number after interventions.
+    Wastewater warning response efficacy on the x axis and isolation efficacy on the y axis.
+    """
     eps_ww = jnp.linspace(0.0, 0.999, 100)
     eps_ss = jnp.linspace(0.0, 0.999, 100)
     EPS_W, EPS_S = jnp.meshgrid(eps_ww, eps_ss, indexing='ij')
@@ -145,7 +158,6 @@ def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, 
     plt.ylabel('Isolation efficacy')
     plt.title(title)
     return fig
-
 
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1: float = 100.0, E0: float = 1e-6):
@@ -161,6 +173,10 @@ def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1:
     return I_tot_grid / I_tot(0.0, 0.0)
 
 def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
+    """
+    Plot a grid of the total proportion infected after interventions (compared to baseline without interventions).
+    Wastewater warning response efficacy on the x axis and isolation efficacy on the y axis.
+    """
     eps_ww = jnp.linspace(0.0, 0.999, 100)
     eps_ss = jnp.linspace(0.0, 0.999, 100)
     EPS_W, EPS_S = jnp.meshgrid(eps_ww, eps_ss, indexing='ij')
@@ -175,6 +191,10 @@ def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, 
 
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_asymptomatic_grid_Rt_final(model: Callable, base_params: Params, p: float, phi: float, t1: float = 50.0, E0: float = 1e-6):
+    """
+    Compute a 2D grid of the reproductive number after interventions.
+    Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
+    """
     def final_R(p, phi):
         params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
         _, yy = model(params=params, t1=t1, E0=E0)
@@ -183,6 +203,10 @@ def compute_asymptomatic_grid_Rt_final(model: Callable, base_params: Params, p: 
 
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_asymptomatic_grid_Itot_final(model: Callable, base_params: Params, p: float, phi: float, t1: float = 600.0, E0: float = 1e-6):
+    """
+    Compute a 2D grid of proportion infected relative to a no intervention baseline.
+    Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
+    """
     def I_tot(p, phi):
         params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
         _, yy =  model(params=params, t1=t1, E0=E0)

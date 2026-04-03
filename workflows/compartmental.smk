@@ -167,13 +167,13 @@ rule all:
         expand(rules.plot_efficacy_grid_Itot_final.output.plot, pathogen=pathogens),
         expand(
             rules.plot_asymptomatic_grid_Rt_final.output.plot, 
-            pathogen=pathogens,
+            pathogen=["SARS-CoV-2", "Influenza A"], # only pathogens with asymptomatic transmission
             epsilon_s=[0.0, 0.4, 0.8],
             epsilon_w=[0.0, 0.4, 0.8],
         ),
         expand(
             rules.plot_asymptomatic_grid_Itot_final.output.plot, 
-            pathogen=pathogens,
+            pathogen=["SARS-CoV-2", "Influenza A"],
             epsilon_s=[0.0, 0.4, 0.8],
             epsilon_w=[0.0, 0.4, 0.8],
         ),

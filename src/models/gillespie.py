@@ -1,3 +1,8 @@
+"""
+Stochastic compartmental models:
+    - gillespie_SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
+"""
+
 import numpy as np
 from numba import njit
 import matplotlib.pyplot as plt
@@ -5,6 +10,7 @@ from models.parameters import Params
 
 @njit
 def gillespie_SEIPAR_W(params, N: int, t1: float):
+    """Gillespie algorithm combined with continuous deterministic ODEs for the delay compartments."""
     max_events = int(N * 10)
     times = np.zeros(max_events)
     t = 0.0
