@@ -119,7 +119,7 @@ def update_asymptomatic_params(params: Params, p: float, phi: float):
     beta = params.R_0 / r
     return params._replace(p=p, phi=phi, rho=rho, beta=beta)
 
-def f(reproductive_number, params):
+def f(reproductive_number, params): # TODO: rename
     """Logistic response function of the reproductive number for the wastewater warning response."""
     logistic_term = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
     return 1 - (params.epsilon_w * logistic_term)

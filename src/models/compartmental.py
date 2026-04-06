@@ -1,4 +1,7 @@
 """
+TODO: use flexible length array for delay states. (maybe with mean and var of Erlang/Gamma)
+TODO: Start interventions only if infections higher than some threshold
+
 Deterministic compartmental models:
     - SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
     - SEIAR_W with presymptomatic transmission and wastewater feedback
