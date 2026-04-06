@@ -53,11 +53,11 @@ rule plot_efficacy_grid_Itot_final:
         plot="results/compartmental/efficacy_grid_Itot_final_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        fig = plot_I_tot(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=600.0, E0=E0, title=f"Total number infected compared to baseline without interventions: {wildcards.pathogen}")
+        fig = plot_I_tot(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=600.0, E0=E0, title=f"Total number infected: {wildcards.pathogen}")
         fig.savefig(output.plot, dpi=900)
         plt.close(fig)
 
-rule plot_asymptomatic_grid_Rt_final:
+rule plot_asymptomatic_grid_Rt_final: # TODO: use blue-red colormap
     output:
         plot="results/compartmental/asymptomatic_grid_Rt_final_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
     run:
@@ -81,7 +81,7 @@ rule plot_asymptomatic_grid_Rt_final:
             )
         )
         plt.xlabel('Proportion asymptomatic'); plt.ylabel('Relative infectiousness')
-        plt.title(f"Influence of asymptomaticity on reproduction number: {wildcards.pathogen}")
+        plt.title(f"{wildcards.pathogen} - $\epsilon_s=${wildcards.epsilon_s}, $\epsilon_w=${wildcards.epsilon_w}")
         plt.savefig(output.plot, dpi=900)
         plt.close(fig)
 
