@@ -10,13 +10,15 @@ import matplotlib as mpl
 mpl.use('Agg')
 
 from models.parameters import Params, f, update_asymptomatic_params, update_epsilons
-from models.compartmental import (
-    simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W,
-    plot_final_R, plot_I_tot,
-    compute_asymptomatic_grid_Rt_final, compute_asymptomatic_grid_Itot_final,
-)
+from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W, simulate_SEIPAR_W_with_I_gate
 from models.prcc import calculate_prcc
 from models.gillespie import run_gillespie_SEIPAR_W
+from models.plotting import (
+    plot_final_R, plot_I_tot,
+    compute_asymptomatic_grid_Itot_final, compute_asymptomatic_grid_Rt_final,
+    plot_I_tot_delayed_ww, 
+)
+
 
 parameters = {
     "SARS-CoV-2": Params.for_SEIPAR(),
@@ -57,7 +59,7 @@ rule plot_efficacy_grid_Itot_final:
         fig.savefig(output.plot, dpi=900)
         plt.close(fig)
 
-rule plot_asymptomatic_grid_Rt_final: # TODO: use blue-red colormap
+rule plot_asymptomatic_grid_Rt_final:
     output:
         plot="results/compartmental/asymptomatic_grid_Rt_final_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
     run:
@@ -77,7 +79,7 @@ rule plot_asymptomatic_grid_Rt_final: # TODO: use blue-red colormap
                         epsilon_s=float(wildcards.epsilon_s), 
                         epsilon_w=float(wildcards.epsilon_w)
                     ), p=ps, phi=phis, t1=Rt_times[wildcards.pathogen], E0=E0
-                ), cmap='viridis'
+                ), cmap='RdBu_r', norm=mpl.colors.CenteredNorm(vcenter=1.0)
             )
         )
         plt.xlabel('Proportion asymptomatic'); plt.ylabel('Relative infectiousness')
@@ -161,6 +163,35 @@ rule plot_trajectory:
         fig.savefig(output.plot, dpi=900)
         plt.close(fig)
 
+rule plot_trajectory_delayed_ww_intervention:
+    output:
+        plot="results/compartmental/delayed_ww_intervention_trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}_Icrit{I_crit}.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        params = update_epsilons(parameters[wildcards.pathogen], epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
+        tt, yy = simulate_SEIPAR_W_with_I_gate(params=params, t1=600, I_crit=float(wildcards.I_crit), k_I=10000.0)
+        compartments = yy.T
+        total_I = np.sum(compartments[2:-4], axis=0) # 1-3 I compartments 
+        fig = plt.figure()
+        plt.plot(tt, compartments[0], label='$S$')
+        plt.plot(tt, compartments[1], label='$E$')
+        plt.plot(tt, total_I, label='$I$')
+        plt.plot(tt, compartments[-4], label='$R$')
+        plt.legend()
+        plt.semilogy()
+        fig.savefig(output.plot, dpi=900)
+        plt.close(fig)
+
+rule delayed_ww_intervention:
+    output:
+        plot="results/compartmental/delay_grid_ww_intervention_{pathogen}.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        base_parameters = Params.for_SEIPAR(epsilon_s=0.8, epsilon_w=0.8)
+        fig = plot_I_tot_delayed_ww(model=simulate_SEIPAR_W_with_I_gate, parameters=base_parameters)
+        fig.savefig(output.plot, dpi=900)
+        plt.close(fig)
+
 rule all:
     input:
         expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens),
@@ -188,4 +219,15 @@ rule all:
             pathogen=pathogens,
             epsilon_s=[0.0, 0.4, 0.8],
             epsilon_w=[0.0, 0.4, 0.8],
+        ),
+        expand(
+            rules.plot_trajectory_delayed_ww_intervention.output.plot, 
+            pathogen=["SARS-CoV-2"], # TODO: generalise
+            epsilon_s=[0.8],
+            epsilon_w=[0.8],
+            I_crit=[1e-5, 1e-4, 1e-3, 1e-2],
+        ),
+        expand(
+            rules.delayed_ww_intervention.output.plot, 
+            pathogen=["SARS-CoV-2"], # TODO: generalise
         ),
