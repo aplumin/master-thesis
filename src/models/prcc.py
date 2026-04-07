@@ -69,5 +69,5 @@ def calculate_prcc(params=Params.for_SEIPAR(), t1=50.0, E0=1e-6, total_infected=
     for SEIPAR_W model parameters and calculating the PRCC between each parameter and the output.
     """
     latin_hypercube = _construct_latin_hypercube()
-    y = _run_latin_hypercube_sampling(lhs_scaled=latin_hypercube, base_params=params, t1=t1, E0=E0, total_infected=total_infected)
+    y = _run_latin_hypercube_sampling(latin_hypercube=latin_hypercube, base_params=params, t1=t1, E0=E0, total_infected=total_infected)
     return _partial_rank_corr_coeff(latin_hypercube, np.array(y))
