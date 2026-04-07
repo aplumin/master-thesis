@@ -21,7 +21,7 @@ from models.plotting import (
 )
 
 # TODO: only symptomatic for infection threshold for ww intervention
-
+# TODO: add results directory variable
 
 parameters = {
     "SARS-CoV-2": Params.for_SEIPAR(),
@@ -44,7 +44,7 @@ E0 = 1e-6
 gillespie_popsizes = [100, 1_000_000]
 gillespie_num_simulations = [100]
 
-image_resolution = 300 # 900
+image_resolution = 300
 
 
 rule plot_efficacy_grid_Rt_final:
@@ -65,6 +65,7 @@ rule plot_efficacy_grid_Itot_final:
         fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
+# TODO: take list of epsilons as input and output single figure with subfigures. Create single function with both options
 rule plot_asymptomatic_grid_Rt_final:
     output:
         plot="results/compartmental/asymptomatic_grid_Rt_final_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
@@ -122,6 +123,7 @@ rule plot_prcc:
         plot="results/compartmental/prcc_{outcome}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        # TODO: create nice plotting function
         parameters = ['R_0', 'phi', 'gamma_inv', 'sigma_inv', 'mu_a_inv', 'mu_s_inv', 'p', 'epsilon_s', 'epsilon_w', 'tau']
         fig, ax = plt.subplots(figsize=(10,6))
         y_pos = np.arange(len(parameters))

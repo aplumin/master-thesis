@@ -2,6 +2,7 @@
 TODO: use flexible length array for delay states. (maybe with mean and var of Erlang/Gamma)
 TODO: Start interventions only if infections higher than some threshold
 TODO: don't hardcode times to measure effect on Rt
+TODO: check and standardise tolerances and initial exposed fractions
 
 Deterministic compartmental models:
     - SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
