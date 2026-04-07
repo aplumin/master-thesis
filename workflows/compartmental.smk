@@ -41,13 +41,16 @@ E0 = 1e-6
 gillespie_popsizes = [100, 1_000_000]
 gillespie_num_simulations = [100]
 
+image_resolution = 300 # 900
+
+
 rule plot_efficacy_grid_Rt_final:
     output:
         plot="results/compartmental/efficacy_grid_Rt_final_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         fig = plot_final_R(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=Rt_times[wildcards.pathogen], E0=E0, title=f"Reproductive number after interventions: {wildcards.pathogen}")
-        fig.savefig(output.plot, dpi=900)
+        fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
 rule plot_efficacy_grid_Itot_final:
@@ -56,7 +59,7 @@ rule plot_efficacy_grid_Itot_final:
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         fig = plot_I_tot(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=600.0, E0=E0, title=f"Total number infected: {wildcards.pathogen}")
-        fig.savefig(output.plot, dpi=900)
+        fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
 rule plot_asymptomatic_grid_Rt_final:
@@ -84,7 +87,7 @@ rule plot_asymptomatic_grid_Rt_final:
         )
         plt.xlabel('Proportion asymptomatic'); plt.ylabel('Relative infectiousness')
         plt.title(f"{wildcards.pathogen} - $\epsilon_s=${wildcards.epsilon_s}, $\epsilon_w=${wildcards.epsilon_w}")
-        plt.savefig(output.plot, dpi=900)
+        plt.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
 rule plot_asymptomatic_grid_Itot_final:
@@ -109,7 +112,7 @@ rule plot_asymptomatic_grid_Itot_final:
                 )
         plt.xlabel('Proportion asymptomatic'); plt.ylabel('Relative infectiousness')
         plt.title(f"{wildcards.pathogen} - $\epsilon_s=${wildcards.epsilon_s}, $\epsilon_w=${wildcards.epsilon_w}")
-        plt.savefig(output.plot, dpi=900); plt.close(fig)
+        plt.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
 rule plot_prcc:
     output:
@@ -127,7 +130,7 @@ rule plot_prcc:
             width = bar.get_width()
             ax.text(width+0.02 if width > 0 else width-0.02, bar.get_y()+bar.get_height()/2, f'{width:.3f}', va='center', ha='left' if width > 0 else 'right')
         plt.tight_layout()
-        plt.savefig(output.plot, dpi=900)
+        plt.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
 rule gillespie:
@@ -141,8 +144,8 @@ rule gillespie:
             N=int(wildcards.N), 
             t1=1000.0, 
         )
-        traj.savefig(output.traj, dpi=900); plt.close(traj)
-        hist.savefig(output.hist, dpi=900); plt.close(hist)
+        traj.savefig(output.traj, dpi=image_resolution); plt.close(traj)
+        hist.savefig(output.hist, dpi=image_resolution); plt.close(hist)
 
 rule plot_trajectory:
     output:
@@ -160,7 +163,7 @@ rule plot_trajectory:
         plt.plot(tt, compartments[-4], label='$R$')
         plt.legend()
         plt.semilogy()
-        fig.savefig(output.plot, dpi=900)
+        fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
 rule plot_trajectory_delayed_ww_intervention:
@@ -179,7 +182,7 @@ rule plot_trajectory_delayed_ww_intervention:
         plt.plot(tt, compartments[-4], label='$R$')
         plt.legend()
         plt.semilogy()
-        fig.savefig(output.plot, dpi=900)
+        fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
 rule delayed_ww_intervention:
@@ -189,7 +192,7 @@ rule delayed_ww_intervention:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         base_parameters = Params.for_SEIPAR(epsilon_s=0.8, epsilon_w=0.8)
         fig = plot_I_tot_delayed_ww(model=simulate_SEIPAR_W_with_I_gate, parameters=base_parameters)
-        fig.savefig(output.plot, dpi=900)
+        fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
 rule all:
