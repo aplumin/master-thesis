@@ -22,6 +22,9 @@ class Params(NamedTuple):
     R_crit: float    # Rt threshold for warnings
     tau: float       # reporting delay
     rho: float       # isolation reduction factor
+    # TODO: add I_crit and k_I params
+    # I_crit: float    # infection threshold for intervention
+    # k_I: float       # sharpness of gate for infection threshold for interventions
     
     @classmethod
     def for_SEIPAR(cls,
@@ -37,6 +40,8 @@ class Params(NamedTuple):
             k: float = 1.0,
             R_crit: float = 1.0,
             tau: float = 7.0,
+            # I_crit: float = 0.0, 
+            # k_I: float = 100.0
         ) -> "Params":
         """
         Parameters for the full model with presymptomatic and asymptomatic transmission.
