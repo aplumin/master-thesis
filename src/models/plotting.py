@@ -4,6 +4,7 @@ Plotting functions.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from functools import partial
 from typing import Callable
@@ -122,3 +123,57 @@ def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W_with_I_gate, parameters=Params
     plt.yscale('log')
     plt.title(title)
     return fig
+
+def plot_trajectory(
+    model: Callable = simulate_SEIPAR_W, 
+    params: Params = Params.for_SEIPAR(), 
+    path: str = "trajectory.png", 
+    title: str = "Trajectory",
+    t1: float | int = 600.0, 
+    image_resolution: int = 900,
+    num_delay_compartments: int = 3,
+    plot_S: bool = True,
+    plot_E: bool = True,
+    plot_Ia: bool = True,
+    plot_Ip: bool = True,
+    plot_Is: bool = True,
+    plot_total_I: bool = False,
+    plot_R: bool = True,
+    semilogy: bool = False,
+) -> None:
+    """
+    Simulate and plot trajectories.
+    Assume compartment order: S, E, [I compartments], R, [Delay compartments].
+    """
+    
+    # run the model
+    tt, yy = model(params=params, t1=t1)
+    compartments = yy.T
+
+    # determine index of R compartment
+    R_idx = -(num_delay_compartments + 1) if num_delay_compartments > 0 else -1
+
+    # extract I compartments
+    I_compartments = compartments[slice(2, R_idx) if R_idx != -1 else slice(2, None)]
+    total_I = np.sum(I_compartments, axis=0)
+    
+    # Plot
+    fig = plt.figure(figsize=(6, 6))
+    
+    if plot_S: plt.plot(tt, compartments[0], label='$S$')
+    if plot_E: plt.plot(tt, compartments[1], label='$E$')
+    if plot_Is and len(I_compartments) > 0: plt.plot(tt, I_compartments[-1], label='$I_s$')
+    if plot_Ia and len(I_compartments) > 1: plt.plot(tt, I_compartments[0], label='$I_a$')
+    if plot_Ip and len(I_compartments) > 2: plt.plot(tt, I_compartments[1], label='$I_p$')
+    if plot_total_I: plt.plot(tt, total_I, label='$I_{total}$')
+    if plot_R: plt.plot(tt, compartments[R_idx], label='$R$')
+
+    plt.title(title)
+    plt.xlabel("Time (days)")
+    plt.ylabel("Population")
+    if semilogy: plt.semilogy()
+    plt.legend(loc='best')
+    plt.tight_layout()
+    
+    fig.savefig(path, dpi=image_resolution)
+    plt.close(fig)

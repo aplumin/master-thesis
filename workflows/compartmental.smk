@@ -2,7 +2,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
-from typing import Callable
+from typing import Callable, Optional
 import os
 
 import matplotlib.pyplot as plt
@@ -17,7 +17,10 @@ from models.plotting import (
     plot_final_R, plot_I_tot,
     compute_asymptomatic_grid_Itot_final, compute_asymptomatic_grid_Rt_final,
     plot_I_tot_delayed_ww, 
+    plot_trajectory,
 )
+
+# TODO: only symptomatic for infection threshold for ww intervention
 
 
 parameters = {
@@ -195,6 +198,20 @@ rule delayed_ww_intervention:
         fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
+rule baseline_trajectories:
+    output:
+        plot="results/compartmental/baseline_trajectories_{pathogen}.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        plot_trajectory(
+            model = models[wildcards.pathogen],
+            params = parameters[wildcards.pathogen],
+            path = output.plot,
+            title = f"Baseline trajectories for {wildcards.pathogen}",
+            image_resolution = image_resolution
+        )
+
+
 rule all:
     input:
         expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens),
@@ -212,11 +229,11 @@ rule all:
             epsilon_w=[0.0, 0.4, 0.8],
         ),
         expand(rules.plot_prcc.output.plot, outcome=['Itot', 'Rt']),
-        expand(
-            rules.gillespie.output,
-            pathogen=["SARS-CoV-2"], # TODO: generalise
-            N=gillespie_popsizes,
-        ),
+        # expand(
+        #     rules.gillespie.output,
+        #     pathogen=["SARS-CoV-2"], # TODO: generalise
+        #     N=gillespie_popsizes,
+        # ),
         expand(
             rules.plot_trajectory.output.plot, 
             pathogen=pathogens,
@@ -233,4 +250,8 @@ rule all:
         expand(
             rules.delayed_ww_intervention.output.plot, 
             pathogen=["SARS-CoV-2"], # TODO: generalise
+        ),
+        expand(
+            rules.baseline_trajectories.output.plot, 
+            pathogen=pathogens
         ),

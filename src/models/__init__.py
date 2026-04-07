@@ -14,6 +14,7 @@ from .plotting import (
     plot_final_R, plot_I_tot,
     compute_asymptomatic_grid_Itot_final, compute_asymptomatic_grid_Rt_final,
     plot_I_tot_delayed_ww, 
+    plot_trajectory,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "calculate_prcc",
     "gillespie_SEIPAR_W",
     "plot_I_tot_delayed_ww",
+    "plot_trajectory",
 ]
