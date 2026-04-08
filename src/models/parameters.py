@@ -1,4 +1,6 @@
 """
+TODO: plot response function for different R and I values. Given a sharp function (k=100), there are oscillations.
+
 Parameter class for compartmental models and utility functions.
 """
 
@@ -58,11 +60,11 @@ class Params(NamedTuple):
             p: float = 0.4,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
-            k: float = 100.0,
+            k: float = 10.0,
             R_crit: float = 1.0,
             tau: float = 7.0,
             I_crit: float = 0.0, 
-            k_I: float = 100.0,
+            k_I: float = 10.0,
             num_delay_compartments: int = 3
         ) -> "Params":
         """
@@ -89,11 +91,11 @@ class Params(NamedTuple):
             p: float = 0.4,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
-            k: float = 100.0,
+            k: float = 10.0,
             R_crit: float = 1.0,
             tau: float = 7.0,
             I_crit: float = 0.0, 
-            k_I: float = 100.0,
+            k_I: float = 10.0,
             num_delay_compartments: int = 3
         ) -> "Params":
         """
@@ -117,11 +119,11 @@ class Params(NamedTuple):
             mu_s_inv: float = 7.0,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
-            k: float = 100.0,
+            k: float = 10.0,
             R_crit: float = 1.0,
             tau: float = 7.0,
             I_crit: float = 0.0, 
-            k_I: float = 100.0,
+            k_I: float = 10.0,
             num_delay_compartments: int = 3
         ) -> "Params":
         """

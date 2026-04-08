@@ -74,6 +74,7 @@ rule plot_asymptomatic_grid_Rt_final:
             total_infected=False,
             path=output.plot,
             image_resolution=image_resolution,
+            t1=Rt_times[wildcards.pathogen],
         )
 
 rule plot_asymptomatic_grid_Itot_final:
@@ -87,6 +88,7 @@ rule plot_asymptomatic_grid_Itot_final:
             total_infected=True,
             path=output.plot,
             image_resolution=image_resolution,
+            t1=Rt_times[wildcards.pathogen],
         )
 
 rule plot_prcc:
