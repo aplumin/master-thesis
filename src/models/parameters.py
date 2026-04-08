@@ -118,8 +118,8 @@ def update_epsilons(params: Params, epsilon_w: float, epsilon_s: float) -> Param
 
 def update_asymptomatic_params(params: Params, p: float, phi: float):
     """Update asymptomatic parameters for a given parameter set."""
-    r = p * phi * params.mu_a_inv + (1-params.p) * (params.sigma_inv + params.mu_s_inv)
-    r_eps = p * phi * params.mu_a_inv + (1-params.p) * (params.sigma_inv + (1-params.epsilon_s) * params.mu_s_inv)
+    r = p * phi * params.mu_a_inv + (1-p) * (params.sigma_inv + params.mu_s_inv)
+    r_eps = p * phi * params.mu_a_inv + (1-p) * (params.sigma_inv + (1-params.epsilon_s) * params.mu_s_inv)
     rho = r_eps / r
     beta = params.R_0 / r
     return params._replace(p=p, phi=phi, rho=rho, beta=beta)
