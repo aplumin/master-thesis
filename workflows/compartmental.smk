@@ -21,9 +21,6 @@ from models.plotting import (
     plot_asymptomatic_effect_for_range_of_intervention_efficacies
 )
 
-# TODO: only symptomatic for infection threshold for ww intervention
-# TODO: add results directory variable
-
 parameters = {
     "SARS-CoV-2": Params.for_SEIPAR(),
     "Influenza A": Params.for_SEIAR(),

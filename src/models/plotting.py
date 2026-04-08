@@ -118,9 +118,14 @@ def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W_with_I_gate, parameters=Params
     TAUS, I_CRIT = jnp.meshgrid(taus, I_crit_list, indexing='ij')
 
     fig = plt.figure()
-    mesh = plt.pcolormesh(TAUS, I_CRIT, compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0), cmap='viridis', shading='auto')
-    fig.colorbar(mesh, label='Total infections (relative to baseline)')
-        
+    I_tot = compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0)
+    mesh = plt.pcolormesh(TAUS, I_CRIT, I_tot, cmap='viridis', shading='auto')
+    plt.contour(TAUS, I_CRIT, I_tot, levels=[0.25, 0.5, 0.75], colors='red', linestyles=['--', '-', '--'])
+    cbar = fig.colorbar(mesh, label='Total infections (relative to baseline)')
+    cbar.ax.axhline(0.25, color='red', linestyle='--')
+    cbar.ax.axhline(0.5, color='red', linestyle='-')
+    cbar.ax.axhline(0.75, color='red', linestyle='--')
+    
     plt.xlabel('Wastewater delay [days]')
     plt.ylabel('Infection threshold')
     plt.yscale('log')

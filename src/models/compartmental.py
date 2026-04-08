@@ -136,8 +136,8 @@ def SEIPAR_W_with_I_gate(t, y, args):
     params, I_crit, k_I = args
     S, E, Ia, Ip, Is, R, W1, W2, W3 = y
 
-    # infection gate
-    II = Ia + Ip + Is
+    # infection gate (only symptomatic!)
+    II = Is # + Ia + Ip
     gate_I = 1.0 / (1.0 + jnp.exp(-k_I * (II - I_crit)))
     logistic_term_W = 1.0 / (1.0 + jnp.exp(-params.k * (W3 - params.R_crit)))
     f_W3 = 1.0 - params.epsilon_w * logistic_term_W * gate_I
