@@ -12,6 +12,9 @@ from typing import Callable
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
+import pandas as pd
+import seaborn as sns
+
 from models.parameters import Params, f, update_epsilons, update_asymptomatic_params
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIPAR_W_with_I_gate
 
@@ -177,3 +180,70 @@ def plot_trajectory(
     
     fig.savefig(path, dpi=image_resolution)
     plt.close(fig)
+
+def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
+    model: Callable = simulate_SEIPAR_W, 
+    params: Params = Params.for_SEIPAR(),
+    total_infected: bool = False,
+    ps = jnp.linspace(0.0, 0.999, 100),
+    phis = jnp.linspace(0.0, 0.999, 100),
+    epsilon_s = [0.0, 0.4, 0.8],
+    epsilon_w = [0.0, 0.4, 0.8],
+    E0: float = 1e-6,
+    t1: float = None, 
+    image_resolution: int = 900,
+    path: str = "asymptomatic_effect.png",
+) -> None:
+    
+    # end time
+    if t1 is None: t1 = 600.0 if total_infected else 50.0
+
+    # build dataframe
+    p_grid, phi_grid = jnp.meshgrid(ps, phis, indexing="ij")
+    df_list = []
+    for eps_s in epsilon_s:
+        for eps_w in epsilon_w:
+            base_params = update_epsilons(params=params, epsilon_s=float(eps_s), epsilon_w=float(eps_w))
+            if total_infected:
+                Z = compute_asymptomatic_grid_Itot_final(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
+            else:
+                Z = compute_asymptomatic_grid_Rt_final(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
+            df_list.append(pd.DataFrame({'p': np.array(p_grid.flatten()), 'phi': np.array(phi_grid.flatten()), 'Z': np.array(Z.flatten()), 'eps_s': eps_s, 'eps_w': eps_w}))
+    df = pd.concat(df_list, ignore_index=True)
+
+    # color scaling
+    global_min, global_max = df['Z'].min(), df['Z'].max()
+    cmap = 'viridis' if total_infected else 'RdBu_r'
+    if total_infected:
+        plot_kwargs = {'cmap': cmap, 'vmin': global_min, 'vmax': global_max, 'shading': 'auto'}
+    else:
+        max_dev = max(abs(global_min - 1.0), abs(global_max - 1.0))
+        plot_kwargs = {'cmap': cmap, 'vmin': 1.0 - max_dev, 'vmax': 1.0 + max_dev, 'shading': 'auto'}
+
+    # FacetGrid
+    sns.set_theme(style="white", rc={"axes.grid": False})
+    g = sns.FacetGrid(df, row="eps_s", col="eps_w", height=3, aspect=1)
+
+    # mapping function
+    def _meshmap(data, **kwargs):
+        ax = plt.gca()
+        Z_matrix = data.pivot(index='p', columns='phi', values='Z').values
+        mesh = ax.pcolormesh(p_grid, phi_grid, Z_matrix, linewidth=0, edgecolors='none', rasterized=True, **kwargs)
+        if not total_infected: # R=1 contour
+            ax.contour(p_grid, phi_grid, Z_matrix, levels=[1.0], colors='black', linewidths=1.5, linestyles='dashed')
+        return mesh
+    g.map_dataframe(_meshmap, **plot_kwargs)
+
+    # labels and title
+    g.set(xlabel=None, ylabel=None, aspect='equal')
+    g.figure.supxlabel("Proportion asymptomatic", fontsize=14, y=0.02)
+    g.figure.supylabel("Relative infectiousness", fontsize=14, x=-0.04)
+
+    # colorbar
+    mesh = g.axes[-1, -1].collections[0] 
+    cbar = g.figure.colorbar(mesh, ax=g.axes.ravel().tolist(), shrink=0.8, aspect=30)
+    if not total_infected: cbar.ax.axhline(1.0, color='black', linewidth=1.5)
+
+    # save and close
+    plt.savefig(path, dpi=image_resolution, bbox_inches='tight')
+    plt.close(g.figure)

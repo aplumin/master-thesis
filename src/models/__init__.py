@@ -15,6 +15,7 @@ from .plotting import (
     compute_asymptomatic_grid_Itot_final, compute_asymptomatic_grid_Rt_final,
     plot_I_tot_delayed_ww, 
     plot_trajectory,
+    plot_asymptomatic_effect_for_range_of_intervention_efficacies
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "gillespie_SEIPAR_W",
     "plot_I_tot_delayed_ww",
     "plot_trajectory",
+    "plot_asymptomatic_effect_for_range_of_intervention_efficacies"
 ]

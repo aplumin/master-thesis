@@ -18,6 +18,7 @@ from models.plotting import (
     compute_asymptomatic_grid_Itot_final, compute_asymptomatic_grid_Rt_final,
     plot_I_tot_delayed_ww, 
     plot_trajectory,
+    plot_asymptomatic_effect_for_range_of_intervention_efficacies
 )
 
 # TODO: only symptomatic for infection threshold for ww intervention
@@ -65,58 +66,32 @@ rule plot_efficacy_grid_Itot_final:
         fig.savefig(output.plot, dpi=image_resolution)
         plt.close(fig)
 
-# TODO: take list of epsilons as input and output single figure with subfigures. Create single function with both options
 rule plot_asymptomatic_grid_Rt_final:
     output:
-        plot="results/compartmental/asymptomatic_grid_Rt_final_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
+        plot="results/compartmental/asymptomatic_grid_Rt_final_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        ps = jnp.linspace(0.0, 1.0, 100)
-        phis = jnp.linspace(0.0, 1.0, 100)
-        p_grid, phi_grid = jnp.meshgrid(ps, phis, indexing="ij")
-        
-        fig = plt.figure()
-        fig.colorbar(
-            plt.pcolormesh(
-                p_grid, phi_grid, 
-                compute_asymptomatic_grid_Rt_final(
-                    model=models[wildcards.pathogen], 
-                    base_params=update_epsilons(
-                        parameters[wildcards.pathogen], 
-                        epsilon_s=float(wildcards.epsilon_s), 
-                        epsilon_w=float(wildcards.epsilon_w)
-                    ), p=ps, phi=phis, t1=Rt_times[wildcards.pathogen], E0=E0
-                ), cmap='RdBu_r', norm=mpl.colors.CenteredNorm(vcenter=1.0)
-            )
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        plot_asymptomatic_effect_for_range_of_intervention_efficacies(
+            model=models[wildcards.pathogen],
+            params=parameters[wildcards.pathogen],
+            total_infected=False,
+            path=output.plot,
+            image_resolution=image_resolution,
         )
-        plt.xlabel('Proportion asymptomatic'); plt.ylabel('Relative infectiousness')
-        plt.title(f"{wildcards.pathogen} - $\epsilon_s=${wildcards.epsilon_s}, $\epsilon_w=${wildcards.epsilon_w}")
-        plt.savefig(output.plot, dpi=image_resolution)
-        plt.close(fig)
 
 rule plot_asymptomatic_grid_Itot_final:
     output:
-        plot="results/compartmental/asymptomatic_grid_Itot_final_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
+        plot="results/compartmental/asymptomatic_grid_Itot_final_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        ps = jnp.linspace(0.0, 1.0, 100)
-        phis = jnp.linspace(0.0, 1.0, 100)
-        p_grid, phi_grid = jnp.meshgrid(ps, phis, indexing="ij")
-        fig = plt.figure()
-        fig.colorbar(
-            plt.pcolormesh(
-                p_grid, phi_grid, 
-                compute_asymptomatic_grid_Itot_final(
-                    model=models[wildcards.pathogen], 
-                    base_params=update_epsilons(
-                        parameters[wildcards.pathogen], 
-                        epsilon_s=float(wildcards.epsilon_s), 
-                        epsilon_w=float(wildcards.epsilon_w)
-                    ), p=ps, phi=phis, t1=300.0, E0=E0), cmap='viridis')
-                )
-        plt.xlabel('Proportion asymptomatic'); plt.ylabel('Relative infectiousness')
-        plt.title(f"{wildcards.pathogen} - $\epsilon_s=${wildcards.epsilon_s}, $\epsilon_w=${wildcards.epsilon_w}")
-        plt.savefig(output.plot, dpi=image_resolution); plt.close(fig)
+        plot_asymptomatic_effect_for_range_of_intervention_efficacies(
+            model=models[wildcards.pathogen],
+            params=parameters[wildcards.pathogen],
+            total_infected=True,
+            path=output.plot,
+            image_resolution=image_resolution,
+        )
 
 rule plot_prcc:
     output:
@@ -213,6 +188,24 @@ rule baseline_trajectories:
             image_resolution = image_resolution
         )
 
+rule baseline_trajectories_no_asymptomatic:
+    output:
+        plot="results/compartmental/trajectories_no_asymptomatic_{pathogen}.png"
+    run:    
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        params_no_asyx = {
+            "SARS-CoV-2": Params.for_SEIPAR(p=0.0, phi=0.0),
+            "Influenza A": Params.for_SEIAR(p=0.0, phi=0.0),
+            "Ebola": Params.for_SEIR(),
+        }
+        plot_trajectory(
+            model = models[wildcards.pathogen],
+            params = params_no_asyx[wildcards.pathogen],
+            path = output.plot,
+            title = f"No asymptomatic transmission for {wildcards.pathogen}",
+            image_resolution = image_resolution
+        )
+
 
 rule all:
     input:
@@ -257,3 +250,7 @@ rule all:
             rules.baseline_trajectories.output.plot, 
             pathogen=pathogens
         ),
+        expand(
+            rules.baseline_trajectories_no_asymptomatic.output.plot, 
+            pathogen=pathogens
+        )
