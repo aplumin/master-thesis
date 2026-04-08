@@ -120,9 +120,10 @@ def update_asymptomatic_params(params: Params, p: float, phi: float):
     """Update asymptomatic parameters for a given parameter set."""
     r = p * phi * params.mu_a_inv + (1-p) * (params.sigma_inv + params.mu_s_inv)
     r_eps = p * phi * params.mu_a_inv + (1-p) * (params.sigma_inv + (1-params.epsilon_s) * params.mu_s_inv)
-    rho = r_eps / r
-    beta = params.R_0 / r
-    return params._replace(p=p, phi=phi, rho=rho, beta=beta)
+    rho = jnp.where(r > 0, r_eps / r, 1.0)
+    beta = jnp.where(r > 0, params.R_0 / r, 0.0)
+    R_0 = jnp.where(r > 0, params.R_0, 0.0)
+    return params._replace(p=p, phi=phi, rho=rho, beta=beta, R_0=R_0)
 
 # TODO: include I_crit gate
 def f(reproductive_number, params): # TODO: rename
