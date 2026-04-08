@@ -12,11 +12,11 @@ import pandas as pd
 import seaborn as sns
 
 from models.parameters import Params, update_epsilons
-from models.compartmental import simulate_SEIPAR_W, simulate_SEIPAR_W_with_I_gate
+from models.compartmental import simulate_SEIPAR_W
 from models.gillespie import gillespie_SEIPAR_W
 from models.scenarios import (
     compute_I_tot_grid, compute_R_grid, 
-    compute_asymptomatic_grid_Rt_final, compute_asymptomatic_grid_Itot_final, 
+    compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, 
     compute_I_tot_grid_delayed_ww,
 )
 
@@ -57,7 +57,7 @@ def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, 
     plt.title(title)
     return fig
 
-def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W_with_I_gate, parameters=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
+def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
     taus = jnp.linspace(1.0, 30.0, 100)
     I_crit_list = jnp.logspace(-6, 0, 100)
     TAUS, I_CRIT = jnp.meshgrid(taus, I_crit_list, indexing='ij')
@@ -155,9 +155,9 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
         for eps_w in epsilon_w:
             base_params = update_epsilons(params=params, epsilon_s=float(eps_s), epsilon_w=float(eps_w))
             if total_infected:
-                Z = compute_asymptomatic_grid_Itot_final(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
+                Z = compute_asymptomatic_grid_Itot(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
             else:
-                Z = compute_asymptomatic_grid_Rt_final(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
+                Z = compute_asymptomatic_grid_Rt(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
             df_list.append(pd.DataFrame({'p': np.array(p_grid.flatten()), 'phi': np.array(phi_grid.flatten()), 'Z': np.array(Z.flatten()), 'eps_s': eps_s, 'eps_w': eps_w}))
     df = pd.concat(df_list, ignore_index=True)
 

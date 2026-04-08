@@ -41,7 +41,11 @@ def _run_latin_hypercube_sampling(latin_hypercube, base_params=Params.for_SEIPAR
         r_eps = p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
         params = base_params._replace(R_0=R_0, phi=phi, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, tau=tau,beta=R_0/r,rho=r_eps/r)
         _, yy = simulate_SEIPAR_W(params=params, t1=t1, E0=E0)
-        return yy[0, 0] - yy[-1, 0] if total_infected else params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params) * yy[-1,0]
+        if total_infected:
+            return yy[0,0] - yy[-1,0]
+        else:
+            Is_final = yy[-1, -(params.num_delay_compartments + 2)]
+            return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
 
     sample_func = partial(_single_latin_hypercube_sample, base_params=base_params, t1=t1, E0=E0, total_infected=total_infected)
     return jax.jit(jax.vmap(sample_func))(jnp.array(latin_hypercube))

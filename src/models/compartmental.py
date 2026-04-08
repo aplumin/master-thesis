@@ -1,6 +1,4 @@
 """
-TODO: use flexible length array for delay states. (maybe with mean and var of Erlang/Gamma)
-TODO: integrate infection threshold into main functions (set gate_I to 1)
 TODO: don't hardcode times to measure effect on Rt
 
 Deterministic compartmental models:
@@ -18,9 +16,14 @@ from models.parameters import Params, logistic_response_function
 
 
 def _SEIPAR_W(t, y, params):
-    S, E, Ia, Ip, Is, R, W1, W2, W3 = y
-    f_W3 = logistic_response_function(W3, params)
-    lambda_S = f_W3 * params.beta * (params.phi * Ia + Ip + (1.0 - params.epsilon_s) * Is) * S
+    # unpack compartments
+    S, E, Ia, Ip, Is, R = y[:6]
+    W = y[6:]
+    W_out = W[-1]
+
+    # compute mass flows
+    f_W_out = logistic_response_function(W_out, params, Is)
+    lambda_S = f_W_out * params.beta * (params.phi * Ia + Ip + (1.0 - params.epsilon_s) * Is) * S
     become_infectious = E / params.gamma_inv
     become_symptomatic = Ip / params.sigma_inv
     recover_asyx = Ia / params.mu_a_inv
@@ -33,23 +36,27 @@ def _SEIPAR_W(t, y, params):
     dIp = (1.0 - params.p) * become_infectious - become_symptomatic
     dIs = become_symptomatic - recover_syx
     dR = recover_asyx + recover_syx
+    dFlow = jnp.array([dS, dE, dIa, dIp, dIs, dR])
 
     # delay compartments
-    delay_rate = 3.0 / params.tau
-    Rt = params.R_0 * params.rho * f_W3 * S # use current Rt as input to the linear chain
-    dW1 = delay_rate * (Rt - W1)
-    dW2 = delay_rate * (W1 - W2)
-    dW3 = delay_rate * (W2 - W3)
+    delay_rate = params.num_delay_compartments / params.tau
+    Rt = params.R_0 * params.rho * f_W_out * S # use current Rt as input to the linear chain
+    W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
+    dW = delay_rate * (W_in - W)
 
-    return jnp.array([dS, dE, dIa, dIp, dIs, dR, dW1, dW2, dW3])
+    return jnp.concatenate([dFlow, dW])
 
-@partial(jax.jit, static_argnames=['t1'])
-def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
+@partial(jax.jit, static_argnames=['t1', 'num_delay_compartments'])
+def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, num_delay_compartments: int = 3):
     """Compartmental model with linear feedback chain for delayed wastewater response."""
     solution = diffeqsolve(
-        ODETerm(_SEIPAR_W), Tsit5(),
-        t0 = 0.0, t1 = t1,  dt0 = 0.1,
-        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        terms = ODETerm(_SEIPAR_W), 
+        solver = Tsit5(),
+        t0 = 0.0, t1 = t1, dt0 = 0.1,
+        y0 = jnp.concatenate([
+            jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0]), 
+            jnp.zeros(num_delay_compartments)
+        ]),
         args = params, 
         saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
         stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
@@ -58,9 +65,14 @@ def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E
 
 
 def _SEIAR_W(t, y, params):
-    S, E, Ia, Is, R, W1, W2, W3 = y
-    f_W3 = logistic_response_function(W3, params)
-    lambda_S = f_W3 * params.beta * (params.phi * Ia + (1.0 - params.epsilon_s) * Is) * S
+    # unpack compartments
+    S, E, Ia, Is, R = y[:5]
+    W = y[5:]
+    W_out = W[-1]
+
+    # compute mass flows
+    f_W_out = logistic_response_function(W_out, params, Is)
+    lambda_S = f_W_out * params.beta * (params.phi * Ia + (1.0 - params.epsilon_s) * Is) * S
     become_infectious = E / params.gamma_inv
     recover_asyx = Ia / params.mu_a_inv
     recover_syx = Is / params.mu_s_inv
@@ -71,22 +83,27 @@ def _SEIAR_W(t, y, params):
     dIa = params.p * become_infectious - recover_asyx
     dIs = (1.0 - params.p) * become_infectious - recover_syx
     dR = recover_asyx + recover_syx
+    dFlow = jnp.array([dS, dE, dIa, dIs, dR])
 
     # delay compartments
-    delay_rate = 3.0 / params.tau
-    Rt = params.R_0 * params.rho * f_W3 * S # use current Rt as input to the linear chain
-    dW1 = delay_rate * (Rt - W1)
-    dW2 = delay_rate * (W1 - W2)
-    dW3 = delay_rate * (W2 - W3)
-    return jnp.array([dS, dE, dIa, dIs, dR, dW1, dW2, dW3])
+    delay_rate = params.num_delay_compartments / params.tau
+    Rt = params.R_0 * params.rho * f_W_out * S
+    W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
+    dW = delay_rate * (W_in - W)
 
-@partial(jax.jit, static_argnames=['t1'])
-def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
+    return jnp.concatenate([dFlow, dW])
+
+@partial(jax.jit, static_argnames=['t1', 'num_delay_compartments'])
+def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, num_delay_compartments: int = 3):
     """Simplified compartmental model without presymptomatic transmission."""
     solution = diffeqsolve(
-        ODETerm(_SEIAR_W), Tsit5(),
+        terms = ODETerm(_SEIAR_W), 
+        solver = Tsit5(),
         t0 = 0.0, t1 = t1, dt0 = 0.1,
-        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        y0 = jnp.concatenate([
+            jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0]), 
+            jnp.zeros(num_delay_compartments)
+        ]),
         args = params, 
         saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
         stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
@@ -95,9 +112,14 @@ def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0
 
 
 def _SEIR_W(t, y, params):
-    S, E, II, R, W1, W2, W3 = y
-    f_W3 = logistic_response_function(W3, params)
-    lambda_S = f_W3 * params.beta * (1.0 - params.epsilon_s) * II * S
+    # unpack compartments
+    S, E, II, R = y[:4]
+    W = y[4:]
+    W_out = W[-1]
+
+    # compute mass flows
+    f_W_out = logistic_response_function(W_out, params, II)
+    lambda_S = f_W_out * params.beta * (1.0 - params.epsilon_s) * II * S
     become_infectious = E / params.gamma_inv
     recover = II / params.mu_s_inv
 
@@ -106,69 +128,28 @@ def _SEIR_W(t, y, params):
     dE = lambda_S - become_infectious
     dI = become_infectious - recover
     dR = recover
+    dFlow = jnp.array([dS, dE, dI, dR])
 
     # delay compartments
-    delay_rate = 3.0 / params.tau
-    Rt = params.R_0 * params.rho * f_W3 * S # use current Rt as input to the linear chain
-    dW1 = delay_rate * (Rt - W1)
-    dW2 = delay_rate * (W1 - W2)
-    dW3 = delay_rate * (W2 - W3)
-    return jnp.array([dS, dE, dI, dR, dW1, dW2, dW3])
+    delay_rate = params.num_delay_compartments / params.tau
+    Rt = params.R_0 * params.rho * f_W_out * S
+    W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
+    dW = delay_rate * (W_in - W)
 
-@partial(jax.jit, static_argnames=['t1'])
-def simulate_SEIR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6):
+    return jnp.concatenate([dFlow, dW])
+
+@partial(jax.jit, static_argnames=['t1', 'num_delay_compartments'])
+def simulate_SEIR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, num_delay_compartments: int = 3):
     """Simplified compartmental model without presymptomatic or asymptomatic transmission."""
     solution = diffeqsolve(
-        ODETerm(_SEIR_W), Tsit5(),
+        terms = ODETerm(_SEIR_W), 
+        solver = Tsit5(),
         t0 = 0.0, t1 = t1, dt0 = 0.1,
-        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        y0 = jnp.concatenate([
+            jnp.array([1.0 - E0, E0, 0.0, 0.0]), 
+            jnp.zeros(num_delay_compartments)
+        ]),
         args = params, 
-        saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
-        stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
-    )
-    return solution.ts, solution.ys
-
-def _SEIPAR_W_with_I_gate(t, y, args):
-    """Compartmental model with gated wastewater response."""
-    params, I_crit, k_I = args
-    S, E, Ia, Ip, Is, R, W1, W2, W3 = y
-
-    # infection gate (only symptomatic!)
-    II = Is # + Ia + Ip
-    gate_I = 1.0 / (1.0 + jnp.exp(-k_I * (II - I_crit)))
-    logistic_term_W = 1.0 / (1.0 + jnp.exp(-params.k * (W3 - params.R_crit)))
-    f_W3 = 1.0 - params.epsilon_w * logistic_term_W * gate_I
-    
-    lambda_S = f_W3 * params.beta * (params.phi * Ia + Ip + (1.0 - params.epsilon_s) * Is) * S
-    become_infectious = E / params.gamma_inv
-    become_symptomatic = Ip / params.sigma_inv
-    recover_asyx = Ia / params.mu_a_inv
-    recover_syx = Is / params.mu_s_inv
-    
-    # flow compartments
-    dS = -lambda_S
-    dE = lambda_S - become_infectious
-    dIa = params.p * become_infectious - recover_asyx
-    dIp = (1.0 - params.p) * become_infectious - become_symptomatic
-    dIs = become_symptomatic - recover_syx
-    dR = recover_asyx + recover_syx
-
-    # delay compartments
-    delay_rate = 3.0 / params.tau
-    Rt = params.R_0 * params.rho * f_W3 * S 
-    dW1 = delay_rate * (Rt - W1)
-    dW2 = delay_rate * (W1 - W2)
-    dW3 = delay_rate * (W2 - W3)
-
-    return jnp.array([dS, dE, dIa, dIp, dIs, dR, dW1, dW2, dW3])
-
-@partial(jax.jit, static_argnames=['t1'])
-def simulate_SEIPAR_W_with_I_gate(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, I_crit: float = 0.001, k_I: float = 10000.0):
-    solution = diffeqsolve(
-        ODETerm(_SEIPAR_W_with_I_gate), Tsit5(),
-        t0 = 0.0, t1 = t1,  dt0 = 0.1,
-        y0 = jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        args = (params, I_crit, k_I),
         saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
         stepsize_controller = PIDController(rtol=1e-7, atol=1e-9), max_steps = 50_000
     )

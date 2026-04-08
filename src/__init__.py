@@ -3,6 +3,7 @@ import models.compartmental as compartmental
 import models.gillespie as gillespie
 import models.prcc as prcc
 import models.plotting as plotting
+import models.scenarios as scenarios
 
 __all__ = [
     "parameters",
@@ -10,4 +11,5 @@ __all__ = [
     "gillespie",
     "prcc",
     "plotting",
+    "scenarios",
 ]

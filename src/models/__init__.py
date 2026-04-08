@@ -4,11 +4,11 @@ Model descriptions
 
 from .parameters import Params, logistic_response_function, update_epsilons, update_asymptomatic_params
 from .compartmental import (
-    simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W, simulate_SEIPAR_W_with_I_gate
+    simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
 )
 from .scenarios import (
     compute_I_tot_grid, compute_R_grid, 
-    compute_asymptomatic_grid_Rt_final, compute_asymptomatic_grid_Itot_final, 
+    compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, 
     compute_I_tot_grid_delayed_ww,
 )
 from .prcc import calculate_prcc
@@ -25,9 +25,8 @@ __all__ = [
     "update_epsilons", "update_asymptomatic_params",
     "simulate_SEIPAR_W", "simulate_SEIAR_W", "simulate_SEIR_W",
     "compute_I_tot_grid", "compute_R_grid", 
-    "compute_asymptomatic_grid_Itot_final", "compute_asymptomatic_grid_Rt_final",
+    "compute_asymptomatic_grid_Itot", "compute_asymptomatic_grid_Rt",
     "compute_I_tot_grid_delayed_ww",
-    "simulate_SEIPAR_W_with_I_gate",
     "gillespie_SEIPAR_W",
     "calculate_prcc",
     "plot_trajectory",
