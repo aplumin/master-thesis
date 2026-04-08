@@ -58,10 +58,20 @@ def compute_asymptomatic_grid_Itot_final(model: Callable, base_params: Params, p
     """
     def I_tot(p, phi):
         params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
-        _, yy =  model(params=params, t1=t1, E0=E0)
+        _, yy = model(params=params, t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(p, phi)
-    return I_tot_grid / I_tot(0.0, 0.0)
+    return I_tot_grid # return absolute fraction infected
+
+@partial(jax.jit, static_argnames=['model', 't1'])
+def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_crit_list, t1: float = 100.0, E0: float = 1e-6):
+    def I_tot(tau, I_crit):
+        _, yy = model(params=base_params._replace(tau=tau), t1=t1, E0=E0, I_crit=I_crit, k_I=10000.0)
+        return yy[0,0] - yy[-1,0]
+    
+    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(taus, I_crit_list)
+    _, yy_base = model(params=Params.for_SEIPAR(epsilon_s=0.8), t1=t1, E0=E0, I_crit=1.0, k_I=10000.0)
+    return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
 
 def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
     """
@@ -98,16 +108,6 @@ def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, 
     plt.ylabel('Isolation efficacy')
     plt.title(title)
     return fig
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_crit_list, t1: float = 100.0, E0: float = 1e-6):
-    def I_tot(tau, I_crit):
-        _, yy = model(params=base_params._replace(tau=tau), t1=t1, E0=E0, I_crit=I_crit, k_I=10000.0)
-        return yy[0,0] - yy[-1,0]
-    
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(taus, I_crit_list)
-    _, yy_base = model(params=Params.for_SEIPAR(epsilon_s=0.8), t1=t1, E0=E0, I_crit=1.0, k_I=10000.0)
-    return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
 
 def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W_with_I_gate, parameters=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
     taus = jnp.linspace(1.0, 30.0, 100)
