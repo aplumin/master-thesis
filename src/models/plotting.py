@@ -2,79 +2,24 @@
 Plotting functions.
 """
 
-import jax
 import jax.numpy as jnp
 import numpy as np
-
-from functools import partial
 from typing import Callable
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-
 import pandas as pd
 import seaborn as sns
 
-from models.parameters import Params, f, update_epsilons, update_asymptomatic_params
+from models.parameters import Params, update_epsilons
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIPAR_W_with_I_gate
+from models.gillespie import gillespie_SEIPAR_W
+from models.scenarios import (
+    compute_I_tot_grid, compute_R_grid, 
+    compute_asymptomatic_grid_Rt_final, compute_asymptomatic_grid_Itot_final, 
+    compute_I_tot_grid_delayed_ww,
+)
 
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: float, t1: float = 100.0, E0: float = 1e-6):
-    """Compute a 2D grid of Rt values with wastewater warning response efficacy on the x axis and isolation efficacy on the y axis."""
-    def final_R(w, s):
-        params = update_epsilons(base_params, w, s)
-        _, yy = model(params=params, t1=t1, E0=E0)
-        return params.R_0 * params.rho * f(yy[-1,-1], params) * yy[-1,0]
-    return jax.vmap(jax.vmap(final_R, in_axes=(None, 0)), in_axes=(0, None))(eps_ww, eps_ss)
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1: float = 100.0, E0: float = 1e-6):
-    """
-    Compute a 2D grid of proportion infected relative to a no intervention baseline. 
-    Wastewater warning response efficacy on the x axis and isolation efficacy on the y axis.
-    """
-    def I_tot(w, s):
-        params = update_epsilons(base_params, w, s)
-        _, yy =  model(params=params, t1=t1, E0=E0)
-        return yy[0,0] - yy[-1,0]
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(eps_ww, eps_ss)
-    return I_tot_grid / I_tot(0.0, 0.0)
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_asymptomatic_grid_Rt_final(model: Callable, base_params: Params, p: float, phi: float, t1: float = 50.0, E0: float = 1e-6):
-    """
-    Compute a 2D grid of the reproductive number after interventions.
-    Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
-    """
-    def final_R(p, phi):
-        params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
-        _, yy = model(params=params, t1=t1, E0=E0)
-        return params.R_0 * params.rho * f(yy[-1,-1], params) * yy[-1,0]
-    return jax.vmap(jax.vmap(final_R, in_axes=(None, 0)), in_axes=(0, None))(p, phi)
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_asymptomatic_grid_Itot_final(model: Callable, base_params: Params, p: float, phi: float, t1: float = 600.0, E0: float = 1e-6):
-    """
-    Compute a 2D grid of proportion infected relative to a no intervention baseline.
-    Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
-    """
-    def I_tot(p, phi):
-        params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
-        _, yy = model(params=params, t1=t1, E0=E0)
-        return yy[0,0] - yy[-1,0]
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(p, phi)
-    return I_tot_grid # return absolute fraction infected
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_crit_list, t1: float = 100.0, E0: float = 1e-6):
-    def I_tot(tau, I_crit):
-        _, yy = model(params=base_params._replace(tau=tau), t1=t1, E0=E0, I_crit=I_crit, k_I=10000.0)
-        return yy[0,0] - yy[-1,0]
-    
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(taus, I_crit_list)
-    _, yy_base = model(params=Params.for_SEIPAR(epsilon_s=0.8), t1=t1, E0=E0, I_crit=1.0, k_I=10000.0)
-    return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
 
 def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
     """
@@ -252,3 +197,20 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     # save and close
     plt.savefig(path, dpi=image_resolution, bbox_inches='tight')
     plt.close(g.figure)
+
+def run_gillespie_SEIPAR_W(params: Params = Params.for_SEIPAR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
+    """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
+    np.random.seed(seed)
+    times_list = np.zeros(num_simulations)
+
+    fig_traj, ax_traj = plt.subplots()
+    for i in range(num_simulations):
+        times, history = gillespie_SEIPAR_W(params=params, N=N, t1=t1)
+        times_list[i] = times[-1]
+        ax_traj.plot(times, history[:,0], alpha=0.5)
+        ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
+    
+    fig_hist, ax_hist = plt.subplots()
+    ax_hist.hist(times_list, density=True)
+    
+    return fig_traj, fig_hist

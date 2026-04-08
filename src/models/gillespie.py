@@ -5,8 +5,6 @@ Stochastic compartmental models:
 
 import numpy as np
 from numba import njit
-import matplotlib.pyplot as plt
-from models.parameters import Params
 
 @njit
 def gillespie_SEIPAR_W(params, N: int, t1: float):
@@ -76,21 +74,3 @@ def gillespie_SEIPAR_W(params, N: int, t1: float):
         step += 1
         
     return times[:step], states[:step]
-
-
-def run_gillespie_SEIPAR_W(params: Params = Params.for_SEIPAR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
-    """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
-    np.random.seed(seed)
-    times_list = np.zeros(num_simulations)
-
-    fig_traj, ax_traj = plt.subplots()
-    for i in range(num_simulations):
-        times, history = gillespie_SEIPAR_W(params=params, N=N, t1=t1)
-        times_list[i] = times[-1]
-        ax_traj.plot(times, history[:,0], alpha=0.5)
-        ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
-    
-    fig_hist, ax_hist = plt.subplots()
-    ax_hist.hist(times_list, density=True)
-    
-    return fig_traj, fig_hist

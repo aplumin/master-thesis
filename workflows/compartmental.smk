@@ -9,13 +9,12 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 mpl.use('Agg')
 
-from models.parameters import Params, f, update_asymptomatic_params, update_epsilons
+from models.parameters import Params, update_asymptomatic_params, update_epsilons
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W, simulate_SEIPAR_W_with_I_gate
 from models.prcc import calculate_prcc
-from models.gillespie import run_gillespie_SEIPAR_W
 from models.plotting import (
     plot_final_R, plot_I_tot,
-    compute_asymptomatic_grid_Itot_final, compute_asymptomatic_grid_Rt_final,
+    run_gillespie_SEIPAR_W,
     plot_I_tot_delayed_ww, 
     plot_trajectory,
     plot_asymptomatic_effect_for_range_of_intervention_efficacies

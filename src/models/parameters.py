@@ -7,21 +7,40 @@ from typing import NamedTuple
 
 
 class Params(NamedTuple):
-    """Parameters for compartmental models."""
-    R_0: float       # basic reproductive number
-    beta: float      # transmission rate
-    gamma_inv: float # exposed period (inverse of become infectious rate)
-    sigma_inv: float # presymptomatic period (inverse of become symptomatic rate)
-    mu_a_inv: float  # asymptomatic period (inverse of recovery rate)
-    mu_s_inv: float  # symptomatic period (inverse of recovery rate)
-    p: float         # proportion asymptomatic
-    phi: float       # relative infectiousness
-    epsilon_s: float # isolation efficacy
-    epsilon_w: float # contact rate reduction efficacy after warning response
-    k: float         # sharpness of warning response
-    R_crit: float    # Rt threshold for warnings
-    tau: float       # reporting delay
-    rho: float       # isolation reduction factor
+    """
+    Parameters for compartmental models.
+
+    Attributes:
+        R_0 (float): Basic reproductive number.
+        beta (float): Transmission rate.
+        gamma_inv (float): Exposed period (inverse of become infectious rate).
+        sigma_inv (float): Presymptomatic period (inverse of become symptomatic rate).
+        mu_a_inv (float): Asymptomatic period (inverse of recovery rate).
+        mu_s_inv (float): Symptomatic period (inverse of recovery rate).
+        p (float): Proportion asymptomatic.
+        phi (float): Relative infectiousness.
+        epsilon_s (float): Isolation efficacy.
+        epsilon_w (float): Contact rate reduction efficacy after warning response.
+        k (float): Sharpness of warning response.
+        R_crit (float): Rt threshold for warnings.
+        tau (float): Reporting delay.
+        rho (float): Isolation reduction factor.
+    """
+    R_0: float
+    beta: float
+    gamma_inv: float
+    sigma_inv: float
+    mu_a_inv: float
+    mu_s_inv: float
+    p: float
+    phi: float
+    epsilon_s: float
+    epsilon_w: float
+    k: float
+    R_crit: float
+    tau: float
+    rho: float
+    
     # TODO: add I_crit and k_I params
     # I_crit: float    # infection threshold for intervention
     # k_I: float       # sharpness of gate for infection threshold for interventions
@@ -126,7 +145,7 @@ def update_asymptomatic_params(params: Params, p: float, phi: float):
     return params._replace(p=p, phi=phi, rho=rho, beta=beta, R_0=R_0)
 
 # TODO: include I_crit gate
-def f(reproductive_number, params): # TODO: rename
+def logistic_response_function(reproductive_number, params):
     """Logistic response function of the reproductive number for the wastewater warning response."""
     logistic_term = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
     return 1 - (params.epsilon_w * logistic_term)
