@@ -14,12 +14,12 @@ import jax.numpy as jnp
 from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, PIDController
 from functools import partial
 
-from models.parameters import Params, f
+from models.parameters import Params, logistic_response_function
 
 
 def _SEIPAR_W(t, y, params):
     S, E, Ia, Ip, Is, R, W1, W2, W3 = y
-    f_W3 = f(W3, params)
+    f_W3 = logistic_response_function(W3, params)
     lambda_S = f_W3 * params.beta * (params.phi * Ia + Ip + (1.0 - params.epsilon_s) * Is) * S
     become_infectious = E / params.gamma_inv
     become_symptomatic = Ip / params.sigma_inv
@@ -59,7 +59,7 @@ def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E
 
 def _SEIAR_W(t, y, params):
     S, E, Ia, Is, R, W1, W2, W3 = y
-    f_W3 = f(W3, params)
+    f_W3 = logistic_response_function(W3, params)
     lambda_S = f_W3 * params.beta * (params.phi * Ia + (1.0 - params.epsilon_s) * Is) * S
     become_infectious = E / params.gamma_inv
     recover_asyx = Ia / params.mu_a_inv
@@ -96,7 +96,7 @@ def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0
 
 def _SEIR_W(t, y, params):
     S, E, II, R, W1, W2, W3 = y
-    f_W3 = f(W3, params)
+    f_W3 = logistic_response_function(W3, params)
     lambda_S = f_W3 * params.beta * (1.0 - params.epsilon_s) * II * S
     become_infectious = E / params.gamma_inv
     recover = II / params.mu_s_inv
