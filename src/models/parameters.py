@@ -64,7 +64,7 @@ class Params(NamedTuple):
             R_crit: float = 1.0,
             tau: float = 7.0,
             I_crit: float = 0.0, 
-            k_I: float = 10_000.0,
+            k_I: float = 1e6,
             num_delay_compartments: int = 3
         ) -> "Params":
         """

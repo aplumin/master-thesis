@@ -5,19 +5,23 @@ from functools import partial
 from typing import Callable, Optional
 import os
 
-import matplotlib.pyplot as plt
 import matplotlib as mpl
 mpl.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import matplotlib.gridspec as gridspec
+import pandas as pd
+import seaborn as sns
 
-from models.parameters import Params, update_asymptomatic_params, update_epsilons
+from models.parameters import Params, update_asymptomatic_params, update_epsilons, logistic_response_function
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
 from models.prcc import calculate_prcc
 from models.plotting import (
-    plot_final_R, plot_I_tot,
-    run_gillespie_SEIPAR_W,
-    plot_I_tot_delayed_ww, 
+    plot_heatmap,
+    plot_final_R, plot_I_tot, plot_I_tot_delayed_ww, 
     plot_trajectory,
-    plot_asymptomatic_effect_for_range_of_intervention_efficacies
+    plot_asymptomatic_effect_for_range_of_intervention_efficacies,
+    run_gillespie_SEIPAR_W,
 )
 
 parameters = {
@@ -96,11 +100,11 @@ rule plot_prcc:
         plot="results/compartmental/prcc_{outcome}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        # TODO: create nice plotting function
-        parameters = ['R_0', 'phi', 'gamma_inv', 'sigma_inv', 'mu_a_inv', 'mu_s_inv', 'p', 'epsilon_s', 'epsilon_w', 'tau']
+        parameters = ['$R_0$', '$\\varphi$', '$1/\\gamma$', '$1/\\sigma$', '$1/\\mu_a$', '$1/\\mu_s$', '$p$', '$\\varepsilon_s$', '$\\varepsilon_w$', '$\\tau$']#, '$k$', '$k_I$']
         fig, ax = plt.subplots(figsize=(10,6))
         y_pos = np.arange(len(parameters))
-        bars = ax.barh(y_pos, calculate_prcc(params=Params.for_SEIPAR(), t1=300.0 if wildcards.outcome=='Itot' else 50.0, E0=1e-6, total_infected=wildcards.outcome=='Itot'), align='center')
+        # TODO: oscillations for high k, so need some averaged outcome values
+        bars = ax.barh(y_pos, calculate_prcc(params=Params.for_SEIPAR(k=1.0), t1=300.0 if wildcards.outcome=='Itot' else 50.0, E0=1e-6, total_infected=wildcards.outcome=='Itot'), align='center')
         ax.axvline(x=0, color='k')
         ax.set_yticks(y_pos); ax.set_yticklabels(parameters); ax.invert_yaxis()
         ax.set_xlabel('PRCC')
@@ -204,6 +208,131 @@ rule baseline_trajectories_no_asymptomatic:
             image_resolution = image_resolution
         )
 
+rule plot_true_vs_reported_Rt:
+    output:
+        scenarios="results/compartmental/true_vs_reported_Rt_{pathogen}_scenarios.png",
+        heatmap="results/compartmental/true_vs_reported_Rt_{pathogen}_heatmap.png",
+    run:
+        os.makedirs(os.path.dirname(output.scenarios), exist_ok=True)
+        
+        taus = [3.0, 7.0, 14.0, 21.0]
+        ks = [1.0, 10.0, 20.0, 50.0]
+
+        # SCENARIOS
+        sns.set_theme(style="white", rc={"axes.grid": False})
+        fig, axs = plt.subplots(nrows=len(taus), ncols=len(ks), figsize=(12, 12), sharex=True, sharey=True)
+
+        for row_idx, tau in enumerate(taus):
+            for col_idx, k in enumerate(ks):
+                # simulate
+                params = Params.for_SEIPAR(epsilon_w=0.8, epsilon_s=0.8, tau=float(tau), k=k)
+                tt, yy = simulate_SEIPAR_W(params)
+                compartments = yy.T
+
+                # set up plot
+                ax = axs[row_idx, col_idx]
+                if row_idx == 0: ax.set_title(f'$k={k}$', fontsize=16)
+                if col_idx == 0: ax.set_ylabel(f'$\\tau={tau}$', fontsize=16)
+
+                # true Rt
+                f_vals = logistic_response_function(compartments[-1], params, compartments[-(params.num_delay_compartments+2)])
+                rt_true_vals = params.R_0 * params.rho * f_vals * compartments[0]
+                ax.plot(tt, rt_true_vals, color='black')
+                
+                # reported Rt
+                rt_reported = compartments[-1]
+                ax.plot(tt, rt_reported, color='red')
+                ax.axhline(params.R_crit, color='grey', linestyle='--')
+
+        fig.legend(
+            [Line2D([0],[0], color='black', lw=2), Line2D([0],[0], color='red', lw=2)], 
+            ['True $R_t$', 'Reported $R_t$'],
+            loc='lower center', ncol=2, bbox_to_anchor=(0.5, -0.05), fontsize=16
+        )
+
+        plt.tight_layout()
+        plt.savefig(output.scenarios, dpi=image_resolution, bbox_inches='tight')
+        plt.close()
+
+        # HEATMAP
+        taus = np.linspace(1.0, 31.0, num=100)
+        ks = np.logspace(0, 3, num=100)
+        amplitudes = np.zeros((100,100))
+
+        for i, tau in enumerate(taus):
+            for j, k in enumerate(ks):
+                params = Params.for_SEIPAR(epsilon_w=0.8, epsilon_s=0.8, tau=float(tau), k=float(k))
+                _, yy = simulate_SEIPAR_W(params)
+                compartments = yy.T
+                f_vals = logistic_response_function(compartments[-1], params, compartments[-(params.num_delay_compartments+2)])
+                rt_true_vals = params.R_0 * params.rho * f_vals * compartments[0]
+
+                # take last third: steady-state
+                steady_state = rt_true_vals[len(rt_true_vals) * 2 // 3:]
+                amplitudes[i,j] = float(np.max(steady_state) - np.min(steady_state))
+
+        fig, ax = plot_heatmap(
+            ks, taus, amplitudes, 
+            cmap = 'Greys', cbar_label = 'Amplitude of $R_t$ oscillations',
+            title = 'Stability of delayed response',
+            x_logscale = True, xlabel = 'Response strength ($k$)',
+            ylabel = 'Delay ($\\tau$)'
+        )
+        plt.savefig(output.heatmap, dpi=image_resolution)
+        plt.close()
+
+rule plot_response_function:
+    output:
+        plot="results/compartmental/response_function.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        
+        # vectorise response function over Rt and Is
+        parameters = Params.for_SEIPAR(epsilon_w=0.8, epsilon_s=0.8, I_crit=1e-3)
+        Rt_vals = jnp.linspace(0.0, 3.0, 200)
+        Is_vals = jnp.linspace(0.0, 0.01, 200)
+        def _response(r, i): return logistic_response_function(r, parameters, i)
+        Z = jax.vmap(jax.vmap(_response, in_axes=(None, 0)), in_axes=(0, None))(Rt_vals, Is_vals).T
+        
+        # layout
+        fig = plt.figure(figsize=(10,10))
+        gs = gridspec.GridSpec(nrows=2, ncols=3, width_ratios=[4, 1, 0.2], height_ratios=[1, 4], wspace=0.05, hspace=0.05)
+        ax_main = fig.add_subplot(gs[1,0])
+        ax_top = fig.add_subplot(gs[0,0], sharex=ax_main)
+        ax_right = fig.add_subplot(gs[1,1], sharey=ax_main)
+        ax_cbar = fig.add_subplot(gs[1,2])
+        
+        # heatmap
+        mesh = ax_main.pcolormesh(Rt_vals, Is_vals, Z, cmap='Greys_r', shading='auto')
+        ax_main.contour(Rt_vals, Is_vals, Z, levels=10, colors='white', alpha=0.3)
+        ax_main.axvline(parameters.R_crit, color='red', linestyle='--', alpha=0.8, label=f'$R_{{crit}}={parameters.R_crit}$')
+        if parameters.I_crit > 0.0:
+            ax_main.axhline(parameters.I_crit, color='orange', linestyle='--', alpha=0.8, label=f'$I_{{crit}}={parameters.I_crit}$')
+        # ax_main.legend()
+        ax_main.set_xlabel('Delayed wastewater signal ($R_t$)', fontsize=14)
+        ax_main.set_ylabel('Symptomatic population ($I_s$)', fontsize=14)
+        
+        # top marginal
+        ax_top.plot(Rt_vals, Z[-1,:], color='black', lw=2)
+        ax_top.axvline(parameters.R_crit, color='red', linestyle='--')
+        ax_top.tick_params(labelbottom=False)
+        ax_top.grid(True, alpha=0.2)
+
+        # right marginal
+        ax_right.plot(Z[:,-1], Is_vals, color='black', lw=2)
+        if parameters.I_crit > 0.0:
+            ax_right.axhline(parameters.I_crit, color='orange', linestyle='--')
+        ax_right.tick_params(labelleft=False)
+        ax_right.grid(True, alpha=0.2)
+        
+        # colorbar
+        cbar = fig.colorbar(mesh, cax=ax_cbar)
+        cbar.set_label('Logistic response function', fontsize=14, labelpad=10)
+        
+        # save and close
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight')
+        plt.close(fig)
+
 
 rule all:
     input:
@@ -251,4 +380,10 @@ rule all:
         expand(
             rules.baseline_trajectories_no_asymptomatic.output.plot, 
             pathogen=pathogens
-        )
+        ),
+        expand(
+            rules.plot_true_vs_reported_Rt.output, 
+            pathogen=pathogens,
+            tau=[1.0, 7.0, 14.0, 21.0, 28.0],
+        ),
+        rules.plot_response_function.output.plot,
