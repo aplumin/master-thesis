@@ -24,7 +24,7 @@ from models.scenarios import (
 def plot_heatmap(
     X, Y, Z, 
     cmap='viridis', shading='auto', norm=None,
-    contour_levels=[], contour_colors='black', contour_linestyles=['-'],
+    contour_levels=[], contour_colors='black', contour_linestyles=['-'], contour_alpha=1.0,
     title=None, title_fontsize=18, title_pad=10,
     xlabel=None, ylabel=None,
     xlabelsize=14, ylabelsize=14,
@@ -39,7 +39,7 @@ def plot_heatmap(
     mesh = ax.pcolormesh(X, Y, Z, cmap=cmap, shading=shading, norm=norm)
     
     if contour_levels:
-        ax.contour(X, Y, Z, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles)
+        ax.contour(X, Y, Z, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles, alpha=contour_alpha)
     
     cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect)
     cbar.set_label(cbar_label, fontsize=cbar_labelsize, labelpad=cbar_labelpad)

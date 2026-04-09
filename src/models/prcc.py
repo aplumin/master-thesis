@@ -10,7 +10,7 @@ from models.parameters import Params, logistic_response_function
 
 def _construct_latin_hypercube(n=10_000):
     """Quasi Monte Carlo sampling from Latin hypercube of SEIPAR_W parameters."""
-    params = ['R_0', 'phi', 'gamma_inv', 'sigma_inv', 'mu_a_inv', 'mu_s_inv', 'p', 'epsilon_s', 'epsilon_w', 'tau']
+    params = ['R_0', 'phi', 'gamma_inv', 'sigma_inv', 'mu_a_inv', 'mu_s_inv', 'p', 'epsilon_s', 'epsilon_w', 'tau']#, 'k', 'k_I']
     bounds = {
         'R_0': (1.0, 5.0),
         'phi': (0.0, 1.0),
@@ -21,7 +21,9 @@ def _construct_latin_hypercube(n=10_000):
         'p': (0.0, 1.0),
         'epsilon_s': (0.0, 1.0),
         'epsilon_w': (0.0, 1.0),
-        'tau': (1.0, 50.0)
+        'tau': (1.0, 50.0),
+        # 'k': (0.0, 3.0),
+        # 'k_I': (0.0, 5.0),
     }
     latin_hypercube = qmc.scale(
         sample = qmc.LatinHypercube(d=len(params)).random(n=n), 
@@ -36,10 +38,10 @@ def _run_latin_hypercube_sampling(latin_hypercube, base_params=Params.for_SEIPAR
     Return Rt by default. If total_infected, return proportion infected compared to baseline.
     """
     def _single_latin_hypercube_sample(latin_hypercube_row, base_params, t1, E0, total_infected):
-        R_0, phi, gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, p, epsilon_s, epsilon_w, tau = latin_hypercube_row
+        R_0, phi, gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, p, epsilon_s, epsilon_w, tau = latin_hypercube_row # k, k_I 
         r = p * phi * mu_a_inv + (1-p) * (sigma_inv + mu_s_inv)
         r_eps = p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
-        params = base_params._replace(R_0=R_0, phi=phi, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, tau=tau,beta=R_0/r,rho=r_eps/r)
+        params = base_params._replace(R_0=R_0, phi=phi, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, tau=tau,beta=R_0/r, rho=r_eps/r) #, k=10.0**k, k_I=10.0**k_I)
         _, yy = simulate_SEIPAR_W(params=params, t1=t1, E0=E0)
         if total_infected:
             return yy[0,0] - yy[-1,0]
