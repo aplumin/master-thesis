@@ -19,7 +19,7 @@ def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: 
         _, yy = model(params=params, t1=t1, E0=E0)
         Is_final = yy[-1, -(params.num_delay_compartments + 2)]
         return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
-    return jax.vmap(jax.vmap(final_R, in_axes=(None, 0)), in_axes=(0, None))(eps_ww, eps_ss)
+    return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1: float = 100.0, E0: float = 1e-6):
@@ -31,7 +31,7 @@ def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1:
         params = update_epsilons(base_params, w, s)
         _, yy =  model(params=params, t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(eps_ww, eps_ss)
+    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
     return I_tot_grid / I_tot(0.0, 0.0)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
@@ -45,7 +45,7 @@ def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float,
         _, yy = model(params=params, t1=t1, E0=E0)
         Is_final = yy[-1, -(params.num_delay_compartments + 2)]
         return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
-    return jax.vmap(jax.vmap(final_R, in_axes=(None, 0)), in_axes=(0, None))(p, phi)
+    return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(p, phi)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: float, phi: float, t1: float = 600.0, E0: float = 1e-6):
@@ -57,7 +57,7 @@ def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: floa
         params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
         _, yy = model(params=params, t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(p, phi)
+    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(p, phi)
     return I_tot_grid # return absolute fraction infected
 
 @partial(jax.jit, static_argnames=['model', 't1'])
@@ -70,6 +70,6 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
         _, yy = model(params=base_params._replace(tau=tau, I_crit=I_crit), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
     
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(None, 0)), in_axes=(0, None))(taus, I_crit_list)
+    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(taus, I_crit_list)
     _, yy_base = model(params=Params.for_SEIPAR(epsilon_s=0.8, I_crit=0.0), t1=t1, E0=E0)
     return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])

@@ -292,7 +292,7 @@ rule plot_response_function:
         Rt_vals = jnp.linspace(0.0, 3.0, 200)
         Is_vals = jnp.linspace(0.0, 0.01, 200)
         def _response(r, i): return logistic_response_function(r, parameters, i)
-        Z = jax.vmap(jax.vmap(_response, in_axes=(None, 0)), in_axes=(0, None))(Rt_vals, Is_vals).T
+        Z = jax.vmap(jax.vmap(_response, in_axes=(0, None)), in_axes=(None, 0))(Rt_vals, Is_vals)
         
         # layout
         fig = plt.figure(figsize=(10,10))
