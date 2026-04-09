@@ -14,6 +14,7 @@ from .scenarios import (
 from .prcc import calculate_prcc
 from .gillespie import gillespie_SEIPAR_W
 from .plotting import (
+    plot_heatmap,
     plot_final_R, plot_I_tot,
     plot_trajectory,
     plot_I_tot_delayed_ww, 
@@ -29,6 +30,7 @@ __all__ = [
     "compute_I_tot_grid_delayed_ww",
     "gillespie_SEIPAR_W",
     "calculate_prcc",
+    "plot_heatmap",
     "plot_trajectory",
     "plot_final_R", "plot_I_tot", "plot_I_tot_delayed_ww",
     "plot_asymptomatic_effect_for_range_of_intervention_efficacies"

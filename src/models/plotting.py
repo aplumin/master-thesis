@@ -21,6 +21,44 @@ from models.scenarios import (
 )
 
 
+def plot_heatmap(
+    X, Y, Z, 
+    cmap='viridis', shading='auto', norm=None,
+    contour_levels=[], contour_colors='black', contour_linestyles=['-'],
+    title=None, title_fontsize=18, title_pad=10,
+    xlabel=None, ylabel=None,
+    xlabelsize=14, ylabelsize=14,
+    x_logscale=False, y_logscale=False, 
+    cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=14, cbar_labelpad=10,
+    cbar_axhlines=[], cbar_axhlines_colors=[], cbar_axhlines_linestyles=[],
+):
+    """General heatmap plotting function."""
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.set_box_aspect(1)
+
+    mesh = ax.pcolormesh(X, Y, Z, cmap=cmap, shading=shading, norm=norm)
+    
+    if contour_levels:
+        ax.contour(X, Y, Z, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles)
+    
+    cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect)
+    cbar.set_label(cbar_label, fontsize=cbar_labelsize, labelpad=cbar_labelpad)
+    for i, hline in enumerate(cbar_axhlines):
+        cbar.ax.axhline(hline, color=cbar_axhlines_colors[i], linestyle=cbar_axhlines_linestyles[i])
+    
+    if x_logscale: 
+        ax.set_xscale('log')
+    if y_logscale: 
+        ax.set_yscale('log')
+    
+    ax.set_title(title, fontsize=title_fontsize, pad=title_pad)
+    ax.set_xlabel(xlabel, fontsize=xlabelsize)
+    ax.set_ylabel(ylabel, fontsize=ylabelsize)
+    
+    plt.tight_layout()
+    return fig, ax
+
+
 def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
     """
     Plot a grid of the total proportion infected after interventions (compared to baseline without interventions).
@@ -28,14 +66,10 @@ def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, 
     """
     eps_ww = jnp.linspace(0.0, 0.999, 100)
     eps_ss = jnp.linspace(0.0, 0.999, 100)
-    EPS_W, EPS_S = jnp.meshgrid(eps_ww, eps_ss, indexing='ij')
-    
-    fig = plt.figure()
-    mesh = plt.pcolormesh(EPS_W, EPS_S, compute_I_tot_grid(model, params, eps_ww, eps_ss, t1, E0), cmap='viridis')
-    fig.colorbar(mesh)
-    plt.xlabel('Warning response efficacy')
-    plt.ylabel('Isolation efficacy')
-    plt.title(title)
+    fig, _ = plot_heatmap(
+        eps_ww, eps_ss, compute_I_tot_grid(model, params, eps_ww, eps_ss, t1, E0), 
+        title=title, xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
+    )
     return fig
 
 def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, E0=1e-6, title=None):
@@ -45,37 +79,26 @@ def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, 
     """
     eps_ww = jnp.linspace(0.0, 0.999, 100)
     eps_ss = jnp.linspace(0.0, 0.999, 100)
-    EPS_W, EPS_S = jnp.meshgrid(eps_ww, eps_ss, indexing='ij')
-    R_end_vals = compute_R_grid(model, params, eps_ww, eps_ss, t1, E0)
-
-    fig = plt.figure()
-    mesh = plt.pcolormesh(EPS_W, EPS_S, R_end_vals, cmap='RdBu_r', norm=mpl.colors.CenteredNorm(vcenter=1.0))
-    plt.colorbar(mesh)
-    plt.contour(EPS_W, EPS_S, R_end_vals, levels=[1.0], colors='k')
-    plt.xlabel('Warning response efficacy')
-    plt.ylabel('Isolation efficacy')
-    plt.title(title)
+    fig, _ = plot_heatmap(
+        eps_ww, eps_ss, compute_R_grid(model, params, eps_ww, eps_ss, t1, E0), 
+        cmap='RdBu_r', norm=mpl.colors.CenteredNorm(vcenter=1.0),
+        contour_levels=[1.0],
+        title=title, xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
+    )
     return fig
 
 def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
     taus = jnp.linspace(1.0, 30.0, 100)
     I_crit_list = jnp.logspace(-6, 0, 100)
-    TAUS, I_CRIT = jnp.meshgrid(taus, I_crit_list, indexing='ij')
-
-    fig = plt.figure()
-    I_tot = compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0)
-    mesh = plt.pcolormesh(TAUS, I_CRIT, I_tot, cmap='viridis', shading='auto')
-    plt.contour(TAUS, I_CRIT, I_tot, levels=[0.25, 0.5, 0.75], colors='red', linestyles=['--', '-', '--'])
-    cbar = fig.colorbar(mesh, label='Total infections (relative to baseline)')
-    cbar.ax.axhline(0.25, color='red', linestyle='--')
-    cbar.ax.axhline(0.5, color='red', linestyle='-')
-    cbar.ax.axhline(0.75, color='red', linestyle='--')
-    
-    plt.xlabel('Wastewater delay [days]')
-    plt.ylabel('Infection threshold')
-    plt.yscale('log')
-    plt.title(title)
+    fig, _ = plot_heatmap(
+        taus, I_crit_list, compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0),
+        contour_levels=[0.25, 0.5, 0.75], contour_colors='red', contour_linestyles=['--', '-', '--'],
+        cbar_axhlines=[0.25, 0.5, 0.75], cbar_axhlines_colors=['red', 'red', 'red'], cbar_axhlines_linestyles=['--', '-', '--'],
+        title=title, xlabel='Wastewater delay $\\tau$', ylabel='Infection threshold',
+        y_logscale=True, cbar_label='Total infections (relative to baseline)',
+    )
     return fig
+
 
 def plot_trajectory(
     model: Callable = simulate_SEIPAR_W, 
@@ -130,6 +153,7 @@ def plot_trajectory(
     
     fig.savefig(path, dpi=image_resolution)
     plt.close(fig)
+
 
 def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     model: Callable = simulate_SEIPAR_W, 
@@ -197,6 +221,7 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     # save and close
     plt.savefig(path, dpi=image_resolution, bbox_inches='tight')
     plt.close(g.figure)
+
 
 def run_gillespie_SEIPAR_W(params: Params = Params.for_SEIPAR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
     """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
