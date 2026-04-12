@@ -71,5 +71,5 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
         return yy[0,0] - yy[-1,0]
     
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(taus, I_crit_list)
-    _, yy_base = model(params=Params.for_SEIPAR(epsilon_s=0.8, I_crit=0.0), t1=t1, E0=E0)
+    _, yy_base = model(params=base_params._replace(I_crit=0.0), t1=t1, E0=E0)
     return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
