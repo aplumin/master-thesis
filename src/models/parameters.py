@@ -1,11 +1,16 @@
 """
-TODO: plot response function for different R and I values. Given a sharp function (k=100), there are oscillations.
-
 Parameter class for compartmental models and utility functions.
 """
 
 import jax.numpy as jnp
 from typing import NamedTuple
+
+
+def calculate_r_eps(p, phi, mu_a_inv, sigma_inv, epsilon_s, mu_s_inv):
+    return p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
+
+def calculate_r(p, phi, mu_a_inv, sigma_inv, mu_s_inv):
+    return p * phi * mu_a_inv + (1-p) * (sigma_inv + mu_s_inv)
 
 
 class Params(NamedTuple):
@@ -71,8 +76,8 @@ class Params(NamedTuple):
         Parameters for the full model with presymptomatic and asymptomatic transmission.
         Uses SARS-CoV-2 parameters by default.
         """
-        r = p * phi * mu_a_inv + (1-p)*(sigma_inv + mu_s_inv)
-        r_eps = p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
+        r = calculate_r(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, mu_s_inv=mu_s_inv)
+        r_eps = calculate_r_eps(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
@@ -102,8 +107,8 @@ class Params(NamedTuple):
         Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
         Uses Influenza A parameters by default.
         """
-        r = p * phi * mu_a_inv + (1-p) * mu_s_inv
-        r_eps = p * phi * mu_a_inv + (1-p) * ((1-epsilon_s) * mu_s_inv)
+        r = calculate_r(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=0.0, mu_s_inv=mu_s_inv)
+        r_eps = calculate_r_eps(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=0.0, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
@@ -140,16 +145,16 @@ class Params(NamedTuple):
 
 def update_epsilons(params: Params, epsilon_w: float, epsilon_s: float) -> Params:
     """Update NPI efficacy parameters epsilon for a given parameter set."""
-    r = params.p * params.phi * params.mu_a_inv + (1-params.p) * (params.sigma_inv + params.mu_s_inv)
-    r_eps = params.p * params.phi * params.mu_a_inv + (1-params.p) * (params.sigma_inv + (1-epsilon_s) * params.mu_s_inv)
+    r = calculate_r(p=params.p, phi=params.phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, mu_s_inv=params.mu_s_inv)
+    r_eps = calculate_r_eps(p=params.p, phi=params.phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, epsilon_s=epsilon_s, mu_s_inv=params.mu_s_inv)
     rho = r_eps / r
     beta = params.R_0 / r
     return params._replace(epsilon_w=epsilon_w, epsilon_s=epsilon_s, rho=rho, beta=beta)
 
 def update_asymptomatic_params(params: Params, p: float, phi: float):
     """Update asymptomatic parameters for a given parameter set."""
-    r = p * phi * params.mu_a_inv + (1-p) * (params.sigma_inv + params.mu_s_inv)
-    r_eps = p * phi * params.mu_a_inv + (1-p) * (params.sigma_inv + (1-params.epsilon_s) * params.mu_s_inv)
+    r = calculate_r(p=p, phi=phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, mu_s_inv=params.mu_s_inv)
+    r_eps = calculate_r_eps(p=p, phi=phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, epsilon_s=params.epsilon_s, mu_s_inv=params.mu_s_inv)
     rho = jnp.where(r > 0, r_eps / r, 1.0)
     beta = jnp.where(r > 0, params.R_0 / r, 0.0)
     R_0 = jnp.where(r > 0, params.R_0, 0.0)
