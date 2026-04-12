@@ -1,3 +1,9 @@
+"""
+TODO: consider multiple runs with CIs
+
+Partial rank correlation coefficients.
+"""
+
 import numpy as np
 from scipy.stats import qmc, rankdata
 from functools import partial

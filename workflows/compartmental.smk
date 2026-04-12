@@ -208,6 +208,7 @@ rule baseline_trajectories_no_asymptomatic:
             image_resolution = image_resolution
         )
 
+# TODO: split plots into separate rules and use vmap instead of loop for parallelisation
 rule plot_true_vs_reported_Rt:
     output:
         scenarios="results/compartmental/true_vs_reported_Rt_{pathogen}_scenarios.png",
@@ -341,19 +342,15 @@ rule all:
         expand(
             rules.plot_asymptomatic_grid_Rt_final.output.plot, 
             pathogen=["SARS-CoV-2", "Influenza A"], # only pathogens with asymptomatic transmission
-            epsilon_s=[0.0, 0.4, 0.8],
-            epsilon_w=[0.0, 0.4, 0.8],
         ),
         expand(
             rules.plot_asymptomatic_grid_Itot_final.output.plot, 
             pathogen=["SARS-CoV-2", "Influenza A"],
-            epsilon_s=[0.0, 0.4, 0.8],
-            epsilon_w=[0.0, 0.4, 0.8],
         ),
-        expand(rules.plot_prcc.output.plot, outcome=['Itot', 'Rt']),
+        expand(rules.plot_prcc.output.plot, outcome=['Itot', 'Rt']), # TODO: generalise to other pathogens
         # expand(
         #     rules.gillespie.output,
-        #     pathogen=["SARS-CoV-2", "Influenza A"],
+        #     pathogen=["SARS-CoV-2"], # TODO: add other stochastic models
         #     N=gillespie_popsizes,
         # ),
         expand(
@@ -371,7 +368,7 @@ rule all:
         ),
         expand(
             rules.delayed_ww_intervention.output.plot, 
-            pathogen=["SARS-CoV-2", "Influenza A"],
+            pathogen=["SARS-CoV-2"], # TODO: change main rule for generalisation
         ),
         expand(
             rules.baseline_trajectories.output.plot, 

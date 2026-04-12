@@ -1,5 +1,6 @@
 """
 TODO: add superspreading (draw from negative binomial)
+TODO: add stochastic SEIAR and SEIR models
 
 Stochastic compartmental models:
     - gillespie_SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback

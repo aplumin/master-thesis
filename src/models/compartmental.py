@@ -1,5 +1,6 @@
 """
 TODO: don't hardcode times to measure effect on Rt
+TODO: separate delay into reporting, then apply threshold (maybe extend to green, yellow, red levels), then separate behavioural delay chain
 
 Deterministic compartmental models:
     - SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
