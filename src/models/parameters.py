@@ -30,11 +30,13 @@ class Params(NamedTuple):
         epsilon_w (float): Contact rate reduction efficacy after warning response.
         k (float): Sharpness of warning response.
         R_crit (float): Rt threshold for warnings.
-        tau (float): Reporting delay.
+        tau_W (float): Reporting delay.
+        tau_B (float): Behavioural delay.
         rho (float): Isolation reduction factor.
         I_crit (float): Infection threshold for interventions.
         k_I (float): Sharpness of infection threshold gate.
-        num_delay_compartments (int): Number of delay compartments.
+        n_W (int): Number of reporting delay compartments.
+        n_B (int): Number of behavioural delay compartments.
     """
     R_0: float
     beta: float
@@ -48,11 +50,13 @@ class Params(NamedTuple):
     epsilon_w: float
     k: float
     R_crit: float
-    tau: float
+    tau_W: float
+    tau_B: float
     rho: float
     I_crit: float
     k_I: float
-    num_delay_compartments: int
+    n_W: int
+    n_B: int
     
     @classmethod
     def for_SEIPAR(cls,
@@ -67,10 +71,12 @@ class Params(NamedTuple):
             epsilon_w: float = 0.0,
             k: float = 10.0,
             R_crit: float = 1.0,
-            tau: float = 7.0,
+            tau_W: float = 7.0,
+            tau_B: float = 3.0,
             I_crit: float = 0.0, 
             k_I: float = 1e6,
-            num_delay_compartments: int = 3
+            n_W: int = 3,
+            n_B: int = 1
         ) -> "Params":
         """
         Parameters for the full model with presymptomatic and asymptomatic transmission.
@@ -83,7 +89,7 @@ class Params(NamedTuple):
         return cls(
             R_0=R_0, phi=phi, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau=tau, rho=rho, I_crit=I_crit, k_I=k_I, num_delay_compartments=num_delay_compartments
+            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, n_W=n_W, n_B=n_B
         )
 
     @classmethod
@@ -98,10 +104,12 @@ class Params(NamedTuple):
             epsilon_w: float = 0.0,
             k: float = 10.0,
             R_crit: float = 1.0,
-            tau: float = 7.0,
+            tau_W: float = 7.0,
+            tau_B: float = 3.0,
             I_crit: float = 0.0, 
             k_I: float = 10_000.0,
-            num_delay_compartments: int = 3
+            n_W: int = 3,
+            n_B: int = 1
         ) -> "Params":
         """
         Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
@@ -114,7 +122,7 @@ class Params(NamedTuple):
         return cls(
             R_0=R_0, phi=phi, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau=tau, rho=rho, I_crit=I_crit, k_I=k_I, num_delay_compartments=num_delay_compartments
+            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, n_W=n_W, n_B=n_B
         )
 
     @classmethod
@@ -126,10 +134,12 @@ class Params(NamedTuple):
             epsilon_w: float = 0.0,
             k: float = 10.0,
             R_crit: float = 1.0,
-            tau: float = 7.0,
+            tau_W: float = 7.0,
+            tau_B: float = 3.0,
             I_crit: float = 0.0, 
             k_I: float = 10_000.0,
-            num_delay_compartments: int = 3
+            n_W: int = 3,
+            n_B: int = 1
         ) -> "Params":
         """
         Parameters for the SEIR model without asymptomatic or presymptomatic transmission.
@@ -140,7 +150,7 @@ class Params(NamedTuple):
         return cls(
             R_0=R_0, phi=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=0.0, mu_s_inv=mu_s_inv, p=0.0, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau=tau, rho=rho, I_crit=I_crit, k_I=k_I, num_delay_compartments=num_delay_compartments
+            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, n_W=n_W, n_B=n_B
         )
 
 def update_epsilons(params: Params, epsilon_w: float, epsilon_s: float) -> Params:
@@ -168,4 +178,13 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
         1.0
     )
     gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
+    # gate_W = jnp.where(
+    #     reproductive_number > 2.0,
+    #     1.0,
+    #     jnp.where(
+    #         reproductive_number > 1.0,
+    #         0.5,
+    #         0.0
+    #     )
+    # )
     return 1.0 - params.epsilon_w * gate_W * gate_I
