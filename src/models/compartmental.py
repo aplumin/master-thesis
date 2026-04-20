@@ -1,7 +1,4 @@
 """
-TODO: don't hardcode times to measure effect on Rt
-TODO: separate delay into reporting, then apply threshold (maybe extend to green, yellow, red levels), then separate behavioural delay chain
-
 Deterministic compartmental models:
     - SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
     - SEIAR_W with presymptomatic transmission and wastewater feedback
@@ -73,45 +70,53 @@ def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E
     return solution.ts, solution.ys
 
 
-def _SEIAR_W(t, y, params):
-    # unpack compartments
-    S, E, Ia, Is, R = y[:5]
-    W = y[5:]
-    W_out = W[-1]
-
-    # compute mass flows
-    f_W_out = logistic_response_function(W_out, params, Is)
-    lambda_S = f_W_out * params.beta * (params.phi * Ia + (1.0 - params.epsilon_s) * Is) * S
-    become_infectious = E / params.gamma_inv
-    recover_asyx = Ia / params.mu_a_inv
-    recover_syx = Is / params.mu_s_inv
-
-    # flow compartments
-    dS = -lambda_S
-    dE = lambda_S - become_infectious
-    dIa = params.p * become_infectious - recover_asyx
-    dIs = (1.0 - params.p) * become_infectious - recover_syx
-    dR = recover_asyx + recover_syx
-    dFlow = jnp.array([dS, dE, dIa, dIs, dR])
-
-    # delay compartments
-    delay_rate = params.n_W / params.tau
-    Rt = params.R_0 * params.rho * f_W_out * S
-    W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
-    dW = delay_rate * (W_in - W)
-
-    return jnp.concatenate([dFlow, dW])
-
-@partial(jax.jit, static_argnames=['t1', 'n_W'])
-def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, n_W: int = 3):
+@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B'])
+def simulate_SEIAR_W(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1):
     """Simplified compartmental model without presymptomatic transmission."""
+    def _SEIAR_W(t, y, params):
+        # unpack compartments
+        S, E, Ia, Is, R = y[:5]
+        W = y[5:5+n_W]
+        W_out = W[-1]
+        B = y[5+n_W:]
+        B_out = B[-1]
+
+        # compute mass flows
+        lambda_S = B_out * params.beta * (params.phi * Ia + (1.0 - params.epsilon_s) * Is) * S
+        become_infectious = E / params.gamma_inv
+        recover_asyx = Ia / params.mu_a_inv
+        recover_syx = Is / params.mu_s_inv
+
+        # flow compartments
+        dS = -lambda_S
+        dE = lambda_S - become_infectious
+        dIa = params.p * become_infectious - recover_asyx
+        dIs = (1.0 - params.p) * become_infectious - recover_syx
+        dR = recover_asyx + recover_syx
+        dFlow = jnp.array([dS, dE, dIa, dIs, dR])
+
+        # reporting delay compartments W
+        reporting_delay_rate = n_W / params.tau_W
+        Rt = params.R_0 * params.rho * B_out * S # use current Rt as input to the linear chain
+        W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
+        dW = reporting_delay_rate * (W_in - W)
+
+        # behavioural delay compartments B
+        behavioural_delay_rate = n_B / params.tau_B
+        Rt_reported = logistic_response_function(W_out, params, Is)
+        B_in = jnp.concatenate([jnp.array([Rt_reported]), B[:-1]])
+        dB = behavioural_delay_rate * (B_in - B)
+
+        return jnp.concatenate([dFlow, dW, dB])
+
     solution = diffeqsolve(
         terms = ODETerm(_SEIAR_W), 
         solver = Tsit5(),
         t0 = 0.0, t1 = t1, dt0 = 0.1,
         y0 = jnp.concatenate([
             jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0]), 
-            jnp.zeros(n_W)
+            jnp.zeros(n_W),
+            jnp.ones(n_B),
         ]),
         args = params, 
         saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
@@ -120,43 +125,51 @@ def simulate_SEIAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0
     return solution.ts, solution.ys
 
 
-def _SEIR_W(t, y, params):
-    # unpack compartments
-    S, E, II, R = y[:4]
-    W = y[4:]
-    W_out = W[-1]
-
-    # compute mass flows
-    f_W_out = logistic_response_function(W_out, params, II)
-    lambda_S = f_W_out * params.beta * (1.0 - params.epsilon_s) * II * S
-    become_infectious = E / params.gamma_inv
-    recover = II / params.mu_s_inv
-
-    # flow compartments
-    dS = -lambda_S
-    dE = lambda_S - become_infectious
-    dI = become_infectious - recover
-    dR = recover
-    dFlow = jnp.array([dS, dE, dI, dR])
-
-    # delay compartments
-    delay_rate = params.n_W / params.tau
-    Rt = params.R_0 * params.rho * f_W_out * S
-    W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
-    dW = delay_rate * (W_in - W)
-
-    return jnp.concatenate([dFlow, dW])
-
-@partial(jax.jit, static_argnames=['t1', 'n_W'])
-def simulate_SEIR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, n_W: int = 3):
+@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B'])
+def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1):
     """Simplified compartmental model without presymptomatic or asymptomatic transmission."""
+    def _SEIR_W(t, y, params):
+        # unpack compartments
+        S, E, II, R = y[:4]
+        W = y[4:4+n_W]
+        W_out = W[-1]
+        B = y[4+n_W:]
+        B_out = B[-1]
+
+        # compute mass flows
+        lambda_S = B_out * params.beta * (1.0 - params.epsilon_s) * II * S
+        become_infectious = E / params.gamma_inv
+        recover = II / params.mu_s_inv
+
+        # flow compartments
+        dS = -lambda_S
+        dE = lambda_S - become_infectious
+        dI = become_infectious - recover
+        dR = recover
+        dFlow = jnp.array([dS, dE, dI, dR])
+
+        # reporting delay compartments W
+        reporting_delay_rate = n_W / params.tau_W
+        Rt = params.R_0 * params.rho * B_out * S # use current Rt as input to the linear chain
+        W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
+        dW = reporting_delay_rate * (W_in - W)
+
+        # behavioural delay compartments B
+        behavioural_delay_rate = n_B / params.tau_B
+        Rt_reported = logistic_response_function(W_out, params, II)
+        B_in = jnp.concatenate([jnp.array([Rt_reported]), B[:-1]])
+        dB = behavioural_delay_rate * (B_in - B)
+
+        return jnp.concatenate([dFlow, dW, dB])
+
     solution = diffeqsolve(
         terms = ODETerm(_SEIR_W), 
         solver = Tsit5(),
         t0 = 0.0, t1 = t1, dt0 = 0.1,
         y0 = jnp.concatenate([
             jnp.array([1.0 - E0, E0, 0.0, 0.0]), 
-            jnp.zeros(n_W)
+            jnp.zeros(n_W),
+            jnp.ones(n_B),
         ]),
         args = params, 
         saveat = SaveAt(ts=jnp.linspace(0.0, t1, 5000)),

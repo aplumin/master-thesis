@@ -1,6 +1,4 @@
 """
-TODO: infected peak and total time volume; time until R<1
-
 Functions for running models.
 """
 
@@ -17,7 +15,7 @@ def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: 
     def final_R(w, s):
         params = update_epsilons(base_params, w, s)
         _, yy = model(params=params, t1=t1, E0=E0)
-        Is_final = yy[-1, -(params.num_delay_compartments + 2)]
+        Is_final = yy[-1, -(params.n_W + params.n_B + 2)]
         return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
     return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
 
@@ -43,7 +41,8 @@ def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float,
     def final_R(p, phi):
         params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
         _, yy = model(params=params, t1=t1, E0=E0)
-        Is_final = yy[-1, -(params.num_delay_compartments + 2)]
+        Is_final = yy[-1, -(params.n_W + params.n_B + 2)]
+        # TODO: this assumes n_B > 0
         return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
     return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(p, phi)
 
@@ -66,8 +65,8 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
     Compute a 2D grid of proportion infected relative to baseline across different
     wastewater reporting delays and infection intervention thresholds.
     """
-    def I_tot(tau, I_crit):
-        _, yy = model(params=base_params._replace(tau=tau, I_crit=I_crit), t1=t1, E0=E0)
+    def I_tot(tau_W, I_crit):
+        _, yy = model(params=base_params._replace(tau_W=tau_W, I_crit=I_crit), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
     
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(taus, I_crit_list)

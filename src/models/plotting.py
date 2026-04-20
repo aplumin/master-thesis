@@ -13,7 +13,7 @@ import seaborn as sns
 
 from models.parameters import Params, update_epsilons
 from models.compartmental import simulate_SEIPAR_W
-from models.gillespie import gillespie_SEIPAR_W
+from models.gillespie import gillespie_SEIPAR_W, gillespie_SEIAR_W, gillespie_SEIR_W
 from models.scenarios import (
     compute_I_tot_grid, compute_R_grid, 
     compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, 
@@ -94,7 +94,7 @@ def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(
         taus, I_crit_list, compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0),
         contour_levels=[0.25, 0.5, 0.75], contour_colors='red', contour_linestyles=['--', '-', '--'],
         cbar_axhlines=[0.25, 0.5, 0.75], cbar_axhlines_colors=['red', 'red', 'red'], cbar_axhlines_linestyles=['--', '-', '--'],
-        title=title, xlabel='Wastewater delay $\\tau$', ylabel='Infection threshold',
+        title=title, xlabel='Wastewater delay $\\tau_W$', ylabel='Infection threshold',
         y_logscale=True, cbar_label='Total infections (relative to baseline)',
     )
     return fig
@@ -107,7 +107,6 @@ def plot_trajectory(
     title: str = "Trajectory",
     t1: float | int = 600.0, 
     image_resolution: int = 900,
-    num_delay_compartments: int = 3,
     plot_S: bool = True,
     plot_E: bool = True,
     plot_Ia: bool = True,
@@ -127,7 +126,7 @@ def plot_trajectory(
     compartments = yy.T
 
     # determine index of R compartment
-    R_idx = -(num_delay_compartments + 1) if num_delay_compartments > 0 else -1
+    R_idx = -(params.n_W + params.n_B + 1)
 
     # extract I compartments
     I_compartments = compartments[slice(2, R_idx) if R_idx != -1 else slice(2, None)]
@@ -231,6 +230,40 @@ def run_gillespie_SEIPAR_W(params: Params = Params.for_SEIPAR(), N: int = 1000, 
     fig_traj, ax_traj = plt.subplots()
     for i in range(num_simulations):
         times, history = gillespie_SEIPAR_W(params=params, N=N, t1=t1)
+        times_list[i] = times[-1]
+        ax_traj.plot(times, history[:,0], alpha=0.5)
+        ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
+    
+    fig_hist, ax_hist = plt.subplots()
+    ax_hist.hist(times_list, density=True)
+    
+    return fig_traj, fig_hist
+
+def run_gillespie_SEIAR_W(params: Params = Params.for_SEIAR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
+    """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
+    np.random.seed(seed)
+    times_list = np.zeros(num_simulations)
+
+    fig_traj, ax_traj = plt.subplots()
+    for i in range(num_simulations):
+        times, history = gillespie_SEIAR_W(params=params, N=N, t1=t1)
+        times_list[i] = times[-1]
+        ax_traj.plot(times, history[:,0], alpha=0.5)
+        ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
+    
+    fig_hist, ax_hist = plt.subplots()
+    ax_hist.hist(times_list, density=True)
+    
+    return fig_traj, fig_hist
+
+def run_gillespie_SEIR_W(params: Params = Params.for_SEIR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
+    """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
+    np.random.seed(seed)
+    times_list = np.zeros(num_simulations)
+
+    fig_traj, ax_traj = plt.subplots()
+    for i in range(num_simulations):
+        times, history = gillespie_SEIR_W(params=params, N=N, t1=t1)
         times_list[i] = times[-1]
         ax_traj.plot(times, history[:,0], alpha=0.5)
         ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
