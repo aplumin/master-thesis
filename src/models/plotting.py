@@ -4,6 +4,7 @@ Plotting functions.
 
 import jax.numpy as jnp
 import numpy as np
+from scipy.optimize import fsolve
 from typing import Callable
 
 import matplotlib as mpl
@@ -132,24 +133,58 @@ def plot_trajectory(
     I_compartments = compartments[slice(2, R_idx) if R_idx != -1 else slice(2, None)]
     total_I = np.sum(I_compartments, axis=0)
     
-    # Plot
-    fig = plt.figure(figsize=(6, 6))
-    
-    if plot_S: plt.plot(tt, compartments[0], label='$S$')
-    if plot_E: plt.plot(tt, compartments[1], label='$E$')
-    if plot_Is and len(I_compartments) > 0: plt.plot(tt, I_compartments[-1], label='$I_s$')
-    if plot_Ia and len(I_compartments) > 1: plt.plot(tt, I_compartments[0], label='$I_a$')
-    if plot_Ip and len(I_compartments) > 2: plt.plot(tt, I_compartments[1], label='$I_p$')
-    if plot_total_I: plt.plot(tt, total_I, label='$I_{total}$')
-    if plot_R: plt.plot(tt, compartments[R_idx], label='$R$')
+    # plot
+    fig, (ax_main, ax_rt, ax_rt_decomp) = plt.subplots(nrows=3, ncols=1, figsize=(6, 9), gridspec_kw={'height_ratios': [6,2,1]})
 
-    plt.title(title)
-    plt.xlabel("Time (days)")
-    plt.ylabel("Population")
-    if semilogy: plt.semilogy()
-    plt.legend(loc='best')
+    # trajectories
+    if plot_S: ax_main.plot(tt, compartments[0], label='$S$', color='green')
+    if plot_E: ax_main.plot(tt, compartments[1], label='$E$', color='orange')
+    if plot_Is and len(I_compartments) > 0: ax_main.plot(tt, I_compartments[-1], label='$I_s$', color='blue')
+    if plot_Ia and len(I_compartments) > 1: ax_main.plot(tt, I_compartments[0], label='$I_a$', color='purple')
+    if plot_Ip and len(I_compartments) > 2: ax_main.plot(tt, I_compartments[1], label='$I_p$', color='skyblue')
+    if plot_total_I: ax_main.plot(tt, total_I, label='$I_{total}$', color='red', linestyle='--')
+    if plot_R: ax_main.plot(tt, compartments[R_idx], label='$R$', color='black')
+
+    plt.suptitle(title, fontsize=20)
+    ax_main.set_xlabel("Time (days)", fontsize=16)
+    ax_main.set_ylabel("Population", fontsize=16)
+    if semilogy: ax_main.set_yscale('log')
+
+    # final size
+    def calculate_final_size(R0):
+        def final_size_equation(Z): 
+            return 1-Z-np.exp(-R0*Z)
+        return fsolve(final_size_equation, x0=0.5)[0]
+    final_size = calculate_final_size(params.R_0)
+    ax_main.axhline(final_size, label=f'$Z=${final_size:.2f}', color='grey', linestyle='--')
+    ax_main.legend(loc='upper right')
+
+    # Rt
+    rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
+    rt_reported = yy[:, -(params.n_B + 1)]
+    ax_rt.plot(tt, rt_true, color='black', label='True $R_t$')
+    ax_rt.plot(tt, rt_reported, color='red', label='Reported $R_t$')
+    ax_rt.axhline(params.R_crit, color='grey', linestyle='--')
+    ax_rt.legend()
+
+    # Rt decomposition
+    def calculate_R0_contributions(params: Params):
+        asymptomatic = params.p * params.phi * params.beta * params.mu_a_inv
+        presymptomatic = (1-params.p) * params.beta * params.sigma_inv
+        symptomatic = (1-params.p) * params.beta * params.mu_s_inv
+        return np.array([asymptomatic, presymptomatic, symptomatic])
+    contributions = calculate_R0_contributions(params=params)
+    colors = ['purple', 'skyblue', 'blue']
+    labels = ['$\mathcal{R}_a$: '+f'{contributions[0]:.2f}', '$\mathcal{R}_p$: '+f'{contributions[1]:.2f}', '$\mathcal{R}_s$: '+f'{contributions[2]:.2f}']
+    lefts = np.insert(np.cumsum(contributions)[:-1], 0, 0)
+    for i in range(3):
+        ax_rt_decomp.barh(0, contributions[i], left=lefts[i], color=colors[i], label=labels[i])
+    ax_rt_decomp.legend(loc='upper center', bbox_to_anchor=(0.5, -0.3), ncol=3)
+    ax_rt_decomp.set_yticks([])
+    for spine in ax_rt_decomp.spines.values(): spine.set_visible(False)
+
+    # save and close
     plt.tight_layout()
-    
     fig.savefig(path, dpi=image_resolution)
     plt.close(fig)
 
