@@ -13,7 +13,7 @@ import matplotlib.gridspec as gridspec
 import pandas as pd
 import seaborn as sns
 
-from models.parameters import Params, update_asymptomatic_params, update_epsilons, logistic_response_function
+from models.parameters import Params, logistic_response_function
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
 from models.prcc import calculate_prcc
 from models.plotting import (
@@ -51,6 +51,20 @@ gillespie_num_simulations = [100]
 image_resolution = 300
 outdir = "results"
 
+# Archetype means from Ward et al., 2026
+# Assume asymptomatic period = presymptomatic + symptomatic and presymptomatic = incubation - latent
+# TODO: the presymptomatic estimates are very short, doesn't match early estimates of ~50% presymptomatic transmissions 
+params_cov_high = Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=5.46, p=0.4, phi=0.12)
+params_cov_mild = Params.for_SEIAR(R_0=1.36, gamma_inv=5.77, mu_s_inv=8.33, mu_a_inv=8.33, p=0.35, phi=0.12)
+params_flu = Params.for_SEIAR(R_0=1.88, gamma_inv=2.14, mu_s_inv=2.13, mu_a_inv=2.13, p=0.4, phi=0.5)
+params_ebola = Params.for_SEIR(R_0=1.88, gamma_inv=8.71, mu_s_inv=5.03)
+
+
+# rule plot_baselines:
+#     output:
+#         plot="{outdir}/compartmental/baselines.png"
+#     run:
+#         #
 
 rule plot_efficacy_grid_Rt_final:
     output:
@@ -133,7 +147,7 @@ rule plot_trajectory:
         plot="{outdir}/compartmental/trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        params = update_epsilons(parameters[wildcards.pathogen], epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
+        params = parameters[wildcards.pathogen].update(epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
         plot_trajectory(
             model=models[wildcards.pathogen],
             params=params,
@@ -150,10 +164,7 @@ rule plot_trajectory_delayed_ww_intervention:
         plot="{outdir}/compartmental/delayed_ww_intervention_trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}_Icrit{I_crit}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        params = update_epsilons(
-            parameters[wildcards.pathogen]._replace(I_crit=float(wildcards.I_crit)), 
-            epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w)
-        )
+        params = parameters[wildcards.pathogen].update(I_crit=float(wildcards.I_crit), epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
         plot_trajectory(
             model=models[wildcards.pathogen],
             params=params,
@@ -185,7 +196,9 @@ rule baseline_trajectories:
             params = parameters[wildcards.pathogen],
             path = output.plot,
             title = f"Baseline trajectories for {wildcards.pathogen}",
-            image_resolution = image_resolution
+            image_resolution = image_resolution,
+            plot_total_I = True,
+            t1 = 500.0
         )
 
 rule baseline_trajectories_no_asymptomatic:
@@ -261,7 +274,7 @@ rule plot_response_function:
 @partial(jax.jit, static_argnames=['model', 't1'])
 def _compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=300.0):
     def metrics(tau_W, tau_B):
-        params = base_params._replace(tau_W=tau_W, tau_B=tau_B)
+        params = base_params.update(tau_W=tau_W, tau_B=tau_B)
         _, yy = model(params=params, t1=t1)
         rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
         rt_reported = yy[:, -(params.n_B + 1)]
@@ -287,7 +300,7 @@ rule plot_true_vs_reported_Rt_scenarios:
         t1 = 300.0
 
         epsilon_s = 0.8 if wildcards.pathogen == "SARS-CoV-2" else 0.4
-        base_params = update_epsilons(parameters[wildcards.pathogen], epsilon_s=epsilon_s, epsilon_w=0.8)._replace(k=k)
+        base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
         model = models[wildcards.pathogen]
 
         sns.set_theme(style="white", rc={"axes.grid": False})
@@ -295,7 +308,7 @@ rule plot_true_vs_reported_Rt_scenarios:
 
         for i, tau_W in enumerate(taus_W):
             for j, tau_B in enumerate(taus_B):
-                params = base_params._replace(tau_W=tau_W, tau_B=tau_B)
+                params = base_params.update(tau_W=tau_W, tau_B=tau_B)
                 tt, yy = model(params=params, t1=t1)
                 rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
                 rt_reported = yy[:, -(params.n_B + 1)]
@@ -331,7 +344,7 @@ rule plot_true_vs_reported_Rt_heatmaps:
         taus_W = jnp.linspace(1.0, 31.0, num=100)
         taus_B = jnp.linspace(1.0, 31.0, num=100)
         k = float(wildcards.k)
-        base_params = update_epsilons(parameters[wildcards.pathogen], epsilon_s=0.8, epsilon_w=0.8)._replace(k=k)
+        base_params = parameters[wildcards.pathogen].update(epsilon_s=0.8, epsilon_w=0.8, k=k)
 
         amplitudes, fractions, time_above, crossings = _compute_delay_metrics_grid(model=models[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
 

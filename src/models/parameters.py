@@ -153,22 +153,17 @@ class Params(NamedTuple):
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, n_W=n_W, n_B=n_B
         )
 
-def update_epsilons(params: Params, epsilon_w: float, epsilon_s: float) -> Params:
-    """Update NPI efficacy parameters epsilon for a given parameter set."""
-    r = calculate_r(p=params.p, phi=params.phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, mu_s_inv=params.mu_s_inv)
-    r_eps = calculate_r_eps(p=params.p, phi=params.phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, epsilon_s=epsilon_s, mu_s_inv=params.mu_s_inv)
-    rho = r_eps / r
-    beta = params.R_0 / r
-    return params._replace(epsilon_w=epsilon_w, epsilon_s=epsilon_s, rho=rho, beta=beta)
-
-def update_asymptomatic_params(params: Params, p: float, phi: float):
-    """Update asymptomatic parameters for a given parameter set."""
-    r = calculate_r(p=p, phi=phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, mu_s_inv=params.mu_s_inv)
-    r_eps = calculate_r_eps(p=p, phi=phi, mu_a_inv=params.mu_a_inv, sigma_inv=params.sigma_inv, epsilon_s=params.epsilon_s, mu_s_inv=params.mu_s_inv)
-    rho = jnp.where(r > 0, r_eps / r, 1.0)
-    beta = jnp.where(r > 0, params.R_0 / r, 0.0)
-    R_0 = jnp.where(r > 0, params.R_0, 0.0)
-    return params._replace(p=p, phi=phi, rho=rho, beta=beta, R_0=R_0)
+    def update(self, **kwargs) -> "Params":
+        """Update any parameter(s)."""
+        base_params = {"R_0", "p", "phi", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s",}
+        if base_params & kwargs.keys():
+            v = {f: kwargs.get(f, getattr(self, f)) for f in base_params}
+            r = calculate_r(p=v["p"], phi=v["phi"], mu_a_inv=v["mu_a_inv"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"])
+            r_eps = calculate_r_eps(p=v["p"], phi=v["phi"], mu_a_inv=v["mu_a_inv"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"], epsilon_s=v["epsilon_s"])
+            kwargs.setdefault("beta", jnp.where(r > 0, v["R_0"]/r, 0.0))
+            kwargs.setdefault("rho",  jnp.where(r > 0, r_eps/r, 1.0))
+            kwargs["R_0"] = jnp.where(r > 0, v["R_0"], 0.0)
+        return self._replace(**kwargs)
 
 def logistic_response_function(reproductive_number: float, params: Params, number_infected: float):
     """Logistic response function of the reproductive number for the wastewater warning response."""

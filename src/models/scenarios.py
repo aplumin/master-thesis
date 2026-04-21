@@ -6,14 +6,14 @@ import jax
 from functools import partial
 from typing import Callable
 
-from models.parameters import Params, logistic_response_function, update_epsilons, update_asymptomatic_params
+from models.parameters import Params, logistic_response_function
 
 
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: float, t1: float = 100.0, E0: float = 1e-6):
     """Compute a 2D grid of Rt values with wastewater warning response efficacy on the x axis and isolation efficacy on the y axis."""
     def final_R(w, s):
-        params = update_epsilons(base_params, w, s)
+        params = base_params.update(epsilon_w=w, epsilon_s=s)
         _, yy = model(params=params, t1=t1, E0=E0)
         Is_final = yy[-1, -(params.n_W + params.n_B + 2)]
         return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
@@ -26,7 +26,7 @@ def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1:
     Wastewater warning response efficacy on the x axis and isolation efficacy on the y axis.
     """
     def I_tot(w, s):
-        params = update_epsilons(base_params, w, s)
+        params = base_params.update(epsilon_w=w, epsilon_s=s)
         _, yy =  model(params=params, t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
@@ -39,7 +39,7 @@ def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float,
     Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
     """
     def final_R(p, phi):
-        params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
+        params = base_params.update(p=p, phi=phi)
         _, yy = model(params=params, t1=t1, E0=E0)
         Is_final = yy[-1, -(params.n_W + params.n_B + 2)]
         # TODO: this assumes n_B > 0
@@ -53,8 +53,7 @@ def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: floa
     Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
     """
     def I_tot(p, phi):
-        params = update_asymptomatic_params(params=base_params, p=p, phi=phi)
-        _, yy = model(params=params, t1=t1, E0=E0)
+        _, yy = model(params=base_params.update(p=p, phi=phi), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(p, phi)
     return I_tot_grid # return absolute fraction infected
@@ -66,9 +65,9 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
     wastewater reporting delays and infection intervention thresholds.
     """
     def I_tot(tau_W, I_crit):
-        _, yy = model(params=base_params._replace(tau_W=tau_W, I_crit=I_crit), t1=t1, E0=E0)
+        _, yy = model(params=base_params.update(tau_W=tau_W, I_crit=I_crit), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
     
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(taus, I_crit_list)
-    _, yy_base = model(params=base_params._replace(I_crit=0.0), t1=t1, E0=E0)
+    _, yy_base = model(params=base_params.update(I_crit=0.0), t1=t1, E0=E0)
     return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])

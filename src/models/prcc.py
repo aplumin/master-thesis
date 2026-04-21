@@ -46,7 +46,7 @@ def _run_latin_hypercube_sampling(latin_hypercube, base_params=Params.for_SEIPAR
         R_0, phi, gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, p, epsilon_s, epsilon_w, tau_W, tau_B, log_k, log_k_I = latin_hypercube_row
         r = p * phi * mu_a_inv + (1-p) * (sigma_inv + mu_s_inv)
         r_eps = p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
-        params = base_params._replace(R_0=R_0, phi=phi, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, tau_W=tau_W, tau_B=tau_B, beta=R_0/r, rho=r_eps/r, k=10.0**log_k, k_I=10.0**log_k_I)
+        params = base_params.update(R_0=R_0, phi=phi, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, tau_W=tau_W, tau_B=tau_B, beta=R_0/r, rho=r_eps/r, k=10.0**log_k, k_I=10.0**log_k_I)
         _, yy = simulate_SEIPAR_W(params=params, t1=t1, E0=E0)
         if total_infected:
             return yy[0,0] - yy[-1,0]

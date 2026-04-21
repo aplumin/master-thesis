@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from models.parameters import Params, update_epsilons
+from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W
 from models.gillespie import gillespie_SEIPAR_W, gillespie_SEIAR_W, gillespie_SEIR_W
 from models.scenarios import (
@@ -211,7 +211,7 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     df_list = []
     for eps_s in epsilon_s:
         for eps_w in epsilon_w:
-            base_params = update_epsilons(params=params, epsilon_s=float(eps_s), epsilon_w=float(eps_w))
+            base_params = params.update(epsilon_s=float(eps_s), epsilon_w=float(eps_w))
             if total_infected:
                 Z = compute_asymptomatic_grid_Itot(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
             else:

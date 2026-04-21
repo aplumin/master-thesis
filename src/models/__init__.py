@@ -2,7 +2,7 @@
 Model descriptions
 """
 
-from .parameters import Params, logistic_response_function, update_epsilons, update_asymptomatic_params
+from .parameters import Params, logistic_response_function
 from .compartmental import (
     simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
 )
@@ -23,7 +23,6 @@ from .plotting import (
 
 __all__ = [
     "Params", "logistic_response_function",
-    "update_epsilons", "update_asymptomatic_params",
     "simulate_SEIPAR_W", "simulate_SEIAR_W", "simulate_SEIR_W",
     "compute_I_tot_grid", "compute_R_grid", 
     "compute_asymptomatic_grid_Itot", "compute_asymptomatic_grid_Rt",
