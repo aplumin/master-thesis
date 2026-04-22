@@ -15,11 +15,7 @@ import seaborn as sns
 from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W
 from models.gillespie import gillespie_SEIPAR_W, gillespie_SEIAR_W, gillespie_SEIR_W
-from models.scenarios import (
-    compute_I_tot_grid, compute_R_grid, 
-    compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, 
-    compute_I_tot_grid_delayed_ww,
-)
+from models.scenarios import compute_I_tot_grid, compute_R_grid, compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, compute_I_tot_grid_delayed_ww
 
 
 def plot_heatmap(
@@ -119,9 +115,8 @@ def plot_trajectory(
 ) -> None:
     """
     Simulate and plot trajectories.
-    Assume compartment order: S, E, [I compartments], R, [Delay compartments].
+    Assume compartment order: S, E, [I compartments], R, [W delay compartments], [B delay compartments].
     """
-    
     # run the model
     tt, yy = model(params=params, t1=t1)
     compartments = yy.T
@@ -132,23 +127,37 @@ def plot_trajectory(
     # extract I compartments
     I_compartments = compartments[slice(2, R_idx) if R_idx != -1 else slice(2, None)]
     total_I = np.sum(I_compartments, axis=0)
+    Is = I_compartments[-1]
     
     # plot
-    fig, (ax_main, ax_rt, ax_rt_decomp) = plt.subplots(nrows=3, ncols=1, figsize=(6, 9), gridspec_kw={'height_ratios': [6,2,1]})
+    fig, (ax_main, ax_rt) = plt.subplots(nrows=2, ncols=1, figsize=(6, 8), gridspec_kw={'height_ratios': [6,2]})
+    # fig, (ax_main, ax_rt, ax_rt_decomp) = plt.subplots(nrows=3, ncols=1, figsize=(6, 9), gridspec_kw={'height_ratios': [6,2,1]})
 
     # trajectories
     if plot_S: ax_main.plot(tt, compartments[0], label='$S$', color='green')
     if plot_E: ax_main.plot(tt, compartments[1], label='$E$', color='orange')
-    if plot_Is and len(I_compartments) > 0: ax_main.plot(tt, I_compartments[-1], label='$I_s$', color='blue')
+    if plot_Is and len(I_compartments) > 0: ax_main.plot(tt, Is, label='$I_s$', color='blue')
     if plot_Ia and len(I_compartments) > 1: ax_main.plot(tt, I_compartments[0], label='$I_a$', color='purple')
     if plot_Ip and len(I_compartments) > 2: ax_main.plot(tt, I_compartments[1], label='$I_p$', color='skyblue')
     if plot_total_I: ax_main.plot(tt, total_I, label='$I_{total}$', color='red', linestyle='--')
     if plot_R: ax_main.plot(tt, compartments[R_idx], label='$R$', color='black')
 
     plt.suptitle(title, fontsize=20)
-    ax_main.set_xlabel("Time (days)", fontsize=16)
+    ax_rt.set_xlabel("Time (days)", fontsize=16)
     ax_main.set_ylabel("Population", fontsize=16)
     if semilogy: ax_main.set_yscale('log')
+
+    # Is peak size, time to peak, and total wave time
+    idx_peak = np.argmax(Is)
+    peak_Is = Is[idx_peak]
+    t_peak = tt[idx_peak]
+    # first time Is crossed threshold
+    indices_above = np.where(Is > params.I_crit)[0]
+    t1_crit = tt[indices_above[0]] if indices_above.size > 0 else tt[-1]
+    # first time after Is is below threshold
+    t2_crit = tt[indices_above[-1] + 1] if indices_above.size > 0 else tt[-1]
+    time_to_peak = t_peak - t1_crit
+    total_time = t2_crit - t1_crit
 
     # final size
     def calculate_final_size(R0):
@@ -161,32 +170,43 @@ def plot_trajectory(
 
     # Rt
     rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-    rt_reported = yy[:, -(params.n_B + 1)]
-    ax_rt.plot(tt, rt_true, color='black', label='True $R_t$')
-    ax_rt.plot(tt, rt_reported, color='red', label='Reported $R_t$')
+    # rt_reported = yy[:, -(params.n_B + 1)]
+    ax_rt.plot(tt, rt_true, color='black', label='True $\mathcal{R}_t$')
+    # ax_rt.plot(tt, rt_reported, color='red', label='Reported $\mathcal{R}_t$')
     ax_rt.axhline(params.R_crit, color='grey', linestyle='--')
+    rt_a = rt_true / params.R_0 * (params.p * params.phi * params.beta * params.mu_a_inv) 
+    rt_p = rt_true / params.R_0 * ((1-params.p) * params.beta * params.sigma_inv)
+    if rt_a.any() > 0:
+        ax_rt.fill_between(tt, 0, rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
+    if rt_p.any() > 0:
+        ax_rt.fill_between(tt, rt_a, rt_a + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
+    ax_rt.fill_between(tt, rt_a + rt_p, rt_true, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
     ax_rt.legend()
 
-    # Rt decomposition
-    def calculate_R0_contributions(params: Params):
-        asymptomatic = params.p * params.phi * params.beta * params.mu_a_inv
-        presymptomatic = (1-params.p) * params.beta * params.sigma_inv
-        symptomatic = (1-params.p) * params.beta * params.mu_s_inv
-        return np.array([asymptomatic, presymptomatic, symptomatic])
-    contributions = calculate_R0_contributions(params=params)
-    colors = ['purple', 'skyblue', 'blue']
-    labels = ['$\mathcal{R}_a$: '+f'{contributions[0]:.2f}', '$\mathcal{R}_p$: '+f'{contributions[1]:.2f}', '$\mathcal{R}_s$: '+f'{contributions[2]:.2f}']
-    lefts = np.insert(np.cumsum(contributions)[:-1], 0, 0)
-    for i in range(3):
-        ax_rt_decomp.barh(0, contributions[i], left=lefts[i], color=colors[i], label=labels[i])
-    ax_rt_decomp.legend(loc='upper center', bbox_to_anchor=(0.5, -0.3), ncol=3)
-    ax_rt_decomp.set_yticks([])
-    for spine in ax_rt_decomp.spines.values(): spine.set_visible(False)
+    # # Rt decomposition
+    # def calculate_R0_contributions(params: Params):
+    #     asymptomatic = params.p * params.phi * params.beta * params.mu_a_inv
+    #     presymptomatic = (1-params.p) * params.beta * params.sigma_inv
+    #     symptomatic = (1-params.p) * params.beta * params.mu_s_inv
+    #     return np.array([asymptomatic, presymptomatic, symptomatic])
+    # contributions = calculate_R0_contributions(params=params)
+    # colors = ['purple', 'skyblue', 'blue']
+    # labels = ['$\mathcal{R}_a$: '+f'{contributions[0]:.2f}', '$\mathcal{R}_p$: '+f'{contributions[1]:.2f}', '$\mathcal{R}_s$: '+f'{contributions[2]:.2f}']
+    # lefts = np.insert(np.cumsum(contributions)[:-1], 0, 0)
+    # for i in range(3):
+    #     ax_rt_decomp.barh(0, contributions[i], left=lefts[i], color=colors[i], label=labels[i])
+    # ax_rt_decomp.legend(loc='upper center', bbox_to_anchor=(0.5, -0.3), ncol=3)
+    # ax_rt_decomp.set_yticks([])
+    # for spine in ax_rt_decomp.spines.values(): spine.set_visible(False)
 
     # save and close
     plt.tight_layout()
     fig.savefig(path, dpi=image_resolution)
     plt.close(fig)
+    
+    # return peak size, time to peak, and total wave time
+    return peak_Is, time_to_peak, total_time
+
 
 
 def plot_asymptomatic_effect_for_range_of_intervention_efficacies(

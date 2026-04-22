@@ -51,20 +51,6 @@ gillespie_num_simulations = [100]
 image_resolution = 300
 outdir = "results"
 
-# Archetype means from Ward et al., 2026
-# Assume asymptomatic period = presymptomatic + symptomatic and presymptomatic = incubation - latent
-# TODO: the presymptomatic estimates are very short, doesn't match early estimates of ~50% presymptomatic transmissions 
-params_cov_high = Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=5.46, p=0.4, phi=0.12)
-params_cov_mild = Params.for_SEIAR(R_0=1.36, gamma_inv=5.77, mu_s_inv=8.33, mu_a_inv=8.33, p=0.35, phi=0.12)
-params_flu = Params.for_SEIAR(R_0=1.88, gamma_inv=2.14, mu_s_inv=2.13, mu_a_inv=2.13, p=0.4, phi=0.5)
-params_ebola = Params.for_SEIR(R_0=1.88, gamma_inv=8.71, mu_s_inv=5.03)
-
-
-# rule plot_baselines:
-#     output:
-#         plot="{outdir}/compartmental/baselines.png"
-#     run:
-#         #
 
 rule plot_efficacy_grid_Rt_final:
     output:
@@ -191,15 +177,17 @@ rule baseline_trajectories:
         plot="{outdir}/compartmental/baseline_trajectories_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        plot_trajectory(
+        peak_Is, time_to_peak, total_time = plot_trajectory(
             model = models[wildcards.pathogen],
-            params = parameters[wildcards.pathogen],
+            params = parameters[wildcards.pathogen].update(I_crit=1e-4), # TODO: 1 in 10_000 infected
             path = output.plot,
-            title = f"Baseline trajectories for {wildcards.pathogen}",
+            title = f"{wildcards.pathogen}",
             image_resolution = image_resolution,
             plot_total_I = True,
             t1 = 500.0
         )
+        print(wildcards.pathogen)
+        print(peak_Is, time_to_peak, total_time)
 
 rule baseline_trajectories_no_asymptomatic:
     output:
@@ -359,6 +347,79 @@ rule plot_true_vs_reported_Rt_heatmaps:
         fig, _ = plot_heatmap(taus_B, taus_W, crossings, cmap='plasma', cbar_label='Total times warned', title=f'Number of warning-threshold crossings {scenario}', **kwargs)
         fig.savefig(output.crossings, dpi=image_resolution); plt.close(fig)
 
+rule plot_main_intervention_grid:
+    output:
+        plot="{outdir}/compartmental/main_intervention_grid.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        eps_ww = jnp.linspace(0.0, 0.999, 100)
+        eps_ss = jnp.linspace(0.0, 0.999, 100)
+        t1 = 500.0
+
+        # compute per pathogen
+        Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
+        @partial(jax.jit, static_argnames=['model', 't1', 'tRt'])
+        def compute_metrics(model, base_params, eps_ww, eps_ss, t1, tRt, E0):
+            def metrics(w, s):
+                params = base_params.update(epsilon_w=w, epsilon_s=s)
+                tt, yy = model(params=params, t1=t1, E0=E0)
+                Is = yy[:, -(params.n_W + params.n_B + 2)]
+                rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
+                Rt_final = rt_true[jnp.argmin(jnp.abs(tt - tRt))]
+                time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
+                Itot = yy[0,0] - yy[-1,0]
+                peak_Is = jnp.max(Is)
+                return Rt_final, time_to_below, Itot, peak_Is
+            return jax.vmap(jax.vmap(metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
+        
+        for pathogen in pathogens:
+            Rt, tRt, It, pk = compute_metrics(models[pathogen], parameters[pathogen], eps_ww, eps_ss, t1, Rt_times[pathogen], E0,)
+            Rt_g[pathogen] = np.array(Rt)
+            tRt_g[pathogen] = np.array(tRt)
+            _, yy0 = models[pathogen](params=parameters[pathogen].update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0)
+            Itot_g[pathogen] = np.array(It) / float(yy0[0,0] - yy0[-1,0])
+            peakIs_g[pathogen] = np.array(pk)
+
+        # plot
+        rows = [ # label, data, cmap, 
+            ('$\\mathcal{R}_t$', Rt_g, 'RdBu_r', True),
+            ('Time to $\\mathcal{R}_t<1$', tRt_g, 'magma', False),
+            ('$I_\\text{tot}$ (relative to baseline)', Itot_g, 'viridis', False),
+            ('Peak $I_s$', peakIs_g, 'viridis', False),
+        ]
+        fig, axs = plt.subplots(nrows=len(rows), ncols=len(pathogens), figsize=(13, 16), sharex=True, sharey=True)
+        for row_idx, (label, data, cmap, center_at_one) in enumerate(rows):
+
+            # normalisation
+            vals = np.concatenate([d.ravel() for d in data.values()])
+            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+            if center_at_one:
+                d = max(abs(vmin - 1.0), abs(vmax - 1.0))
+                norm = mpl.colors.Normalize(vmin=1.0 - d, vmax=1.0 + d)
+            else:
+                norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+
+            # meshgrid
+            meshes = []
+            for col_idx, pathogen in enumerate(pathogens):
+                ax = axs[row_idx, col_idx]
+                mesh = ax.pcolormesh(np.array(eps_ww), np.array(eps_ss), data[pathogen], cmap=cmap, norm=norm, shading='auto', rasterized=True)
+                meshes.append(mesh)
+                ax.set_aspect('equal')
+
+                # contours, titles, labels
+                if center_at_one: ax.contour(np.array(eps_ww), np.array(eps_ss), data[pathogen], levels=[1.0], colors='black', linewidths=1.0)
+                if row_idx == 0: ax.set_title(pathogen, fontsize=14)
+                if row_idx == len(rows) - 1: ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=11)
+                if col_idx == 0: ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=11)
+
+            # colorbar
+            cbar = fig.colorbar(meshes[-1], ax=axs[row_idx, :].tolist(), shrink=0.85, aspect=25, pad=0.02)
+            cbar.set_label(label, fontsize=12, labelpad=8)
+            if diverging_at_one: cbar.ax.axhline(1.0, color='black', linewidth=1.0)
+
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight')
+        plt.close(fig)
 
 rule all:
     input:
@@ -421,3 +482,4 @@ rule all:
             k=[1, 3, 10, 30],
         ),
         expand(rules.plot_response_function.output.plot, outdir=outdir),
+        expand(rules.plot_main_intervention_grid.output.plot, outdir=outdir),
