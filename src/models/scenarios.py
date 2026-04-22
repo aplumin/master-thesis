@@ -9,14 +9,14 @@ from typing import Callable
 from models.parameters import Params, logistic_response_function
 
 
+# TODO: should change from predefined time to stable number after interventions and before natural depletion of susceptibles
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: float, t1: float = 100.0, E0: float = 1e-6):
     """Compute a 2D grid of Rt values with wastewater warning response efficacy on the x axis and isolation efficacy on the y axis."""
     def final_R(w, s):
         params = base_params.update(epsilon_w=w, epsilon_s=s)
         _, yy = model(params=params, t1=t1, E0=E0)
-        Is_final = yy[-1, -(params.n_W + params.n_B + 2)]
-        return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
+        return params.R_0 * params.rho * yy[-1, -1] * yy[-1, 0]
     return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
