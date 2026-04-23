@@ -215,6 +215,8 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     total_infected: bool = False,
     ps = jnp.linspace(0.0, 0.999, 100),
     phis = jnp.linspace(0.0, 0.999, 100),
+    p_CI = (None, None),
+    phi_CI = (None, None),
     epsilon_s = [0.0, 0.4, 0.8],
     epsilon_w = [0.0, 0.4, 0.8],
     E0: float = 1e-6,
@@ -259,10 +261,20 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
         mesh = ax.pcolormesh(p_grid, phi_grid, Z_matrix, linewidth=0, edgecolors='none', rasterized=True, **kwargs)
         if not total_infected: # R=1 contour
             ax.contour(p_grid, phi_grid, Z_matrix, levels=[1.0], colors='black', linewidths=1.5, linestyles='dashed')
+        # mean and CI cross
+        has_p_ci = p_CI[0] is not None and p_CI[1] is not None
+        has_phi_ci = phi_CI[0] is not None and phi_CI[1] is not None
+        if has_p_ci or has_phi_ci:
+            xerr = np.array([[params.p - p_CI[0]], [p_CI[1] - params.p]]) if has_p_ci else None
+            yerr = np.array([[params.phi - phi_CI[0]], [phi_CI[1] - params.phi]]) if has_phi_ci else None
+            ax.errorbar(params.p, params.phi, xerr=xerr, yerr=yerr, fmt='o', color='white', markeredgecolor='black', ecolor='white', elinewidth=1.5, capsize=3, markersize=5)
+        else:
+            ax.plot(params.p, params.phi, marker='o', color='white', markeredgecolor='black', markersize=5)
         return mesh
     g.map_dataframe(_meshmap, **plot_kwargs)
 
     # labels and title
+    g.set_titles(row_template=r"$\varepsilon_s = {row_name}$", col_template=r"$\varepsilon_w = {col_name}$")
     g.set(xlabel=None, ylabel=None, aspect='equal')
     g.figure.supxlabel("Proportion asymptomatic", fontsize=14, y=0.02)
     g.figure.supylabel("Relative infectiousness", fontsize=14, x=-0.04)
