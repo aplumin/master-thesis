@@ -9,12 +9,14 @@ import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 import matplotlib.gridspec as gridspec
 import pandas as pd
 import seaborn as sns
 
 from models.parameters import Params, logistic_response_function
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
+from models.scenarios import compute_R_grid
 from models.prcc import calculate_prcc
 from models.plotting import (
     plot_heatmap, plot_trajectory,
@@ -68,6 +70,9 @@ rule plot_efficacy_grid_Itot_final:
         fig = plot_I_tot(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=600.0, E0=E0, title=f"Total number infected: {wildcards.pathogen}")
         fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
+p_CI = {"SARS-CoV-2": (0.23, 0.399), "Influenza A": (None, None)}
+phi_CI = {"SARS-CoV-2": (0.07, 0.28), "Influenza A": (None, None)}
+
 rule plot_asymptomatic_grid_Rt_final:
     output:
         plot="{outdir}/compartmental/asymptomatic_grid_Rt_final_{pathogen}.png"
@@ -77,6 +82,8 @@ rule plot_asymptomatic_grid_Rt_final:
         plot_asymptomatic_effect_for_range_of_intervention_efficacies(
             model=models[wildcards.pathogen],
             params=parameters[wildcards.pathogen],
+            p_CI=p_CI[wildcards.pathogen],
+            phi_CI=phi_CI[wildcards.pathogen],
             total_infected=False,
             path=output.plot,
             image_resolution=image_resolution,
@@ -91,10 +98,12 @@ rule plot_asymptomatic_grid_Itot_final:
         plot_asymptomatic_effect_for_range_of_intervention_efficacies(
             model=models[wildcards.pathogen],
             params=parameters[wildcards.pathogen],
+            p_CI=p_CI[wildcards.pathogen],
+            phi_CI=phi_CI[wildcards.pathogen],
             total_infected=True,
             path=output.plot,
             image_resolution=image_resolution,
-            t1=Rt_times[wildcards.pathogen],
+            t1=600.0,
         )
 
 rule plot_prcc:
@@ -347,6 +356,22 @@ rule plot_true_vs_reported_Rt_heatmaps:
         fig, _ = plot_heatmap(taus_B, taus_W, crossings, cmap='plasma', cbar_label='Total times warned', title=f'Number of warning-threshold crossings {scenario}', **kwargs)
         fig.savefig(output.crossings, dpi=image_resolution); plt.close(fig)
 
+
+
+@partial(jax.jit, static_argnames=['model', 't1', 'tRt'])
+def compute_metrics(model, base_params, eps_ww, eps_ss, t1, tRt, E0):
+    def metrics(w, s):
+        params = base_params.update(epsilon_w=w, epsilon_s=s)
+        tt, yy = model(params=params, t1=t1, E0=E0)
+        Is = yy[:, -(params.n_W + params.n_B + 2)]
+        rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
+        Rt_final = rt_true[jnp.argmin(jnp.abs(tt - tRt))]
+        time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
+        Itot = yy[0,0] - yy[-1,0]
+        peak_Is = jnp.max(Is)
+        return Rt_final, time_to_below, Itot, peak_Is
+    return jax.vmap(jax.vmap(metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
+      
 rule plot_main_intervention_grid:
     output:
         plot="{outdir}/compartmental/main_intervention_grid.png"
@@ -358,22 +383,9 @@ rule plot_main_intervention_grid:
 
         # compute per pathogen
         Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
-        @partial(jax.jit, static_argnames=['model', 't1', 'tRt'])
-        def compute_metrics(model, base_params, eps_ww, eps_ss, t1, tRt, E0):
-            def metrics(w, s):
-                params = base_params.update(epsilon_w=w, epsilon_s=s)
-                tt, yy = model(params=params, t1=t1, E0=E0)
-                Is = yy[:, -(params.n_W + params.n_B + 2)]
-                rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-                Rt_final = rt_true[jnp.argmin(jnp.abs(tt - tRt))]
-                time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
-                Itot = yy[0,0] - yy[-1,0]
-                peak_Is = jnp.max(Is)
-                return Rt_final, time_to_below, Itot, peak_Is
-            return jax.vmap(jax.vmap(metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
-        
+
         for pathogen in pathogens:
-            Rt, tRt, It, pk = compute_metrics(models[pathogen], parameters[pathogen], eps_ww, eps_ss, t1, Rt_times[pathogen], E0,)
+            Rt, tRt, It, pk = compute_metrics(models[pathogen], parameters[pathogen], eps_ww, eps_ss, t1, Rt_times[pathogen], E0)
             Rt_g[pathogen] = np.array(Rt)
             tRt_g[pathogen] = np.array(tRt)
             _, yy0 = models[pathogen](params=parameters[pathogen].update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0)
@@ -381,7 +393,7 @@ rule plot_main_intervention_grid:
             peakIs_g[pathogen] = np.array(pk)
 
         # plot
-        rows = [ # label, data, cmap, 
+        rows = [ # label, data, cmap, center_at_one
             ('$\\mathcal{R}_t$', Rt_g, 'RdBu_r', True),
             ('Time to $\\mathcal{R}_t<1$', tRt_g, 'magma', False),
             ('$I_\\text{tot}$ (relative to baseline)', Itot_g, 'viridis', False),
@@ -408,7 +420,7 @@ rule plot_main_intervention_grid:
                 ax.set_aspect('equal')
 
                 # contours, titles, labels
-                if center_at_one: ax.contour(np.array(eps_ww), np.array(eps_ss), data[pathogen], levels=[1.0], colors='black', linewidths=1.0)
+                if center_at_one: ax.contour(np.array(eps_ww), np.array(eps_ss), data[pathogen], levels=[1.0], colors='black', linewidths=1.0, linestyles='--')
                 if row_idx == 0: ax.set_title(pathogen, fontsize=14)
                 if row_idx == len(rows) - 1: ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=11)
                 if col_idx == 0: ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=11)
@@ -416,10 +428,103 @@ rule plot_main_intervention_grid:
             # colorbar
             cbar = fig.colorbar(meshes[-1], ax=axs[row_idx, :].tolist(), shrink=0.85, aspect=25, pad=0.02)
             cbar.set_label(label, fontsize=12, labelpad=8)
-            if diverging_at_one: cbar.ax.axhline(1.0, color='black', linewidth=1.0)
+            if center_at_one: cbar.ax.axhline(1.0, color='black', linewidth=1.0)
 
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight')
         plt.close(fig)
+
+
+best_params_kwargs = {
+    "SARS-CoV-2": dict(R_0=2.40, gamma_inv=5.86, sigma_inv=0.52, mu_s_inv=10.0, mu_a_inv=4.63, p=0.230, phi=0.07),
+    "Influenza A": dict(R_0=1.30, gamma_inv=3.12, mu_s_inv=4.69, mu_a_inv=2.06, p=0.33, phi=0.50),
+    "Ebola": dict(R_0=1.74, gamma_inv=10.38, mu_s_inv=6.30)
+}
+worst_params_kwargs = {
+    "SARS-CoV-2": dict(R_0=2.98, gamma_inv=5.06, sigma_inv=3.00, mu_s_inv=7.80, mu_a_inv=5.50, p=0.399, phi=0.28),
+    "Influenza A": dict(R_0=1.70, gamma_inv=2.28, mu_s_inv=2.06, mu_a_inv=4.69, p=0.33, phi=0.50),
+    "Ebola": dict(R_0=2.15, gamma_inv=8.80, mu_s_inv=3.70)
+}
+colors = {
+    "SARS-CoV-2": "tab:blue", 
+    "Influenza A": "tab:orange", 
+    "Ebola": "tab:green"
+}
+
+rule plot_R_1_contours:
+    output:
+        plot="{outdir}/compartmental/R_1_contours.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        
+        fig, ax = plt.subplots(figsize=(6, 6))
+        eps_ww = jnp.linspace(0.0, 0.999, 100)
+        eps_ss = jnp.linspace(0.0, 0.999, 100)
+        
+        for pathogen in pathogens:
+            mean_params = parameters[pathogen]
+            best_params = mean_params.update(**best_params_kwargs[pathogen])
+            worst_params = mean_params.update(**worst_params_kwargs[pathogen])
+            t1 = Rt_times[pathogen]
+            model = models[pathogen]
+            
+            Rt_mean = np.array(compute_R_grid(model=model, base_params=mean_params, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1))
+            Rt_best = np.array(compute_R_grid(model=model, base_params=best_params, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1))
+            Rt_worst = np.array(compute_R_grid(model=model, base_params=worst_params, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1))
+
+            shading_range = np.zeros_like(Rt_mean)
+            shading_range[(Rt_best <= 1.0) & (Rt_worst >= 1.0)] = 1
+            color = colors[pathogen]
+            ax.contourf(eps_ww, eps_ss, shading_range, levels=[0.5, 1.5], colors=[color], alpha=0.2)
+            ax.contour(eps_ww, eps_ss, Rt_mean, levels=[1.0], colors=[color], linewidths=2)
+            ax.contour(eps_ww, eps_ss, Rt_best, levels=[1.0], colors=[color], linestyles='--', linewidths=1)
+            ax.contour(eps_ww, eps_ss, Rt_worst, levels=[1.0], colors=[color], linestyles='--', linewidths=1)
+
+        ax.set_title('Controllability boundaries ($\\mathcal{R}_t=1$) with uncertainty', fontsize=14, pad=15)
+        ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=12)
+        ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=12)
+        ax.set_xlim(0,1); ax.set_ylim(0,1)
+        ax.grid(True, alpha=0.3)
+        ax.legend(handles=[Patch(facecolor=colors[p], alpha=0.5, label=p) for p in pathogens], loc='upper right')
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight')
+        plt.close(fig)
+
+  
+rule plot_combined_contour_grid_R1_Itot:
+    output:
+        plot="{outdir}/compartmental/combined_R1_and_Itot_reduction_contours.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        
+        eps_ww = jnp.linspace(0.0, 0.999, 100)
+        eps_ss = jnp.linspace(0.0, 0.999, 100)
+        t1 = 500.0
+        R_crits = [0.8, 1.0, 1.2, 1.5]
+        linestyles = ['-', '--', ':', '-.']
+
+        fig, (ax_R, ax_I) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharey=True)
+        for pathogen in pathogens:
+            model = models[pathogen]
+            base_params = parameters[pathogen]
+            tRt = Rt_times[pathogen]
+            color = colors[pathogen]
+            _, yy0 = model(params=base_params.update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0)
+            baseline_Itot = yy0[0,0] - yy0[-1,0]
+            for i, r_crit in enumerate(R_crits):
+                Rt_grid, _, Itot_grid, _ = compute_metrics(model, base_params.update(R_crit=r_crit), eps_ww, eps_ss, t1, tRt, E0)
+                ax_R.contour(eps_ww, eps_ss, np.array(Rt_grid), levels=[1.0], colors=[color], linestyles=[linestyles[i]], linewidths=2, alpha=0.8)
+                ax_I.contour(eps_ww, eps_ss, np.array(Itot_grid) / float(baseline_Itot), levels=[0.2], colors=[color], linestyles=[linestyles[i]], linewidths=2, alpha=0.8)
+
+        ax_R.set_title('Controllability boundaries ($\\mathcal{R}_t = 1$)', fontsize=14, pad=10)
+        ax_I.set_title('80% reduction in total infections', fontsize=14, pad=10)
+        ax_R.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=12)
+        ax_R.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=12)
+        ax_I.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=12)
+        ax_R.grid(True, alpha=0.3); ax_I.grid(True, alpha=0.3)
+        ax_R.set_aspect('equal'); ax_I.set_aspect('equal')
+        ax_I.legend(handles=[Line2D([0],[0],color=colors[p],lw=3,label=p) for p in pathogens] + [Line2D([0],[0],color='gray',lw=2,linestyle=linestyles[i],label=f'$R_{{crit}}={r}$') for i, r in enumerate(R_crits)], loc='upper right', fontsize=11)
+        plt.tight_layout()
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
 
 rule all:
     input:
@@ -455,7 +560,7 @@ rule all:
         ),
         expand(
             rules.plot_trajectory_delayed_ww_intervention.output.plot,
-             outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"],
+            outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"],
             epsilon_s=[0.8], epsilon_w=[0.8], 
             I_crit=[1e-5, 1e-4, 1e-3, 1e-2],
         ),
@@ -468,8 +573,8 @@ rule all:
             pathogen=pathogens, outdir=outdir, 
         ),
         expand(
-            rules.baseline_trajectories_no_asymptomatic.output.plot, outdir=outdir,
-            pathogen=pathogens
+            rules.baseline_trajectories_no_asymptomatic.output.plot, 
+            pathogen=pathogens, outdir=outdir,
         ),
         expand(
             rules.plot_true_vs_reported_Rt_scenarios.output, 
@@ -483,3 +588,5 @@ rule all:
         ),
         expand(rules.plot_response_function.output.plot, outdir=outdir),
         expand(rules.plot_main_intervention_grid.output.plot, outdir=outdir),
+        expand(rules.plot_R_1_contours.output.plot, outdir=outdir),
+        expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=outdir),
