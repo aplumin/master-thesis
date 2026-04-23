@@ -2,11 +2,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
-from typing import Callable, Optional
+import itertools
 import os
 
-import matplotlib as mpl
-mpl.use('Agg')
+import matplotlib as mpl; mpl.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
@@ -17,7 +16,7 @@ import seaborn as sns
 from models.parameters import Params, logistic_response_function
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
 from models.scenarios import compute_R_grid
-from models.prcc import calculate_prcc
+from models.prcc import SensitivityResults, run_sensitivity_analysis, partial_rank_residuals
 from models.plotting import (
     plot_heatmap, plot_trajectory,
     plot_final_R, plot_I_tot, plot_I_tot_delayed_ww, plot_asymptomatic_effect_for_range_of_intervention_efficacies,
@@ -47,6 +46,32 @@ Rt_times = {
 pathogens = list(parameters.keys())
 E0 = 1e-6
 
+best_params_kwargs = {
+    "SARS-CoV-2": dict(R_0=2.40, gamma_inv=5.86, sigma_inv=0.52, mu_s_inv=10.0, mu_a_inv=4.63, p=0.230, phi=0.07),
+    "Influenza A": dict(R_0=1.30, gamma_inv=3.12, mu_s_inv=4.69, mu_a_inv=2.06, p=0.33, phi=0.50),
+    "Ebola": dict(R_0=1.74, gamma_inv=10.38, mu_s_inv=6.30)
+}
+worst_params_kwargs = {
+    "SARS-CoV-2": dict(R_0=2.98, gamma_inv=5.06, sigma_inv=3.00, mu_s_inv=7.80, mu_a_inv=5.50, p=0.399, phi=0.28),
+    "Influenza A": dict(R_0=1.70, gamma_inv=2.28, mu_s_inv=2.06, mu_a_inv=4.69, p=0.33, phi=0.50),
+    "Ebola": dict(R_0=2.15, gamma_inv=8.80, mu_s_inv=3.70)
+}
+colors = {"SARS-CoV-2": "tab:blue", "Influenza A": "tab:orange", "Ebola": "tab:green"}
+p_CI = {"SARS-CoV-2": (0.23, 0.399), "Influenza A": (None, None)}
+phi_CI = {"SARS-CoV-2": (0.07, 0.28), "Influenza A": (None, None)}
+
+prcc_scenarios = ['start', 'threshold']
+prcc_outcomes  = ['Rt', 'Itot']
+prcc_scenario_titles = {'start': r'Intervention active from $t=0$', 'threshold': r'Intervention triggered at $I_{\text{crit}}$'}
+prcc_outcome_titles = {'Rt': r'Reproductive number after interventions ($\mathcal{R}_t$)', 'Itot': 'Total fraction infected'}
+
+PARAM_LABELS: dict[str, str] = {
+    "R_0": r"$\mathcal{R}_0$", "phi": r"$\varphi$", "p": r"$p$", "gamma_inv": r"$1/\gamma$", "sigma_inv": r"$1/\sigma$", 
+    "mu_a_inv": r"$1/\mu_a$", "mu_s_inv": r"$1/\mu_s$", "epsilon_s": r"$\varepsilon_s$", "epsilon_w": r"$\varepsilon_w$",
+    "tau_W": r"$\tau_W$", "tau_B": r"$\tau_B$", "log_k": r"$\log k$", "log_k_I": r"$\log k_I$",
+    "R_crit": r"$\mathcal{R}_{\text{crit}}$", "log_I_crit": r"$\log I_{\text{crit}}$",
+}
+
 gillespie_popsizes = [100, 1_000_000]
 gillespie_num_simulations = [100]
 
@@ -70,8 +95,6 @@ rule plot_efficacy_grid_Itot_final:
         fig = plot_I_tot(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=600.0, E0=E0, title=f"Total number infected: {wildcards.pathogen}")
         fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
-p_CI = {"SARS-CoV-2": (0.23, 0.399), "Influenza A": (None, None)}
-phi_CI = {"SARS-CoV-2": (0.07, 0.28), "Influenza A": (None, None)}
 
 rule plot_asymptomatic_grid_Rt_final:
     output:
@@ -79,51 +102,185 @@ rule plot_asymptomatic_grid_Rt_final:
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        plot_asymptomatic_effect_for_range_of_intervention_efficacies(
-            model=models[wildcards.pathogen],
-            params=parameters[wildcards.pathogen],
-            p_CI=p_CI[wildcards.pathogen],
-            phi_CI=phi_CI[wildcards.pathogen],
-            total_infected=False,
-            path=output.plot,
-            image_resolution=image_resolution,
-            t1=Rt_times[wildcards.pathogen],
-        )
+        plot_asymptomatic_effect_for_range_of_intervention_efficacies(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], p_CI=p_CI[wildcards.pathogen], phi_CI=phi_CI[wildcards.pathogen], total_infected=False, path=output.plot, image_resolution=image_resolution, t1=Rt_times[wildcards.pathogen])
 
 rule plot_asymptomatic_grid_Itot_final:
     output:
         plot="{outdir}/compartmental/asymptomatic_grid_Itot_final_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        plot_asymptomatic_effect_for_range_of_intervention_efficacies(
-            model=models[wildcards.pathogen],
-            params=parameters[wildcards.pathogen],
-            p_CI=p_CI[wildcards.pathogen],
-            phi_CI=phi_CI[wildcards.pathogen],
-            total_infected=True,
-            path=output.plot,
-            image_resolution=image_resolution,
-            t1=600.0,
-        )
+        plot_asymptomatic_effect_for_range_of_intervention_efficacies(t1=600.0, model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], p_CI=p_CI[wildcards.pathogen], phi_CI=phi_CI[wildcards.pathogen], total_infected=True, path=output.plot,image_resolution=image_resolution)
 
-rule plot_prcc:
+rule compute_prcc:
     output:
-        plot="{outdir}/compartmental/prcc_{outcome}.png"
+        npz="{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}.npz"
+    run:
+        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
+        p = wildcards.pathogen
+        t1 = {'Rt': Rt_times, 'Itot': {patho: 600.0 for patho in pathogens}}[wildcards.outcome][p]
+        best = best_params_kwargs[p]; worst = worst_params_kwargs[p]
+        specific_bounds = {}
+        for k in best.keys():
+            l_val = min(best[k], worst[k]); u_val = max(best[k], worst[k])
+            if l_val == u_val: u_val += 1e-5
+            specific_bounds[k] = (l_val, u_val)
+        results = run_sensitivity_analysis(model=models[wildcards.pathogen], base_params=parameters[wildcards.pathogen], manual_bounds=specific_bounds, scenario=wildcards.scenario, outcome=wildcards.outcome, t1=t1, E0=E0, n_lhs=5000, n_bootstrap=100, n_sobol_base=1024, avg_frac=0.1)
+        np.savez_compressed(output.npz, param_names=np.array(results.param_names), lower_bounds=np.array([results.bounds[k][0] for k in results.param_names]), upper_bounds=np.array([results.bounds[k][1] for k in results.param_names]), samples=results.samples, outputs=results.outputs, prcc_mean=results.prcc_mean, prcc_lower=results.prcc_lower, prcc_upper=results.prcc_upper, prcc_samples=results.prcc_samples, sobol_S1=results.sobol_S1, sobol_S1_conf=results.sobol_S1_conf, sobol_ST=results.sobol_ST, sobol_ST_conf=results.sobol_ST_conf)
+
+def load_sensitivity_results(path: str) -> SensitivityResults:
+    d = np.load(path, allow_pickle=False)
+    names = [str(n) for n in d["param_names"]]
+    return SensitivityResults(param_names=names, bounds={n:(float(l),float(u)) for n,l,u in zip(names,d["lower_bounds"],d["upper_bounds"])}, samples=d["samples"], outputs=d["outputs"], prcc_mean=d["prcc_mean"], prcc_lower=d["prcc_lower"], prcc_upper=d["prcc_upper"], prcc_samples=d["prcc_samples"], sobol_S1=d["sobol_S1"], sobol_S1_conf=d["sobol_S1_conf"], sobol_ST=d["sobol_ST"], sobol_ST_conf=d["sobol_ST_conf"])
+
+rule plot_prcc_monotonicity:
+    input:
+        npz=rules.compute_prcc.output.npz
+    output:
+        plot="{outdir}/compartmental/prcc/monotonicity_{pathogen}_{scenario}_{outcome}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        parameters = ['$R_0$', '$\\varphi$', '$1/\\gamma$', '$1/\\sigma$', '$1/\\mu_a$', '$1/\\mu_s$', '$p$', '$\\varepsilon_s$', '$\\varepsilon_w$', '$\\tau_W$', '$\\tau_B$', '$k$', '$k_I$']
-        fig, ax = plt.subplots(figsize=(10,6))
-        y_pos = np.arange(len(parameters))
-        # TODO: oscillations for high k, so need some averaged outcome values
-        bars = ax.barh(y_pos, calculate_prcc(params=Params.for_SEIPAR(k=1.0), t1=300.0 if wildcards.outcome=='Itot' else 50.0, E0=1e-6, total_infected=wildcards.outcome=='Itot'), align='center')
-        ax.axvline(x=0, color='k')
-        ax.set_yticks(y_pos); ax.set_yticklabels(parameters); ax.invert_yaxis()
-        ax.set_xlabel('PRCC')
-        for bar in bars:
-            width = bar.get_width()
-            ax.text(width+0.02 if width > 0 else width-0.02, bar.get_y()+bar.get_height()/2, f'{width:.3f}', va='center', ha='left' if width > 0 else 'right')
+        results = load_sensitivity_results(input.npz)
+        
+        # subplots
+        d = len(results.param_names)
+        n_cols = 4
+        n_rows = int(np.ceil(d / n_cols))
+        fig, axs = plt.subplots(n_rows, n_cols, figsize=(3*n_cols, 3*n_rows))
+        
+        def calculate_binned_means(x, y, num_bins=20):
+            """Sort data by x and calculate means across bins"""
+            order = np.argsort(x)
+            x_sorted, y_sorted = x[order], y[order]
+            bin_edges = np.linspace(0, len(x_sorted), num_bins + 1).astype(int)
+            x_means, y_means = [], []
+            for start, end in zip(bin_edges[:-1], bin_edges[1:]):
+                if end > start: x_means.append(x_sorted[start:end].mean()); y_means.append(y_sorted[start:end].mean()) 
+            return np.array(x_means), np.array(y_means)
+
+        # plot
+        for i, name in enumerate(results.param_names):
+            ax = axs[i // n_cols, i % n_cols]
+            # scatterplot partial rank residuals
+            ex, ey = partial_rank_residuals(results.samples, results.outputs, i)
+            ax.scatter(ex, ey, s=4, alpha=0.25, edgecolors='none', color=colors[wildcards.pathogen])
+            ax.set_title(f'{PARAM_LABELS.get(name, name)} PRCC $= {results.prcc_mean[i]:+.2f}$', fontsize=10)
+            # trendlines
+            x_trend, y_trend = calculate_binned_means(ex, ey)
+            ax.plot(x_trend, y_trend, color='black', lw=1.4, alpha=0.8)
+            # styling
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.axhline(0, color='gray', lw=0.4, alpha=0.5); ax.axvline(0, color='gray', lw=0.4, alpha=0.5)
+        # remove unused subplots
+        for j in range(d, n_rows*n_cols): axs[j//n_cols, j%n_cols].axis('off')
+
+        # labels and titles
+        fig.supxlabel('partial rank of parameter')
+        fig.supylabel('partial rank of output')
+        scenario_title = prcc_scenario_titles[wildcards.scenario]
+        outcome_title = prcc_outcome_titles[wildcards.outcome]
+        fig.suptitle(f'{wildcards.pathogen} — {scenario_title} — {outcome_title}', fontsize=12)
+        
         plt.tight_layout()
-        plt.savefig(output.plot, dpi=image_resolution); plt.close(fig)
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+rule plot_combined_sensitivity_grid:
+    input:
+        npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}.npz", outdir=wc.outdir, pathogen=pathogens, scenario=['start', 'threshold'], outcome=prcc_outcomes)
+    output:
+        plot="{outdir}/compartmental/combined_sensitivity_grid.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        
+        # all params for global x axis
+        all_params = []
+        for path in input.npz:
+            res = load_sensitivity_results(path)
+            for p in res.param_names: 
+                if p not in all_params: all_params.append(p)  
+        labels = [PARAM_LABELS.get(n, n) for n in all_params]
+        x = np.arange(len(all_params))
+
+        def params_aligned(res, metric, is_err=False, is_abs=False):
+            """Align params to shared x axis: insert nan if not available"""
+            a = []
+            for p in all_params:
+                if p in res.param_names:
+                    idx = res.param_names.index(p)
+                    if metric == 'prcc_err': val = (res.prcc_upper[idx]-res.prcc_lower[idx])/2
+                    else:
+                        val = getattr(res, metric)[idx]
+                        if is_abs: val = np.abs(val)
+                    a.append(val)
+                else: a.append(np.nan)
+            return np.array(a)
+
+        # plot
+        n_rows = len(pathogens)
+        n_cols = len(prcc_outcomes)
+        fig, axs = plt.subplots(n_rows, n_cols, figsize=(10*n_cols, 5*n_rows), sharey=True)
+        w = 0.14
+        for r, pathogen in enumerate(pathogens):
+            color = colors[pathogen]
+            for c, outcome in enumerate(prcc_outcomes):
+                ax = axs[r, c]
+                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}.npz")
+                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}.npz")
+                # bars
+                err_kw = dict(ecolor='k', linewidth=0.6, capsize=1.5)
+                edge_kw = dict(edgecolor='k', linewidth=0.3)
+                ax.bar(x - 2.5*w, params_aligned(results_start, 'prcc_mean', is_abs=True), yerr=params_aligned(results_start, 'prcc_err'), width=w, color=color, **edge_kw, error_kw=err_kw)
+                ax.bar(x - 1.5*w, params_aligned(results_threshold, 'prcc_mean', is_abs=True), yerr=params_aligned(results_threshold, 'prcc_err'), width=w, color=color, hatch='////', **edge_kw, error_kw=err_kw)
+                ax.bar(x - 0.5*w, params_aligned(results_start, 'sobol_S1'), yerr=params_aligned(results_start, 'sobol_S1_conf', is_err=True), width=w, color=color, alpha=0.7, **edge_kw, error_kw=err_kw)
+                ax.bar(x + 0.5*w, params_aligned(results_threshold, 'sobol_S1'), yerr=params_aligned(results_threshold, 'sobol_S1_conf', is_err=True), width=w, color=color, alpha=0.7, hatch='////', **edge_kw, error_kw=err_kw)
+                ax.bar(x + 1.5*w, params_aligned(results_start, 'sobol_ST'), yerr=params_aligned(results_start, 'sobol_ST_conf', is_err=True), width=w, color=color, alpha=0.35, **edge_kw, error_kw=err_kw)
+                ax.bar(x + 2.5*w, params_aligned(results_threshold, 'sobol_ST'), yerr=params_aligned(results_threshold, 'sobol_ST_conf', is_err=True), width=w, color=color, alpha=0.35, hatch='////', **edge_kw, error_kw=err_kw)
+                # ticks
+                ax.set_xticks(x)
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=14)
+                # grid
+                ax.set_ylim(0.0, 1.05)
+                ax.grid(axis='y', alpha=0.3)
+                # labels
+                if c == 0: ax.set_ylabel(f'{pathogen}', fontsize=20)
+                if r == 0: ax.set_title(prcc_outcome_titles.get(outcome, outcome), fontsize=20)
+        # legend
+        fig.legend(
+            handles=[
+                Patch(facecolor='gray', label=r'|PRCC| ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', hatch='////', label=r'|PRCC| ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', alpha=0.7, label=r'$S_1$ ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', alpha=0.7, hatch='////', label=r'$S_1$ ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', alpha=0.35, label=r'$S_T$ ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', alpha=0.35, hatch='////', label=r'$S_T$ ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3)], 
+            loc='lower center', ncol=6, bbox_to_anchor=(0.5, -0.03), fontsize=14, frameon=True)
+        # save and close
+        plt.tight_layout()
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+rule export_param_bounds:
+    input:
+        npzs=expand(rules.compute_prcc.output.npz, pathogen=pathogens, scenario=prcc_scenarios, outcome="Itot", outdir=outdir)
+    output:
+        tex="{outdir}/compartmental/prcc/sensitivity_bounds_table.tex"
+    run:
+        os.makedirs(os.path.dirname(output.tex), exist_ok=True)
+        combinations = list(itertools.product(pathogens, prcc_scenarios))
+        col_mapping = {("SARS-CoV-2", "start"): "SARS-CoV-2", ("SARS-CoV-2", "threshold"): "SARS-CoV-2 $I_\\text{crit}$", ("Influenza A", "start"): "H1N1", ("Influenza A", "threshold"): "H1N1 $I_\\text{crit}$", ("Ebola", "start"): "Ebola", ("Ebola", "threshold"): "Ebola $I_\\text{crit}$"}
+        param_defs = {"R_0": ("$\\mathcal{R}_0$", "basic reproductive number"), "gamma_inv": ("$1/\\gamma$", "latent period"), "mu_s_inv": ("$1/\\mu_s$", "symptomatic period"), "epsilon_s": ("$\\varepsilon_s$", "isolation efficacy"), "epsilon_w": ("$\\varepsilon_w$", "warning response efficacy"), "tau_W": ("$\\tau_W$", "reporting delay"), "tau_B": ("$\\tau_B$", "behavioural delay"), "log_k": ("$\\log_{10} k$", "warning gate sharpness"), "R_crit": ("$\\mathcal{R}_{\\text{crit}}$", "warning threshold"), "phi": ("$\\varphi$", "relative asympt. infectiousness"), "p": ("$p$", "proportion asymptomatic"), "mu_a_inv": ("$1/\\mu_a$", "asymptomatic period"), "sigma_inv": ("$1/\\sigma$", "presymptomatic period"), "log_I_crit": ("$\\log_{10} I_{\\text{crit}}$", "prevalence threshold"), "log_k_I": ("$\\log_{10} k_I$", "prevalence gate sharpness")}
+        bounds_data = {}
+        for combination, fpath in zip(combinations, input.npzs): bounds_data[combination] = load_sensitivity_results(fpath).bounds
+        with open(output.tex, 'w') as f:
+            f.write("\\begin{table}\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{llcccccc}\n\\toprule\n")
+            header = ["Parameter", ""] + [col_mapping[c] for c in combinations]
+            f.write(" & ".join(header) + " \\\\\n\\midrule\n")
+            for p_key, (symbol, desc) in param_defs.items():
+                row = [desc, symbol]
+                for combination in combinations: 
+                    if p_key in bounds_data[combination]: row.append(f"$[{bounds_data[combination][p_key][0]:g}, {bounds_data[combination][p_key][1]:g}]$")
+                    else: row.append("---")
+                f.write(" & ".join(row) + " \\\\\n")
+            f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption{Parameter ranges used for Latin hypercube sampling in the global sensitivity analysis.}\n\\label{tab:prcc-bounds}\n\\end{table}\n")
+
 
 # TODO: overlay deterministic trajectory
 # TODO: out of memory for SC2 1m
@@ -143,16 +300,7 @@ rule plot_trajectory:
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         params = parameters[wildcards.pathogen].update(epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
-        plot_trajectory(
-            model=models[wildcards.pathogen],
-            params=params,
-            path=output.plot,
-            title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})",
-            t1=600.0,
-            image_resolution=image_resolution,
-            plot_total_I=True,
-            semilogy=True
-        )
+        plot_trajectory(t1=600.0, model=models[wildcards.pathogen], params=params, path=output.plot, title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})", image_resolution=image_resolution, plot_total_I=True, semilogy=True)
 
 rule plot_trajectory_delayed_ww_intervention:
     output:
@@ -160,16 +308,7 @@ rule plot_trajectory_delayed_ww_intervention:
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         params = parameters[wildcards.pathogen].update(I_crit=float(wildcards.I_crit), epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
-        plot_trajectory(
-            model=models[wildcards.pathogen],
-            params=params,
-            path=output.plot,
-            title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})",
-            t1=600.0,
-            image_resolution=image_resolution,
-            plot_total_I=True,
-            semilogy=True
-        )
+        plot_trajectory(model=models[wildcards.pathogen], params=params, path=output.plot, title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})", t1=600.0, image_resolution=image_resolution, plot_total_I=True, semilogy=True)
 
 # TODO: currently vary tau_W delay, tau_B is default
 rule delayed_ww_intervention:
@@ -177,8 +316,7 @@ rule delayed_ww_intervention:
         plot="{outdir}/compartmental/delay_grid_ww_intervention_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        base_parameters = Params.for_SEIPAR(epsilon_s=0.8, epsilon_w=0.8)
-        fig = plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=base_parameters)
+        fig = plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(epsilon_s=0.8, epsilon_w=0.8))
         fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
 rule baseline_trajectories:
@@ -186,34 +324,15 @@ rule baseline_trajectories:
         plot="{outdir}/compartmental/baseline_trajectories_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        peak_Is, time_to_peak, total_time = plot_trajectory(
-            model = models[wildcards.pathogen],
-            params = parameters[wildcards.pathogen].update(I_crit=1e-4), # TODO: 1 in 10_000 infected
-            path = output.plot,
-            title = f"{wildcards.pathogen}",
-            image_resolution = image_resolution,
-            plot_total_I = True,
-            t1 = 500.0
-        )
-        print(wildcards.pathogen)
-        print(peak_Is, time_to_peak, total_time)
+        peak_Is, time_to_peak, total_time = plot_trajectory(model = models[wildcards.pathogen], params = parameters[wildcards.pathogen].update(I_crit=1e-4), path = output.plot, title = f"{wildcards.pathogen}", image_resolution = image_resolution, plot_total_I = True, t1 = 500.0)
+        print(wildcards.pathogen); print(peak_Is, time_to_peak, total_time)
 
 rule baseline_trajectories_no_asymptomatic:
     output:
         plot="{outdir}/compartmental/trajectories_no_asymptomatic_{pathogen}.png"
     run:    
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        plot_trajectory(
-            model = models[wildcards.pathogen],
-            params = {
-                "SARS-CoV-2": Params.for_SEIPAR(p=0.0, phi=0.0),
-                "Influenza A": Params.for_SEIAR(p=0.0, phi=0.0),
-                "Ebola": Params.for_SEIR(),
-            }[wildcards.pathogen],
-            path = output.plot,
-            title = f"No asymptomatic transmission for {wildcards.pathogen}",
-            image_resolution = image_resolution
-        )
+        plot_trajectory(model = models[wildcards.pathogen], params = {"SARS-CoV-2": Params.for_SEIPAR(p=0.0, phi=0.0), "Influenza A": Params.for_SEIAR(p=0.0, phi=0.0), "Ebola": Params.for_SEIR(),}[wildcards.pathogen], path = output.plot, title = f"No asymptomatic transmission for {wildcards.pathogen}", image_resolution = image_resolution)
 
 rule plot_response_function:
     output:
@@ -383,7 +502,6 @@ rule plot_main_intervention_grid:
 
         # compute per pathogen
         Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
-
         for pathogen in pathogens:
             Rt, tRt, It, pk = compute_metrics(models[pathogen], parameters[pathogen], eps_ww, eps_ss, t1, Rt_times[pathogen], E0)
             Rt_g[pathogen] = np.array(Rt)
@@ -418,13 +536,11 @@ rule plot_main_intervention_grid:
                 mesh = ax.pcolormesh(np.array(eps_ww), np.array(eps_ss), data[pathogen], cmap=cmap, norm=norm, shading='auto', rasterized=True)
                 meshes.append(mesh)
                 ax.set_aspect('equal')
-
                 # contours, titles, labels
                 if center_at_one: ax.contour(np.array(eps_ww), np.array(eps_ss), data[pathogen], levels=[1.0], colors='black', linewidths=1.0, linestyles='--')
                 if row_idx == 0: ax.set_title(pathogen, fontsize=14)
                 if row_idx == len(rows) - 1: ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=11)
                 if col_idx == 0: ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=11)
-
             # colorbar
             cbar = fig.colorbar(meshes[-1], ax=axs[row_idx, :].tolist(), shrink=0.85, aspect=25, pad=0.02)
             cbar.set_label(label, fontsize=12, labelpad=8)
@@ -433,22 +549,6 @@ rule plot_main_intervention_grid:
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight')
         plt.close(fig)
 
-
-best_params_kwargs = {
-    "SARS-CoV-2": dict(R_0=2.40, gamma_inv=5.86, sigma_inv=0.52, mu_s_inv=10.0, mu_a_inv=4.63, p=0.230, phi=0.07),
-    "Influenza A": dict(R_0=1.30, gamma_inv=3.12, mu_s_inv=4.69, mu_a_inv=2.06, p=0.33, phi=0.50),
-    "Ebola": dict(R_0=1.74, gamma_inv=10.38, mu_s_inv=6.30)
-}
-worst_params_kwargs = {
-    "SARS-CoV-2": dict(R_0=2.98, gamma_inv=5.06, sigma_inv=3.00, mu_s_inv=7.80, mu_a_inv=5.50, p=0.399, phi=0.28),
-    "Influenza A": dict(R_0=1.70, gamma_inv=2.28, mu_s_inv=2.06, mu_a_inv=4.69, p=0.33, phi=0.50),
-    "Ebola": dict(R_0=2.15, gamma_inv=8.80, mu_s_inv=3.70)
-}
-colors = {
-    "SARS-CoV-2": "tab:blue", 
-    "Influenza A": "tab:orange", 
-    "Ebola": "tab:green"
-}
 
 rule plot_R_1_contours:
     output:
@@ -499,7 +599,7 @@ rule plot_combined_contour_grid_R1_Itot:
         eps_ss = jnp.linspace(0.0, 0.999, 100)
         t1 = 500.0
         R_crits = [0.8, 1.0, 1.2, 1.5]
-        linestyles = ['-', '--', ':', '-.']
+        linestyles = ['--', '-', '-.', ':']
 
         fig, (ax_R, ax_I) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharey=True)
         for pathogen in pathogens:
@@ -528,65 +628,31 @@ rule plot_combined_contour_grid_R1_Itot:
 
 rule all:
     input:
-        expand(
-            rules.plot_efficacy_grid_Rt_final.output.plot, 
-            pathogen=pathogens, outdir=outdir
-        ),
-        expand(
-            rules.plot_efficacy_grid_Itot_final.output.plot, 
-            pathogen=pathogens, outdir=outdir
-        ),
-        expand(
-            rules.plot_asymptomatic_grid_Rt_final.output.plot, 
-            outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"], # only pathogens with asymptomatic transmission
-        ),
-        expand(
-            rules.plot_asymptomatic_grid_Itot_final.output.plot, 
-            outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"],
-        ),
-        expand(
-            rules.plot_prcc.output.plot, 
-            outdir=outdir, outcome=['Itot', 'Rt']  # TODO: generalise to other pathogens
-        ),
-        expand(
-            rules.gillespie.output, 
-            outdir=outdir, pathogen=pathogens,
+        expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens, outdir=outdir),
+        expand(rules.plot_efficacy_grid_Itot_final.output.plot, pathogen=pathogens, outdir=outdir),
+        expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"]), # only pathogens with asymptomatic transmission
+        expand(rules.plot_asymptomatic_grid_Itot_final.output.plot, outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"]),
+        expand(rules.plot_prcc_monotonicity.output.plot, outdir=outdir, pathogen=pathogens, scenario=prcc_scenarios, outcome=prcc_outcomes),
+        expand(rules.plot_combined_sensitivity_grid.output.plot, outdir=outdir),
+        expand(rules.gillespie.output, outdir=outdir, pathogen=pathogens,
             N=[100], # N=gillespie_popsizes,
         ),
-        expand(
-            rules.plot_trajectory.output.plot, 
-            outdir=outdir, pathogen=pathogens,
+        expand(rules.plot_trajectory.output.plot, outdir=outdir, pathogen=pathogens,
             epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8],
         ),
-        expand(
-            rules.plot_trajectory_delayed_ww_intervention.output.plot,
+        expand(rules.plot_trajectory_delayed_ww_intervention.output.plot,
             outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"],
-            epsilon_s=[0.8], epsilon_w=[0.8], 
-            I_crit=[1e-5, 1e-4, 1e-3, 1e-2],
+            epsilon_s=[0.8], epsilon_w=[0.8], I_crit=[1e-5, 1e-4, 1e-3, 1e-2],
         ),
-        expand(
-            rules.delayed_ww_intervention.output.plot, 
+        expand(rules.delayed_ww_intervention.output.plot, 
             outdir=outdir, pathogen=["SARS-CoV-2"], # TODO: change main rule for generalisation
         ),
-        expand(
-            rules.baseline_trajectories.output.plot, 
-            pathogen=pathogens, outdir=outdir, 
-        ),
-        expand(
-            rules.baseline_trajectories_no_asymptomatic.output.plot, 
-            pathogen=pathogens, outdir=outdir,
-        ),
-        expand(
-            rules.plot_true_vs_reported_Rt_scenarios.output, 
-            pathogen=pathogens, outdir=outdir,
-            k=[1, 3, 10, 30],
-        ),
-        expand(
-            rules.plot_true_vs_reported_Rt_heatmaps.output, 
-            pathogen=pathogens, outdir=outdir,
-            k=[1, 3, 10, 30],
-        ),
+        expand(rules.baseline_trajectories.output.plot, pathogen=pathogens, outdir=outdir),
+        expand(rules.baseline_trajectories_no_asymptomatic.output.plot, pathogen=pathogens, outdir=outdir),
+        expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
+        expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
         expand(rules.plot_response_function.output.plot, outdir=outdir),
         expand(rules.plot_main_intervention_grid.output.plot, outdir=outdir),
         expand(rules.plot_R_1_contours.output.plot, outdir=outdir),
         expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=outdir),
+        expand(rules.export_param_bounds.output.tex, outdir=outdir),
