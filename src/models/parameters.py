@@ -59,14 +59,14 @@ class Params(NamedTuple):
     n_B: int
     
     @classmethod
-    def for_SEIPAR(cls,
-            R_0: float = 2.5,
-            phi: float = 0.1,
-            gamma_inv: float = 3.0,
-            sigma_inv: float = 2.5,
+    def for_SEIPAR(cls, 
+            R_0: float = 2.69,
+            phi: float = 0.12,
+            gamma_inv: float = 5.48,
+            sigma_inv: float = 2.3,
             mu_a_inv: float = 5.0,
-            mu_s_inv: float =  3.0,
-            p: float = 0.4,
+            mu_s_inv: float =  9.3,
+            p: float = 0.351,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
             k: float = 1.0,
@@ -94,12 +94,12 @@ class Params(NamedTuple):
 
     @classmethod
     def for_SEIAR(cls,
-            R_0: float = 1.5,
+            R_0: float = 1.46,
             phi: float = 0.5,
-            gamma_inv: float = 2.0,
-            mu_a_inv: float = 3.5,
-            mu_s_inv: float = 3.5,
-            p: float = 0.4,
+            gamma_inv: float = 2.62,
+            mu_a_inv: float = 3.38,
+            mu_s_inv: float = 3.38,
+            p: float = 0.33,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
             k: float = 1.0,
@@ -126,10 +126,10 @@ class Params(NamedTuple):
         )
 
     @classmethod
-    def for_SEIR(cls, # ebola params
-            R_0: float = 2.0,
-            gamma_inv: float = 11.0,
-            mu_s_inv: float = 7.0,
+    def for_SEIR(cls, 
+            R_0: float = 1.95,
+            gamma_inv: float = 9.7,
+            mu_s_inv: float = 5.0,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
             k: float = 1.0,
