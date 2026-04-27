@@ -15,7 +15,7 @@ import seaborn as sns
 
 from models.parameters import Params, logistic_response_function
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
-from models.scenarios import compute_R_grid
+from models.scenarios import compute_R_grid, compute_asymptomatic_grid_Rt
 from models.prcc import SensitivityResults, run_sensitivity_analysis, partial_rank_residuals
 from models.plotting import (
     plot_heatmap, plot_trajectory,
@@ -44,6 +44,7 @@ Rt_times = {
     "Ebola": 100.0,
 }
 pathogens = list(parameters.keys())
+asymptomatic_pathogens = ["SARS-CoV-2", "Influenza A"]
 E0 = 1e-6
 
 best_params_kwargs = {
@@ -62,8 +63,8 @@ phi_CI = {"SARS-CoV-2": (0.07, 0.28), "Influenza A": (None, None)}
 
 prcc_scenarios = ['start', 'threshold']
 prcc_outcomes  = ['Rt', 'Itot']
-prcc_scenario_titles = {'start': r'Intervention active from $t=0$', 'threshold': r'Intervention triggered at $I_{\text{crit}}$'}
-prcc_outcome_titles = {'Rt': r'Reproductive number after interventions ($\mathcal{R}_t$)', 'Itot': 'Total fraction infected'}
+prcc_scenario_titles = {'start': r'$I_{\text{crit}}=0$', 'threshold': r'$I_{\text{crit}}=10^{-4}$'}
+prcc_outcome_titles = {'Rt': r'$\mathcal{R}_t$', 'Itot': r'$I_\text{tot}$'}
 
 PARAM_LABELS: dict[str, str] = {
     "R_0": r"$\mathcal{R}_0$", "phi": r"$\varphi$", "p": r"$p$", "gamma_inv": r"$1/\gamma$", "sigma_inv": r"$1/\sigma$", 
@@ -163,7 +164,7 @@ rule plot_prcc_monotonicity:
             # scatterplot partial rank residuals
             ex, ey = partial_rank_residuals(results.samples, results.outputs, i)
             ax.scatter(ex, ey, s=4, alpha=0.25, edgecolors='none', color=colors[wildcards.pathogen])
-            ax.set_title(f'{PARAM_LABELS.get(name, name)} PRCC $= {results.prcc_mean[i]:+.2f}$', fontsize=10)
+            ax.set_title(f'{PARAM_LABELS.get(name, name)} (PRCC $= {results.prcc_mean[i]:+.2f}$)', fontsize=18)
             # trendlines
             x_trend, y_trend = calculate_binned_means(ex, ey)
             ax.plot(x_trend, y_trend, color='black', lw=1.4, alpha=0.8)
@@ -174,11 +175,11 @@ rule plot_prcc_monotonicity:
         for j in range(d, n_rows*n_cols): axs[j//n_cols, j%n_cols].axis('off')
 
         # labels and titles
-        fig.supxlabel('partial rank of parameter')
-        fig.supylabel('partial rank of output')
+        fig.supxlabel('partial rank of parameter', fontsize=24)
+        fig.supylabel('partial rank of output', fontsize=24)
         scenario_title = prcc_scenario_titles[wildcards.scenario]
         outcome_title = prcc_outcome_titles[wildcards.outcome]
-        fig.suptitle(f'{wildcards.pathogen} — {scenario_title} — {outcome_title}', fontsize=12)
+        fig.suptitle(f'{wildcards.pathogen}, {scenario_title}, {outcome_title}', fontsize=32)
         
         plt.tight_layout()
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
@@ -300,7 +301,7 @@ rule plot_trajectory:
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         params = parameters[wildcards.pathogen].update(epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
-        plot_trajectory(t1=600.0, model=models[wildcards.pathogen], params=params, path=output.plot, title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})", image_resolution=image_resolution, plot_total_I=True, semilogy=True)
+        plot_trajectory(t1=600.0, model=models[wildcards.pathogen], params=params, path=output.plot, title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})", image_resolution=image_resolution, plot_total_I=True)#, semilogy=True)
 
 rule plot_trajectory_delayed_ww_intervention:
     output:
@@ -415,7 +416,7 @@ rule plot_true_vs_reported_Rt_scenarios:
         k = float(wildcards.k)
         t1 = 300.0
 
-        epsilon_s = 0.8 if wildcards.pathogen == "SARS-CoV-2" else 0.4
+        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
         base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
         model = models[wildcards.pathogen]
 
@@ -448,6 +449,50 @@ rule plot_true_vs_reported_Rt_scenarios:
         )
         plt.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close()
 
+rule plot_true_vs_reported_Rt_scenarios_vary_k:
+    output:
+        plot="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_tauW{tau_W}_tauB{tau_B}_scenarios.png",
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+
+        ks = [1.0, 5.0, 10.0, 50.0, 100.0]
+        tau_W = float(wildcards.tau_W)
+        tau_B = float(wildcards.tau_B)
+        t1 = 300.0
+
+        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
+        base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, tau_W=tau_W, tau_B=tau_B)
+        model = models[wildcards.pathogen]
+
+        sns.set_theme(style="white", rc={"axes.grid": False})
+        fig, axs = plt.subplots(nrows=1, ncols=len(ks), figsize=(3*len(ks), 4), sharex=True, sharey=True)
+
+        for i, k in enumerate(ks):
+            params = base_params.update(k=k)
+            tt, yy = model(params=params, t1=t1)
+            rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
+            rt_reported = yy[:, -(params.n_B + 1)]
+            above = (rt_reported >= params.R_crit).astype(jnp.float32)
+            total_time_above = float(above.mean() * t1)
+            num_crossings = int(jnp.sum(jnp.diff(above) > 0))
+
+            ax = axs[i]
+            ax.set_title(f'$k={k}$', fontsize=16)
+            ax.plot(tt, rt_true, color='black')
+            ax.plot(tt, rt_reported, color='red')
+            ax.axhline(params.R_crit, color='grey', linestyle='--')
+            ax.text(0.97, 0.1, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
+
+        fig.suptitle(f'{wildcards.pathogen}: $\\tau_W={params.tau_W:g}$, $\\tau_B={params.tau_B:g}$', fontsize=18, y=0.995)
+        fig.legend(
+            [Line2D([0], [0], color='black', lw=2), Line2D([0], [0], color='red', lw=2)],
+            ['True $R_t$', 'Reported $R_t$'],
+            loc='lower center', ncol=2, bbox_to_anchor=(0.5, -0.1), fontsize=16,
+        )
+        plt.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close()
+
+
+
 rule plot_true_vs_reported_Rt_heatmaps:
     output:
         amplitudes ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_amplitudes.png",
@@ -460,7 +505,8 @@ rule plot_true_vs_reported_Rt_heatmaps:
         taus_W = jnp.linspace(1.0, 31.0, num=100)
         taus_B = jnp.linspace(1.0, 31.0, num=100)
         k = float(wildcards.k)
-        base_params = parameters[wildcards.pathogen].update(epsilon_s=0.8, epsilon_w=0.8, k=k)
+        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
+        base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
 
         amplitudes, fractions, time_above, crossings = _compute_delay_metrics_grid(model=models[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
 
@@ -625,13 +671,79 @@ rule plot_combined_contour_grid_R1_Itot:
         plt.tight_layout()
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
+rule plot_controllability_boundaries:
+    output:
+        plot="{outdir}/compartmental/controllability_boundaries.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+
+        ps = jnp.linspace(0.0, 0.999, 100)
+        phis = jnp.linspace(0.0, 0.999, 100)
+        eps_s_levels = [0.0, 0.2, 0.4, 0.6, 0.8]
+        eps_w_levels = [0.0, 0.2, 0.4, 0.6, 0.8]
+
+        fig, axs = plt.subplots(1, 2, figsize=(11, 5), sharey=True) #, gridspec_kw={'width_ratios': [5,5,1]})
+        for ax, pathogen in zip(axs, asymptomatic_pathogens):
+            base = parameters[pathogen]
+            model = models[pathogen]
+            t1 = Rt_times[pathogen]
+            shade_map = {0.0: 'red', 0.2: 'orange', 0.4: 'yellow', 0.6:'lime', 0.8: 'green'}
+
+            # basic nonsymptomatic fraction heatmap
+            P, PHI = np.meshgrid(np.array(ps), np.array(phis), indexing='xy')
+            Ra = P * PHI * base.mu_a_inv
+            Rp = (1.0 - P) * base.sigma_inv
+            Rs = (1.0 - P) * base.mu_s_inv
+            mesh = ax.pcolormesh(np.array(ps), np.array(phis), (Ra + Rp) / (Ra + Rp + Rs), cmap='Greys', vmin=0.0, vmax=1.0, shading='auto', rasterized=True)
+            cbar = fig.colorbar(mesh)
+
+            # Rt contours
+            for eps_s in eps_s_levels:
+                for eps_w in eps_w_levels:
+                    params_int = base.update(epsilon_s=eps_s, epsilon_w=eps_w)
+                    Rt = np.array(compute_asymptomatic_grid_Rt(model=model, base_params=params_int, p=ps, phi=phis, t1=t1, E0=E0))
+                    ax.contour(np.array(ps), np.array(phis), Rt, levels=[1.0], colors=[shade_map[eps_s]], linestyles='dotted' if eps_w<0.1 else [(0, (1, 1))] if eps_w<0.3 else 'dashed' if eps_w<0.5 else [(0, (5, 1))] if eps_w<0.7 else '-', linewidths=2.0)
+
+            # literature estimates
+            p_lower, p_upper = p_CI.get(pathogen, (None, None))
+            phi_lower, phi_upper = phi_CI.get(pathogen, (None, None))
+            xerr = np.array([[base.p - p_lower], [p_upper - base.p]]) if p_lower is not None else None
+            yerr = np.array([[base.phi - phi_lower], [phi_upper - base.phi]]) if phi_lower is not None else None
+            ax.errorbar(base.p, base.phi, xerr=xerr, yerr=yerr, fmt='o', color='white', markeredgecolor='black', ecolor='black', elinewidth=1.2, capsize=3, markersize=6, zorder=5)
+
+            # axes
+            ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect('equal')
+            ax.set_xlabel(r'Proportion asymptomatic, $p$', fontsize=12)
+            ax.set_title(pathogen, fontsize=14, pad=8)
+        axs[0].set_ylabel(r'Relative infectiousness, $\varphi$', fontsize=12)
+
+        # legend
+        legend_handles = [
+            # Line2D([0],[0], color='red', lw=2, label=r'$\varepsilon_s = 0.0$'),
+            Patch(facecolor='orange', label=r'$\varepsilon_s = 0.2$'),
+            Patch(facecolor='yellow', label=r'$\varepsilon_s = 0.4$'),
+            Patch(facecolor='lime', label=r'$\varepsilon_s = 0.6$'),
+            Patch(facecolor='green', label=r'$\varepsilon_s = 0.8$'),
+            Line2D([0],[0], color='gray', lw=2, ls='dotted', label=r'$\varepsilon_w = 0.0$'),
+            Line2D([0],[0], color='gray', lw=2, ls=(0, (1, 1)), label=r'$\varepsilon_w = 0.2$'),
+            Line2D([0],[0], color='gray', lw=2, ls='dashed', label=r'$\varepsilon_w = 0.4$'),
+            Line2D([0],[0], color='gray', lw=2, ls=(0, (5, 1)), label=r'$\varepsilon_w = 0.6$'),
+            Line2D([0],[0], color='gray', lw=2, ls='-', label=r'$\varepsilon_w = 0.8$'),
+            Line2D([0],[0], marker='o', color='white', markeredgecolor='black', linestyle='None', markersize=6, label=r'literature estimates'),
+        ]
+        fig.legend(handles=legend_handles, loc='lower center', ncol=3, bbox_to_anchor=(0.5, -0.25), frameon=False, fontsize=10)
+
+        fig.suptitle(r'Controllability boundary ($\mathcal{R}_t=1$) for varying asymptomaticity', fontsize=13, y=1.02)
+        plt.tight_layout()
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
 
 rule all:
     input:
         expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_efficacy_grid_Itot_final.output.plot, pathogen=pathogens, outdir=outdir),
-        expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"]), # only pathogens with asymptomatic transmission
-        expand(rules.plot_asymptomatic_grid_Itot_final.output.plot, outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"]),
+        expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
+        expand(rules.plot_asymptomatic_grid_Itot_final.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
         expand(rules.plot_prcc_monotonicity.output.plot, outdir=outdir, pathogen=pathogens, scenario=prcc_scenarios, outcome=prcc_outcomes),
         expand(rules.plot_combined_sensitivity_grid.output.plot, outdir=outdir),
         expand(rules.gillespie.output, outdir=outdir, pathogen=pathogens,
@@ -640,8 +752,7 @@ rule all:
         expand(rules.plot_trajectory.output.plot, outdir=outdir, pathogen=pathogens,
             epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8],
         ),
-        expand(rules.plot_trajectory_delayed_ww_intervention.output.plot,
-            outdir=outdir, pathogen=["SARS-CoV-2", "Influenza A"],
+        expand(rules.plot_trajectory_delayed_ww_intervention.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens,
             epsilon_s=[0.8], epsilon_w=[0.8], I_crit=[1e-5, 1e-4, 1e-3, 1e-2],
         ),
         expand(rules.delayed_ww_intervention.output.plot, 
@@ -650,9 +761,11 @@ rule all:
         expand(rules.baseline_trajectories.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.baseline_trajectories_no_asymptomatic.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
+        expand(rules.plot_true_vs_reported_Rt_scenarios_vary_k.output, pathogen=pathogens, outdir=outdir, tau_W=[14], tau_B=[7]),
         expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
         expand(rules.plot_response_function.output.plot, outdir=outdir),
         expand(rules.plot_main_intervention_grid.output.plot, outdir=outdir),
         expand(rules.plot_R_1_contours.output.plot, outdir=outdir),
         expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=outdir),
         expand(rules.export_param_bounds.output.tex, outdir=outdir),
+        expand(rules.plot_controllability_boundaries.output.plot, outdir=outdir),
