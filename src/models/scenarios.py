@@ -64,8 +64,8 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
     Compute a 2D grid of proportion infected relative to baseline across different
     wastewater reporting delays and infection intervention thresholds.
     """
-    def I_tot(tau_W, I_crit):
-        _, yy = model(params=base_params.update(tau_W=tau_W, I_crit=I_crit), t1=t1, E0=E0)
+    def I_tot(tau_B, I_crit):
+        _, yy = model(params=base_params.update(tau_W=tau_B, I_crit=I_crit), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
     
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(taus, I_crit_list)

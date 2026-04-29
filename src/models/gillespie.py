@@ -313,7 +313,7 @@ def gillespie_SEIR_W(params, N: int, t1: float):
         gate_W = 1.0 / (1.0 + np.exp(-params.k * (W_out - params.R_crit)))
         f_W = 1.0 - params.epsilon_w * gate_W * gate_I
 
-        # propensities (3 reactions)
+        # propensities
         a[0] = B_out * params.beta * (1.0 - params.epsilon_s) * Is * (S / N)
         a[1] = E / params.gamma_inv
         a[2] = Is / params.mu_s_inv
@@ -321,9 +321,11 @@ def gillespie_SEIR_W(params, N: int, t1: float):
         if a0 == 0.0:
             break
 
+        # draw time step
         r1 = np.random.random()
         time_step = -np.log(r1) / a0
 
+        # draw next event
         for i in range(n_W):
             W_old[i] = current_state[W_start + i]
         for i in range(n_B):

@@ -1,6 +1,7 @@
 import numpy as np
 import jax
 import jax.numpy as jnp
+from scipy.stats import gamma
 from functools import partial
 import itertools
 import os
@@ -267,7 +268,14 @@ rule export_param_bounds:
         os.makedirs(os.path.dirname(output.tex), exist_ok=True)
         combinations = list(itertools.product(pathogens, prcc_scenarios))
         col_mapping = {("SARS-CoV-2", "start"): "SARS-CoV-2", ("SARS-CoV-2", "threshold"): "SARS-CoV-2 $I_\\text{crit}$", ("Influenza A", "start"): "H1N1", ("Influenza A", "threshold"): "H1N1 $I_\\text{crit}$", ("Ebola", "start"): "Ebola", ("Ebola", "threshold"): "Ebola $I_\\text{crit}$"}
-        param_defs = {"R_0": ("$\\mathcal{R}_0$", "basic reproductive number"), "gamma_inv": ("$1/\\gamma$", "latent period"), "mu_s_inv": ("$1/\\mu_s$", "symptomatic period"), "epsilon_s": ("$\\varepsilon_s$", "isolation efficacy"), "epsilon_w": ("$\\varepsilon_w$", "warning response efficacy"), "tau_W": ("$\\tau_W$", "reporting delay"), "tau_B": ("$\\tau_B$", "behavioural delay"), "log_k": ("$\\log_{10} k$", "warning gate sharpness"), "R_crit": ("$\\mathcal{R}_{\\text{crit}}$", "warning threshold"), "phi": ("$\\varphi$", "relative asympt. infectiousness"), "p": ("$p$", "proportion asymptomatic"), "mu_a_inv": ("$1/\\mu_a$", "asymptomatic period"), "sigma_inv": ("$1/\\sigma$", "presymptomatic period"), "log_I_crit": ("$\\log_{10} I_{\\text{crit}}$", "prevalence threshold"), "log_k_I": ("$\\log_{10} k_I$", "prevalence gate sharpness")}
+        param_defs = {
+            "R_0": ("$\\mathcal{R}_0$", "basic reproductive number"), "gamma_inv": ("$1/\\gamma$", "latent period"), "mu_s_inv": ("$1/\\mu_s$", "symptomatic period"), 
+            "sigma_inv": ("$1/\\sigma$", "presymptomatic period"), 
+            "mu_a_inv": ("$1/\\mu_a$", "asymptomatic period"), "p": ("$p$", "proportion asymptomatic"), "phi": ("$\\varphi$", "relative asympt. infectiousness"), 
+            "epsilon_s": ("$\\varepsilon_s$", "isolation efficacy"), "epsilon_w": ("$\\varepsilon_w$", "warning response efficacy"), "tau_W": ("$\\tau_W$", "reporting delay"), "tau_B": ("$\\tau_B$", "behavioural delay"), 
+            "log_k": ("$\\log_{10} k$", "warning gate sharpness"), "R_crit": ("$\\mathcal{R}_{\\text{crit}}$", "warning threshold"), 
+            "log_k_I": ("$\\log_{10} k_I$", "prevalence gate sharpness"), "log_I_crit": ("$\\log_{10} I_{\\text{crit}}$", "prevalence threshold"), 
+        }
         bounds_data = {}
         for combination, fpath in zip(combinations, input.npzs): bounds_data[combination] = load_sensitivity_results(fpath).bounds
         with open(output.tex, 'w') as f:
@@ -301,7 +309,7 @@ rule plot_trajectory:
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         params = parameters[wildcards.pathogen].update(epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
-        plot_trajectory(t1=600.0, model=models[wildcards.pathogen], params=params, path=output.plot, title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})", image_resolution=image_resolution, plot_total_I=True)#, semilogy=True)
+        plot_trajectory(t1=500.0, model=models[wildcards.pathogen], params=params, path=output.plot, title=f"{wildcards.pathogen} ($\\varepsilon_s={wildcards.epsilon_s}, \\varepsilon_w={wildcards.epsilon_w}$)", image_resolution=image_resolution, plot_total_I=True)
 
 rule plot_trajectory_delayed_ww_intervention:
     output:
@@ -510,6 +518,13 @@ rule plot_true_vs_reported_Rt_heatmaps:
 
         amplitudes, fractions, time_above, crossings = _compute_delay_metrics_grid(model=models[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
 
+        plt.figure(figsize=(6,6))
+        plt.scatter(amplitudes, fractions, c='k', alpha=0.2, s=2) # TODO: color for total delay
+        plt.title('Effect of oscillations on the number of infections')
+        plt.xlabel('Oscillation amplitudes')
+        plt.ylabel('Total fraction infected')
+        plt.savefig(f"{wildcards.outdir}/compartmental/true_vs_reported_Rt_{wildcards.pathogen}_k{wildcards.k}_scatter_amplitudes_vs_fractions.png", dpi=image_resolution); plt.close()
+
         kwargs = dict(x_logscale=False, xlabel='Behavioural delay ($\\tau_B$)', ylabel='Reporting delay ($\\tau_W$)')
         scenario = f'({wildcards.pathogen}, $k={k:g}$)'
         fig, _ = plot_heatmap(taus_B, taus_W, amplitudes, cmap='magma', cbar_label='Amplitude of oscillations', title=f'Stability of delayed response {scenario}', **kwargs)
@@ -522,21 +537,63 @@ rule plot_true_vs_reported_Rt_heatmaps:
         fig.savefig(output.crossings, dpi=image_resolution); plt.close(fig)
 
 
-
-@partial(jax.jit, static_argnames=['model', 't1', 'tRt'])
-def compute_metrics(model, base_params, eps_ww, eps_ss, t1, tRt, E0):
+@partial(jax.jit, static_argnames=['model', 't1'])
+def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, tRt, delta_dep=0.05):
     def metrics(w, s):
         params = base_params.update(epsilon_w=w, epsilon_s=s)
         tt, yy = model(params=params, t1=t1, E0=E0)
+        N = tt.shape[0]
+        dt = (tt[-1] - tt[0]) / (N - 1)
+        S = yy[:,0]
         Is = yy[:, -(params.n_W + params.n_B + 2)]
         rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-        Rt_final = rt_true[jnp.argmin(jnp.abs(tt - tRt))]
+
+        ### final Rt ###
+        # t_0 = t_Icrit + tau_W+tau_B + 2*sigma
+        crosses = Is >= params.I_crit
+        t_I_crit = jnp.where(jnp.any(crosses), tt[jnp.argmax(crosses)],t1)
+        sd = jnp.sqrt(params.tau_W**2/params.n_W + params.tau_B**2/params.n_B)
+        t_0 = t_I_crit + params.tau_W+params.tau_B + 2.0*sd
+        # t_1 = first time after t_0 S drops below (1 - delta_dep) * S_0
+        depleted = (tt > t_0) & (S < (1.0 - delta_dep) * S[0])
+        t_1 = jnp.where(jnp.any(depleted), tt[jnp.argmax(depleted)], tt[-1])
+        # plain mean over [t_0,t_1]
+        in_window = (tt >= t_0) & (tt <= t_1)
+        n_in = jnp.sum(in_window)
+        mean_Rt = jnp.where(n_in > 0, jnp.sum(rt_true * in_window) / jnp.maximum(n_in, 1), rt_true[-1])
+        # normalised autocorrelation of centred R_t
+        F = jnp.fft.fft(jnp.where(in_window, rt_true - mean_Rt, 0.0), n=2*N)
+        acorr = jnp.real(jnp.fft.ifft(F * jnp.conj(F)))[:N]
+        acorr = acorr / jnp.maximum(acorr[0],1e-12)
+        # T_osc: first local maximum
+        lags = jnp.arange(N) * dt
+        is_local_max = jnp.concatenate([jnp.array([False]), (acorr[1:-1] > acorr[:-2]) & (acorr[1:-1] > acorr[2:]), jnp.array([False])])
+        has_period = jnp.any(is_local_max)
+        T_osc = jnp.argmax(is_local_max) * dt
+        # largest m with t_0 + m * T_osc <= t_1
+        window_length = t_1 - t_0
+        m = jnp.where(has_period, jnp.floor(window_length / jnp.maximum(T_osc,1e-9)).astype(jnp.int32), jnp.int32(0))
+        # period-aligned mean
+        M = window_length / jnp.maximum(T_osc,1e-9)
+        m_floor = jnp.floor(M)
+        alpha = M - m_floor
+        t_end_floor = t_0 + m_floor * T_osc
+        window_floor = (tt >= t_0) & (tt <= t_end_floor)
+        mean_floor = jnp.sum(rt_true * window_floor) / jnp.maximum(jnp.sum(window_floor), 1)
+        t_end_ceil = t_0 + (m_floor + 1.0) * T_osc
+        window_ceil = (tt >= t_0) & (tt <= t_end_ceil) & (t_end_ceil <= t_1)
+        mean_ceil = jnp.sum(rt_true * window_ceil) / jnp.maximum(jnp.sum(window_ceil), 1)
+        period_aligned_mean = jnp.where(t_end_ceil <= t_1, (1.0-alpha)*mean_floor + alpha*mean_ceil, mean_floor)
+        Rt_final = jnp.where(has_period & (m >= 1), period_aligned_mean, mean_Rt)
+
+        # other metrics
         time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
         Itot = yy[0,0] - yy[-1,0]
         peak_Is = jnp.max(Is)
         return Rt_final, time_to_below, Itot, peak_Is
     return jax.vmap(jax.vmap(metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
-      
+
+
 rule plot_main_intervention_grid:
     output:
         plot="{outdir}/compartmental/main_intervention_grid.png"
@@ -549,10 +606,12 @@ rule plot_main_intervention_grid:
         # compute per pathogen
         Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
         for pathogen in pathogens:
-            Rt, tRt, It, pk = compute_metrics(models[pathogen], parameters[pathogen], eps_ww, eps_ss, t1, Rt_times[pathogen], E0)
+            ps = parameters[pathogen]
+            Rt, tRt, It, pk = compute_metrics(model=models[pathogen], base_params=ps, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1, tRt=Rt_times[pathogen], E0=E0)
             Rt_g[pathogen] = np.array(Rt)
             tRt_g[pathogen] = np.array(tRt)
-            _, yy0 = models[pathogen](params=parameters[pathogen].update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0)
+            _, yy0 = models[pathogen](params=ps.update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0)
+            print(ps.k)
             Itot_g[pathogen] = np.array(It) / float(yy0[0,0] - yy0[-1,0])
             peakIs_g[pathogen] = np.array(pk)
 
@@ -738,6 +797,119 @@ rule plot_controllability_boundaries:
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
 
+rule plot_asymptomatic_generation_time:
+    output:
+        plot="{outdir}/compartmental/asymptomatic_generation_time.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        ps = parameters["SARS-CoV-2"]
+        P = jnp.linspace(0.0, 0.999, 100)
+        PHI = jnp.linspace(0.0, 0.999, 100)
+
+        def get_generation_time(p, phi):
+            nom = p * phi * ps.mu_a_inv**2 +(1-p)*(ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
+            denom = p * phi * ps.mu_a_inv + (1-p)*(ps.sigma_inv + ps.mu_s_inv)
+            return ps.gamma_inv + nom / denom
+        generation_times = jax.vmap(jax.vmap(get_generation_time, in_axes=(None, 0)), in_axes=(0, None))(P, PHI)
+
+        fig, ax = plot_heatmap(
+            X=P, Y=PHI, Z=generation_times, cmap='magma', contour_levels=[11,12,13,14,15],
+            title='Influence of asymptomatic transmission on generation time',
+            xlabel=r'Proportion asymptomatic, $p$', ylabel=r'Relative infectiousness, $\varphi$',
+        )
+        fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
+
+rule plot_nonlinear_response_analysis:
+    output:
+        plot="{outdir}/compartmental/nonlinear_response_analysis.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        dt = 0.1
+        t = np.arange(0, 50, dt)
+        n_W, tau_W = 3.0, 14.0
+        eps_w, k, threshold = 0.5, 10.0, 1.0
+        n_B, tau_B = 1.0, 7.0
+
+        fig, axes = plt.subplots(3, 2, figsize=(14, 12), width_ratios=(1,2))
+
+        # Reporting delay
+        reporting_delay = gamma.pdf(t, a=n_W, scale=tau_W/n_W)
+        axes[0, 0].plot(t, reporting_delay, color='purple', linewidth=2)
+        axes[0, 0].fill_between(t, reporting_delay, alpha=0.1, color='purple')
+        axes[0, 0].axvline(tau_W, color='purple', linestyle=':', linewidth=2, label=f'Mean: $\\tau_W={tau_W:.0f}$')
+        axes[0, 0].set_title(f'Reporting Delay ($n_W={n_W}$)')
+        axes[0, 0].set_xlabel('Days')
+        axes[0, 0].legend()
+        axes[0, 0].set_ylim(0, 0.06)
+        axes[0, 0].grid(True, alpha=0.3)
+
+        # Logistic response
+        x_pure = np.linspace(0, 3.5, 400)
+        y_pure = 1 - (eps_w / (1 + np.exp(-k * (x_pure - threshold))))
+        axes[1, 0].plot(x_pure, y_pure, color='black', linewidth=2)
+        axes[1, 0].axvline(threshold, color='grey', linestyle='--', linewidth=2, label=r'$\mathcal{R}_\text{crit}=1.0$')
+        # 95% interval
+        p_low, p_high = 0.025, 0.975 
+        x_low, x_high = threshold + (1 / k) * np.log(p_low / (1 - p_low)), threshold + (1 / k) * np.log(p_high / (1 - p_high))
+        axes[1, 0].axvspan(x_low, x_high, color='gray', alpha=0.1, label=f'95%: [{x_low:.2f} - {x_high:.2f}]')
+        axes[1, 0].set_title(f'Logistic Response ($k={k}$)')
+        axes[1, 0].set_xlabel('Reproductive number')
+        axes[1, 0].set_ylim(0, 1.2)
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+
+        # Behavioural delay
+        beh_delay = gamma.pdf(t, a=n_B, scale=tau_B/n_B)
+        axes[2, 0].plot(t, beh_delay, color='brown', linewidth=2)
+        axes[2, 0].fill_between(t, beh_delay, alpha=0.1, color='brown')
+        axes[2, 0].axvline(tau_B, color='brown', linestyle=':', linewidth=2, label=f'Mean: $\\tau_B={tau_B:.0f}$')
+        axes[2, 0].set_title(f'Behavioural Delay ($n_B={n_B}$)')
+        axes[2, 0].set_xlabel('Days')
+        axes[2, 0].legend()
+        axes[2, 0].set_ylim(0, 0.15)
+        axes[2, 0].grid(True, alpha=0.3)
+
+        # Combined response
+        def total_response(amp):
+            x = amp * gamma.cdf(t, a=n_W, scale=tau_W/n_W)
+            y = 1 - (eps_w / (1 + np.exp(-k * (x - threshold))))
+            z_padded = np.convolve(np.concatenate([np.ones(len(t)), y]), gamma.pdf(t, a=n_B, scale=tau_B/n_B), mode='full') * dt
+            z = z_padded[len(t) : 2 * len(t)]
+            return x, y, z
+        
+        for p in pathogens:
+            x_m, y_m, z_m = total_response(parameters[p].R_0)
+            x_l, y_l, z_l = total_response(best_params_kwargs[p]["R_0"])
+            x_h, y_h, z_h = total_response(worst_params_kwargs[p]["R_0"])
+            color = colors[p]
+            axes[0, 1].plot(t, x_m, color=color, linewidth=2, label=p)
+            axes[0, 1].fill_between(t, x_l, x_h, color=color, alpha=0.2)
+            axes[1, 1].plot(t, y_m, color=color, linewidth=2)
+            axes[1, 1].fill_between(t, np.minimum(y_l, y_h), np.maximum(y_l, y_h), color=color, alpha=0.2)
+            axes[2, 1].plot(t, z_m, color=color, linewidth=2)
+            axes[2, 1].fill_between(t, np.minimum(z_l, z_h), np.maximum(z_l, z_h), color=color, alpha=0.2)
+        axes[0, 1].axhline(threshold, color='grey', linestyle='--', linewidth=2, label=r'$\mathcal{R}_\text{crit}=1.0$')
+        axes[1, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=r'$\varepsilon_w=0.5$')
+        axes[2, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=r'$\varepsilon_w=0.5$')
+
+        # Formatting
+        axes[0, 1].set_title('Reported Reproductive Number')
+        axes[0, 1].legend(loc='upper left')
+        axes[0, 1].grid(True, alpha=0.3)
+        axes[1, 1].set_title(f'Instantaneous Warning Response ($\epsilon_w={eps_w}$)')
+        axes[1, 1].set_ylim(0, 1.2)
+        axes[1, 1].legend(loc='upper right')
+        axes[1, 1].grid(True, alpha=0.3)
+        axes[2, 1].set_title('Effective Transmission Modification')
+        axes[2, 1].set_xlabel('Days')
+        axes[2, 1].set_ylim(0, 1.2)
+        axes[2, 1].legend(loc='upper right')
+        axes[2, 1].grid(True, alpha=0.3)
+        fig.suptitle("Wastewater Warning Response Analysis", fontsize=16)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+        plt.savefig(output.plot, dpi=image_resolution)
+
+
 rule all:
     input:
         expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens, outdir=outdir),
@@ -769,3 +941,5 @@ rule all:
         expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=outdir),
         expand(rules.export_param_bounds.output.tex, outdir=outdir),
         expand(rules.plot_controllability_boundaries.output.plot, outdir=outdir),
+        expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=outdir),
+        expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=outdir),
