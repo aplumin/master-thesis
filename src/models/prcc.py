@@ -9,8 +9,8 @@ from scipy.stats import qmc, rankdata
 import jax
 import jax.numpy as jnp
 
-from SALib.sample import saltelli
-from SALib.analyze import sobol
+from SALib.sample.sobol import sample
+from SALib.analyze.sobol import analyze
 
 from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
@@ -32,10 +32,20 @@ class SensitivityResults(NamedTuple):
 
 
 # PARAMETER BOUNDS
-_BOUNDS: dict[str, tuple[float, float]] = {
+_PATHOGEN_BOUNDS: dict[str, tuple[float, float]] = {
     "R_0":       (1.0, 5.0),
     "gamma_inv": (0.1, 10.0),
     "mu_s_inv":  (0.1, 10.0),
+}
+_PRESYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
+    "sigma_inv": (0.1, 10.0),
+}
+_ASYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
+    "mu_a_inv": (0.1, 10.0),
+    "p":        (0.0, 1.0),
+    "phi":      (0.0, 1.0),
+}
+_INTERVENTION_BOUNDS: dict[str, tuple[float, float]] = {
     "epsilon_s": (0.0, 1.0),
     "epsilon_w": (0.0, 1.0),
     "tau_W":     (1.0, 30.0),
@@ -43,26 +53,19 @@ _BOUNDS: dict[str, tuple[float, float]] = {
     "log_k":     (0.0, 3.0),
     "R_crit":    (0.8, 2.0),
 }
-_ASYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
-    "phi":      (0.0, 1.0),
-    "p":        (0.0, 1.0),
-    "mu_a_inv": (0.1, 10.0),
-}
-_PRESYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
-    "sigma_inv": (0.1, 10.0),
-}
 _THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
-    "log_I_crit": (-4.0, -2.0),
     "log_k_I":    (1.0, 4.0),
+    "log_I_crit": (-4.0, -2.0),
 }
 
 def parameter_bounds(model: Callable, scenario: str = "start") -> dict[str, tuple[float, float]]:
     """Return parameter bound dictionary for sensitivity analysis."""
     MODEL_NAMES: dict[Callable, str] = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W",}
     name = MODEL_NAMES[model]
-    bounds: dict[str, tuple[float, float]] = dict(_BOUNDS)
-    if name in ("SEIPAR_W", "SEIAR_W"): bounds |= _ASYMPTOMATIC_BOUNDS
+    bounds: dict[str, tuple[float, float]] = dict(_PATHOGEN_BOUNDS)
     if name == "SEIPAR_W": bounds |= _PRESYMPTOMATIC_BOUNDS
+    if name in ("SEIPAR_W", "SEIAR_W"): bounds |= _ASYMPTOMATIC_BOUNDS
+    bounds |= _INTERVENTION_BOUNDS
     if scenario == "threshold": bounds |= _THRESHOLD_BOUNDS
     elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
     return bounds
@@ -117,11 +120,11 @@ def _salib_problem(bounds: dict) -> dict:
 
 def saltelli_sample(bounds: dict, n_base: int, seed: int | None = None) -> np.ndarray:
     """Generate a Saltelli sample sequence for Sobol analysis."""
-    return saltelli.sample(_salib_problem(bounds), N=n_base, calc_second_order=False, seed=seed)
+    return sample(_salib_problem(bounds), N=n_base, calc_second_order=False, seed=seed)
 
 def sobol_indices(bounds: dict, Y: np.ndarray, seed: int | None = None) -> dict[str, np.ndarray]:
     """Compute first-order (S_1) and total-order (S_T) Sobol sensitivity indices."""
-    Si = sobol.analyze(_salib_problem(bounds), np.asarray(Y), calc_second_order=False, seed=seed, print_to_console=False,)
+    Si = analyze(_salib_problem(bounds), np.asarray(Y), calc_second_order=False, seed=seed, print_to_console=False)
     return {k: np.asarray(Si[k]) for k in ("S1", "S1_conf", "ST", "ST_conf")}
 
 
