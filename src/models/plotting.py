@@ -91,7 +91,7 @@ def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(
         taus, I_crit_list, compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0),
         contour_levels=[0.25, 0.5, 0.75], contour_colors='red', contour_linestyles=['--', '-', '--'],
         cbar_axhlines=[0.25, 0.5, 0.75], cbar_axhlines_colors=['red', 'red', 'red'], cbar_axhlines_linestyles=['--', '-', '--'],
-        title=title, xlabel='Wastewater delay $\\tau_W$', ylabel='Infection threshold',
+        title=title, xlabel='Behavioural delay $\\tau_B$', ylabel='Infection threshold',
         y_logscale=True, cbar_label='Total infections (relative to baseline)',
     )
     return fig
@@ -120,18 +120,13 @@ def plot_trajectory(
     # run the model
     tt, yy = model(params=params, t1=t1)
     compartments = yy.T
-
-    # determine index of R compartment
     R_idx = -(params.n_W + params.n_B + 1)
-
-    # extract I compartments
     I_compartments = compartments[slice(2, R_idx) if R_idx != -1 else slice(2, None)]
     total_I = np.sum(I_compartments, axis=0)
     Is = I_compartments[-1]
     
     # plot
     fig, (ax_main, ax_rt) = plt.subplots(nrows=2, ncols=1, figsize=(6, 8), gridspec_kw={'height_ratios': [6,2]})
-    # fig, (ax_main, ax_rt, ax_rt_decomp) = plt.subplots(nrows=3, ncols=1, figsize=(6, 9), gridspec_kw={'height_ratios': [6,2,1]})
 
     # trajectories
     if plot_S: ax_main.plot(tt, compartments[0], label='$S$', color='green')
@@ -170,41 +165,27 @@ def plot_trajectory(
 
     # Rt
     rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-    # rt_reported = yy[:, -(params.n_B + 1)]
     ax_rt.plot(tt, rt_true, color='black', label='True $\mathcal{R}_t$')
-    # ax_rt.plot(tt, rt_reported, color='red', label='Reported $\mathcal{R}_t$')
     ax_rt.axhline(params.R_crit, color='grey', linestyle='--')
-    rt_a = rt_true / params.R_0 * (params.p * params.phi * params.beta * params.mu_a_inv) 
-    rt_p = rt_true / params.R_0 * ((1-params.p) * params.beta * params.sigma_inv)
-    if rt_a.any() > 0:
-        ax_rt.fill_between(tt, 0, rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
-    if rt_p.any() > 0:
-        ax_rt.fill_between(tt, rt_a, rt_a + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
-    ax_rt.fill_between(tt, rt_a + rt_p, rt_true, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
+    s_contribution = (1-params.epsilon_s) * (1-params.p) * params.beta * params.mu_s_inv
+    a_contribution = params.p * params.phi * params.beta * params.mu_a_inv
+    p_contribution = (1-params.p) * params.beta * params.sigma_inv
+    total_contributions = s_contribution + a_contribution + p_contribution
+    rt_s = rt_true * s_contribution / total_contributions
+    rt_a = rt_true * a_contribution / total_contributions
+    rt_p = rt_true * p_contribution / total_contributions
+    params_baseline = params.update(epsilon_s=0.0, epsilon_w=0.0)
+    _, yy0 = model(params=params_baseline, t1=t1)
+    ax_rt.fill_between(tt, 0, params_baseline.R_0 * params_baseline.rho * yy0[:,-1] * yy0[:,0], color='grey', alpha=0.2)
+    if rt_a.any() > 0: ax_rt.fill_between(tt, 0, rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
+    if rt_p.any() > 0: ax_rt.fill_between(tt, rt_a, rt_a + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
+    ax_rt.fill_between(tt, rt_a + rt_p, rt_a + rt_p + rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
     ax_rt.legend()
-
-    # # Rt decomposition
-    # def calculate_R0_contributions(params: Params):
-    #     asymptomatic = params.p * params.phi * params.beta * params.mu_a_inv
-    #     presymptomatic = (1-params.p) * params.beta * params.sigma_inv
-    #     symptomatic = (1-params.p) * params.beta * params.mu_s_inv
-    #     return np.array([asymptomatic, presymptomatic, symptomatic])
-    # contributions = calculate_R0_contributions(params=params)
-    # colors = ['purple', 'skyblue', 'blue']
-    # labels = ['$\mathcal{R}_a$: '+f'{contributions[0]:.2f}', '$\mathcal{R}_p$: '+f'{contributions[1]:.2f}', '$\mathcal{R}_s$: '+f'{contributions[2]:.2f}']
-    # lefts = np.insert(np.cumsum(contributions)[:-1], 0, 0)
-    # for i in range(3):
-    #     ax_rt_decomp.barh(0, contributions[i], left=lefts[i], color=colors[i], label=labels[i])
-    # ax_rt_decomp.legend(loc='upper center', bbox_to_anchor=(0.5, -0.3), ncol=3)
-    # ax_rt_decomp.set_yticks([])
-    # for spine in ax_rt_decomp.spines.values(): spine.set_visible(False)
 
     # save and close
     plt.tight_layout()
     fig.savefig(path, dpi=image_resolution)
     plt.close(fig)
-    
-    # return peak size, time to peak, and total wave time
     return peak_Is, time_to_peak, total_time
 
 
