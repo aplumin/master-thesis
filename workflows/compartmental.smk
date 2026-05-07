@@ -2,6 +2,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from scipy.stats import gamma
+from scipy.optimize import brentq
+from scipy.ndimage import gaussian_filter1d
+from math import comb
+
 from functools import partial
 import itertools
 import os
@@ -1032,6 +1036,206 @@ rule plot_asymptomatic_landscape:
         plt.savefig(output.plot, dpi=image_resolution)
 
 
+def arg_L(omega, tau_W, tau_B, n_W=3, n_B=1):
+    return -n_W*np.arctan(omega*tau_W/n_W) - n_B*np.arctan(omega*tau_B/n_B)
+
+rule plot_gain_margins:
+    output:
+        plot="{outdir}/compartmental/gain_margins.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        eps_w = 0.8
+        k = 10.0
+        n_W = 3
+        n_B = 1
+
+        def gain_margin(tau_W, tau_B):
+            def _omega_PC(tau_W, tau_B):
+                return brentq(lambda w: np.pi + arg_L(omega=w,tau_W=tau_W,tau_B=tau_B,n_W=n_W,n_B=n_B), 1e-10, 1000.0)
+            omega_PC = _omega_PC(tau_W, tau_B)
+            if omega_PC is None: return np.inf
+            return (2*(2-eps_w))/(eps_w*k) * (1+(omega_PC*tau_W/n_W)**2)**(n_W/2) * (1+(omega_PC*tau_B/n_B)**2)**(n_B/2)
+
+        taus_W = np.linspace(1.0, 31.0, 100)
+        taus_B = np.linspace(1.0, 31.0, 100)
+        MG = np.array([[gain_margin(tw, tb) for tb in taus_B] for tw in taus_W])
+        fig, ax = plot_heatmap(taus_B, taus_W, MG, cmap='magma_r', contour_levels=[0.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Gain margin')
+        fig.savefig(output.plot, dpi=image_resolution)
+
+
+rule plot_delay_margins:
+    output:
+        plot="{outdir}/compartmental/delay_margins.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        eps_w = 0.8
+        k = 10.0
+        n_W = 3
+        n_B = 1
+        L0 = (eps_w*k)/(2*(2-eps_w))
+
+        def delay_margin(tau_W, tau_B):
+            def _omega_c(tau_W, tau_B):
+                def g(omega): return (L0**2 * (1 + (omega*tau_W/n_W)**2)**(-n_W) * (1 + (omega*tau_B/n_B)**2)**(-n_B) - 1)
+                if g(0) <= 0: return None
+                return brentq(g, 1e-10, 1000.0)
+            omega_c = _omega_c(tau_W, tau_B)
+            print(_omega_c(14,7))
+            if omega_c is None: return np.inf
+            return (np.pi - arg_L(omega=omega_c, tau_W=tau_W, tau_B=tau_B, n_W=n_W, n_B=n_B)) / omega_c
+
+        taus_W = np.linspace(1.0, 31.0, 100)
+        taus_B = np.linspace(1.0, 31.0, 100)
+        MD = np.array([[delay_margin(tw, tb) for tb in taus_B] for tw in taus_W])
+        fig, ax = plot_heatmap(taus_B, taus_W, MD, cmap='magma_r', contour_levels=[0.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Delay margin')
+        fig.savefig(output.plot, dpi=image_resolution)
+
+def _characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W=3, n_B=1):
+    """pW * pB + L0 = 0."""
+    P = np.convolve(
+        np.array([comb(n_W, j) * (tau_W/n_W)**j for j in range(n_W+1)]),
+        np.array([comb(n_B, j) * (tau_B/n_B)**j for j in range(n_B+1)]))
+    P[0] += (eps_w * k) / (2 * (2-eps_w))
+    return P
+
+def _dominant_pole(tau_W, tau_B, eps_w, k, n_W=3, n_B=1):
+    """Dominant complex root of characteristic polynomial."""
+    roots = np.roots(_characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W, n_B)[::-1])
+    complex_roots = roots[np.abs(roots.imag) > 1e-9]
+    if complex_roots.size == 0: return np.nan
+    return complex_roots[np.argmax(complex_roots.real)]
+
+@partial(jax.jit, static_argnames=['model', 't1'])
+def _compute_rt_grid(model, base_params, taus_W, taus_B, t1=300.0):
+    """True Rt in (tau_W, tau_B)."""
+    def _rt(tau_W, tau_B):
+        params = base_params.update(tau_W=tau_W, tau_B=tau_B)
+        _, yy = model(params=params, t1=t1)
+        return params.R_0 * params.rho * yy[:,-1] * yy[:,0]
+    return jax.vmap(jax.vmap(_rt, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
+
+def _period_and_damping(t, x, t0=50.0, t1=250.0, smoothing_days=20.0, peak_threshold=0.2, T_min=4.0, T_max=200.0):
+    """Period and damping rate from trajectory."""
+    t_m = t[(t>t0) & (t<t1)]
+    x_m = x[(t>t0) & (t<t1)]
+    dt = float(t_m[1] - t_m[0])
+
+    x_m = x_m - gaussian_filter1d(x_m, sigma=smoothing_days/dt) # Gaussian smoothing
+    x_m = x_m - x_m.mean() # normalise around 0
+    if x_m.std() < 1e-9: return np.nan, np.nan # no oscillations
+
+    # period from autocorrelation
+    ac = np.correlate(x_m, x_m, mode='full')[len(x_m)-1:]
+    ac = ac/ac[0]
+    period, i_peak1, offset1, denom1 = np.nan, -1, 0.0, 0.0
+    for i in range(max(2, int(T_min/dt)), min(len(ac)-1, int(T_max/dt))):
+        if ac[i] > ac[i-1] and ac[i] > ac[i+1] and ac[i] > peak_threshold: # first peak above threshold
+            # parabolic interpolation with peak at 0.5*(ac[i-1] - ac[i+1]) / (ac[i-1] - 2*ac[i] + ac[i+1])
+            denom1 = ac[i-1] - 2*ac[i] + ac[i+1]
+            offset1 = 0.5*(ac[i-1] - ac[i+1])/denom1 if denom1 != 0 else 0.0
+            period = (i + offset1) * dt
+            i_peak1 = i
+            break
+    
+    # damping alpha from 2nd ac peak
+    alpha = np.nan
+    if not np.isnan(period):
+        # find 2nd peak in window around 1st peak + period
+        i_peak2 = int(2 * period / dt)
+        window_radius = int(0.5 * period / dt) # half a period before and after
+        window_start = max(2, i_peak2 - window_radius)
+        window_end = min(len(ac)-1, i_peak2 + window_radius)
+        if window_end - window_start > 3:
+            # get largest value and ensure it is a local maximum
+            i_peak2 = window_start + np.argmax(ac[window_start:window_end])
+            if ac[i_peak2] > ac[i_peak2-1] and ac[i_peak2] > ac[i_peak2+1]:
+                # parabolic interpolation for 2nd peak location
+                denom2 = ac[i_peak2-1] - 2*ac[i_peak2] + ac[i_peak2+1]
+                offset2 = 0.5*(ac[i_peak2-1] - ac[i_peak2+1])/denom2 if denom2 != 0 else 0.0
+                # parabolic interpolation for peak heights: ac[i] - 0.25*(ac[i-1] - ac[i+1]) * offset
+                h1 = ac[i_peak1] - 0.25 * (ac[i_peak1-1] - ac[i_peak1+1]) * offset1 if denom1 != 0 else ac[i_peak1]
+                h2 = ac[i_peak2] - 0.25 * (ac[i_peak2-1] - ac[i_peak2+1]) * offset2 if denom2 != 0 else ac[i_peak2]
+                if h1 > 0 and h2 > 0:
+                    # h1 = exp(-at), h2 = exp(-a(t+T)) => a = -log(h2/h1)/T
+                    alpha = -np.log(h2/h1) / period
+                    return period, alpha
+
+    return period, alpha
+
+
+rule plot_period_and_damping_scatter:
+    output:
+        period ="{outdir}/compartmental/period_scatter_{pathogen}_k{k}.png",
+        damping="{outdir}/compartmental/damping_scatter_{pathogen}_k{k}.png",
+    run:
+        for path in output: os.makedirs(os.path.dirname(path), exist_ok=True)
+        N = 50
+        eps_w = 0.8
+        k = float(wildcards.k)
+        t1 = 300.0
+        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
+        base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=eps_w, k=k)
+        model = models[wildcards.pathogen]
+        n_W = base_params.n_W
+        n_B = base_params.n_B
+        taus_W = jnp.linspace(3.0, 31.0, N)
+        taus_B = jnp.linspace(1.0, 31.0, N)
+
+        # analytical
+        analytical_period = np.full((N, N), np.nan)
+        analytical_damping = np.full((N, N), np.nan)
+        for i, tw in enumerate(np.array(taus_W)):
+            for j, tb in enumerate(np.array(taus_B)):
+                pole = _dominant_pole(float(tw), float(tb), eps_w, k, n_W, n_B)
+                if not np.isnan(pole):
+                    analytical_period[i, j] = 2*np.pi / abs(pole.imag)
+                    analytical_damping[i, j] = -pole.real
+
+        # simulation grid
+        rt_grid = np.array(_compute_rt_grid(model, base_params, taus_W, taus_B, t1=t1))
+        tt = np.linspace(0.0, t1, rt_grid.shape[-1])
+        simulation_period = np.full((N, N), np.nan)
+        simulation_damping = np.full((N, N), np.nan)
+        for i in range(N):
+            for j in range(N):
+                simulation_period[i, j], simulation_damping[i, j] = _period_and_damping(tt, rt_grid[i, j], smoothing_days = max(20, 2*analytical_period[i,j]))
+
+        TW, TB = np.meshgrid(np.array(taus_W), np.array(taus_B), indexing='ij')
+        total_delay = TW + TB
+
+        # period scatterplot
+        valid = np.isfinite(simulation_period) & np.isfinite(analytical_period)
+        fig, ax = plt.subplots(figsize=(6, 6))
+        sc = ax.scatter(analytical_period[valid], simulation_period[valid], c=total_delay[valid], cmap='viridis', s=10, alpha=0.8)
+        if valid.any():
+            lim = [0.9*min(analytical_period[valid].min(), simulation_period[valid].min()), 1.05*max(analytical_period[valid].max(), simulation_period[valid].max())]
+            ax.plot(lim, lim, 'k--', lw=1)
+            ax.set_xlim(lim); ax.set_ylim(lim)
+        ax.set_aspect('equal')
+        ax.set_xlabel('analytical')
+        ax.set_ylabel('simulated')
+        ax.set_title(f'Oscillation periods ({wildcards.pathogen}, $k={k:g}$)')
+        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)')
+        plt.tight_layout()
+        plt.savefig(output.period, dpi=image_resolution); plt.close(fig)
+
+        # damping scatterplot
+        valid = np.isfinite(simulation_damping) & np.isfinite(analytical_damping)
+        fig, ax = plt.subplots(figsize=(6, 6))
+        sc = ax.scatter(analytical_damping[valid], simulation_damping[valid], c=total_delay[valid], cmap='viridis', s=10, alpha=0.8)
+        if valid.any():
+            lim = [min(analytical_damping[valid].min(), simulation_damping[valid].min()), 1.05*max(analytical_damping[valid].max(), simulation_damping[valid].max())]
+            ax.plot(lim, lim, 'k--', lw=1)
+            ax.axhline(0, color='k', lw=0.5, ls='--'); ax.axvline(0, color='k', lw=0.5, ls='--')
+            ax.set_xlim(lim); ax.set_ylim(lim)
+        ax.set_aspect('equal')
+        ax.set_xlabel('analytical')
+        ax.set_ylabel('simulated')
+        ax.set_title(f'Decay rates ({wildcards.pathogen}, $k={k:g}$)')
+        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)')
+        plt.tight_layout()
+        plt.savefig(output.damping, dpi=image_resolution); plt.close(fig)
+
 rule all:
     input:
         expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens, outdir=outdir),
@@ -1068,3 +1272,6 @@ rule all:
         expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=outdir),
         expand(rules.plot_asymptomatic_landscape.output.plot, outdir=outdir),
         expand(rules.calculate_generation_times.output.txt, outdir=outdir),
+        expand(rules.plot_gain_margins.output.plot, outdir=outdir),
+        expand(rules.plot_delay_margins.output.plot, outdir=outdir),
+        expand(rules.plot_period_and_damping_scatter.output, outdir=outdir, pathogen=pathogens, k=[10, 30, 60, 80]),
