@@ -165,7 +165,7 @@ def plot_trajectory(
 
     # Rt
     rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-    ax_rt.plot(tt, rt_true, color='black', label='True $\mathcal{R}_t$')
+    ax_rt.plot(tt, rt_true, color='black', label='$\mathcal{R}_t$')
     ax_rt.axhline(params.R_crit, color='grey', linestyle='--')
     s_contribution = (1-params.epsilon_s) * (1-params.p) * params.beta * params.mu_s_inv
     a_contribution = params.p * params.phi * params.beta * params.mu_a_inv
@@ -285,7 +285,7 @@ def run_gillespie_SEIPAR_W(params: Params = Params.for_SEIPAR(), N: int = 1000, 
     fig_hist, ax_hist = plt.subplots()
     ax_hist.hist(times_list, density=True)
     
-    return fig_traj, fig_hist
+    return fig_traj, ax_traj, fig_hist, ax_hist
 
 def run_gillespie_SEIAR_W(params: Params = Params.for_SEIAR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
     """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
@@ -302,7 +302,7 @@ def run_gillespie_SEIAR_W(params: Params = Params.for_SEIAR(), N: int = 1000, t1
     fig_hist, ax_hist = plt.subplots()
     ax_hist.hist(times_list, density=True)
     
-    return fig_traj, fig_hist
+    return fig_traj, ax_traj, fig_hist, ax_hist
 
 def run_gillespie_SEIR_W(params: Params = Params.for_SEIR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
     """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
@@ -319,4 +319,4 @@ def run_gillespie_SEIR_W(params: Params = Params.for_SEIR(), N: int = 1000, t1: 
     fig_hist, ax_hist = plt.subplots()
     ax_hist.hist(times_list, density=True)
     
-    return fig_traj, fig_hist
+    return fig_traj, ax_traj, fig_hist, ax_hist

@@ -78,7 +78,7 @@ PARAM_LABELS: dict[str, str] = {
     "R_crit": r"$\mathcal{R}_{\text{crit}}$", "log_I_crit": r"$\log I_{\text{crit}}$",
 }
 
-gillespie_popsizes = [100, 1_000_000]
+gillespie_popsizes = [10000] #, 1_000_000]
 gillespie_num_simulations = [100]
 
 image_resolution = 300
@@ -382,9 +382,15 @@ rule gillespie:
         hist="{outdir}/gillespie/gillespie_hist_{pathogen}_{N}.png",
     run:
         os.makedirs(os.path.dirname(output.traj), exist_ok=True); os.makedirs(os.path.dirname(output.hist), exist_ok=True)
-        traj, hist = gillespie_models[wildcards.pathogen](params=parameters[wildcards.pathogen], N=int(wildcards.N), t1=1000.0)
-        traj.savefig(output.traj, dpi=image_resolution); plt.close(traj)
-        hist.savefig(output.hist, dpi=image_resolution); plt.close(hist)
+        fig_traj, ax_traj, fig_hist, ax_hist = gillespie_models[wildcards.pathogen](params=parameters[wildcards.pathogen], N=int(wildcards.N), t1=1000.0)
+        N = float(wildcards.N)
+        tt, yy = models[wildcards.pathogen](params=parameters[wildcards.pathogen], t1=1000.0, E0=1/N)
+        S = yy.T[0] * N
+        ax_traj.plot(tt, S, 'k-', linewidth=2)
+        ax_traj.set_xlim([0,500]) if N>100 else ax_traj.set_xlim([0,250])
+        fig_traj.savefig(output.traj, dpi=image_resolution)
+        fig_hist.savefig(output.hist, dpi=image_resolution)
+        plt.close('all')
 
 trajectory_end_times = {"SARS-CoV-2": 530, "Influenza A": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
 
@@ -697,9 +703,9 @@ rule plot_main_intervention_grid:
             Rt_g[pathogen] = np.array(Rt)
             tRt_g[pathogen] = np.array(tRt)
             _, yy0 = models[pathogen](params=ps.update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0)
-            print(ps.k)
             Itot_g[pathogen] = np.array(It) / float(yy0[0,0] - yy0[-1,0])
-            peakIs_g[pathogen] = np.array(pk)
+            Is0 = yy0[:, -(ps.n_W + ps.n_B + 2)]
+            peakIs_g[pathogen] = np.array(pk) / float(np.max(Is0))
 
         # plot
         rows = [ # label, data, cmap, center_at_one, log
@@ -1245,8 +1251,8 @@ rule all:
         expand(rules.plot_prcc_monotonicity.output.plot, outdir=outdir, pathogen=pathogens, scenario=prcc_scenarios, outcome=prcc_outcomes),
         expand(rules.plot_prcc_grid.output.plot, outdir=outdir),
         expand(rules.plot_combined_sensitivity_grid.output.plot, outdir=outdir),
-        expand(rules.gillespie.output, outdir=outdir, pathogen=pathogens,
-            N=[100], # N=gillespie_popsizes,
+        expand(rules.gillespie.output, outdir=outdir, pathogen=["SARS-CoV-2"], #pathogens,
+            N=[100,100000], # N=gillespie_popsizes,
         ),
         expand(rules.plot_trajectory.output.plot, outdir=outdir, pathogen=pathogens,
             epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8],
@@ -1258,7 +1264,7 @@ rule all:
             outdir=outdir, pathogen=["SARS-CoV-2"], # TODO: change main rule for generalisation
         ),
         expand(rules.baseline_trajectories.output.plot, pathogen=pathogens, outdir=outdir),
-        expand(rules.baseline_trajectories_no_asymptomatic.output.plot, pathogen=pathogens, outdir=outdir),
+        # expand(rules.baseline_trajectories_no_asymptomatic.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
         expand(rules.plot_true_vs_reported_Rt_scenarios_vary_k.output, pathogen=pathogens, outdir=outdir, tau_W=[14], tau_B=[7]),
         expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
