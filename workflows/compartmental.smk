@@ -20,7 +20,8 @@ import seaborn as sns
 
 from models.parameters import Params, logistic_response_function
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
-from models.scenarios import compute_R_grid, compute_asymptomatic_grid_Rt
+from models.gillespie import gillespie_SEIPAR_W
+from models.scenarios import compute_R_grid, compute_asymptomatic_grid_Rt, outcome_metrics, compute_metrics, compute_delay_metrics_grid
 from models.prcc import SensitivityResults, run_sensitivity_analysis, partial_rank_residuals
 from models.plotting import (
     plot_heatmap, plot_trajectory,
@@ -374,24 +375,6 @@ rule calculate_generation_times:
                 f.write(f"{pathogen}: {_get_generation_time(parameters[pathogen])}\n")
 
 
-# TODO: overlay deterministic trajectory
-# TODO: out of memory for SC2 1m
-rule gillespie:
-    output:
-        traj="{outdir}/gillespie/gillespie_traj_{pathogen}_{N}.png",
-        hist="{outdir}/gillespie/gillespie_hist_{pathogen}_{N}.png",
-    run:
-        os.makedirs(os.path.dirname(output.traj), exist_ok=True); os.makedirs(os.path.dirname(output.hist), exist_ok=True)
-        fig_traj, ax_traj, fig_hist, ax_hist = gillespie_models[wildcards.pathogen](params=parameters[wildcards.pathogen], N=int(wildcards.N), t1=1000.0)
-        N = float(wildcards.N)
-        tt, yy = models[wildcards.pathogen](params=parameters[wildcards.pathogen], t1=1000.0, E0=1/N)
-        S = yy.T[0] * N
-        ax_traj.plot(tt, S, 'k-', linewidth=2)
-        ax_traj.set_xlim([0,500]) if N>100 else ax_traj.set_xlim([0,250])
-        fig_traj.savefig(output.traj, dpi=image_resolution)
-        fig_hist.savefig(output.hist, dpi=image_resolution)
-        plt.close('all')
-
 trajectory_end_times = {"SARS-CoV-2": 530, "Influenza A": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
 
 rule plot_trajectory:
@@ -487,22 +470,6 @@ rule plot_response_function:
         plt.close(fig)
 
 
-@partial(jax.jit, static_argnames=['model', 't1'])
-def _compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=300.0):
-    def metrics(tau_W, tau_B):
-        params = base_params.update(tau_W=tau_W, tau_B=tau_B)
-        _, yy = model(params=params, t1=t1)
-        rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-        rt_reported = yy[:, -(params.n_B + 1)]
-        steady = rt_true[-rt_true.shape[0]//3:] # last third
-        amplitude = jnp.max(steady) - jnp.min(steady)
-        frac_infected = yy[0,0] - yy[-1,0]
-        above = (rt_reported >= params.R_crit).astype(jnp.int32)
-        total_time_above = above.mean() * t1
-        num_crossings = jnp.sum(jnp.diff(above) > 0)
-        return amplitude, frac_infected, total_time_above, num_crossings
-    return jax.vmap(jax.vmap(metrics, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
-
 # TODO: response stays < 1: check logic
 rule plot_true_vs_reported_Rt_scenarios:
     output:
@@ -591,26 +558,28 @@ rule plot_true_vs_reported_Rt_scenarios_vary_k:
         plt.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close()
 
 
-
 rule plot_true_vs_reported_Rt_heatmaps:
     output:
+        Rt_final ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_Rt_final.png",
+        time_to_below ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_time_to_below.png",
+        Itot ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_Itot.png",
+        peak_Is ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_peak_Is.png",
         amplitudes ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_amplitudes.png",
-        itot ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_itot.png",
         time_above ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_time_above.png",
         crossings ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_crossings.png",
     run:
         for path in output: os.makedirs(os.path.dirname(path), exist_ok=True)
-
+        pathogen = wildcards.pathogen
         taus_W = jnp.linspace(1.0, 31.0, num=100)
         taus_B = jnp.linspace(1.0, 31.0, num=100)
         k = float(wildcards.k)
         epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
         base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
 
-        amplitudes, fractions, time_above, crossings = _compute_delay_metrics_grid(model=models[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
+        Rt_final, time_to_below, Itot, peak_Is, amplitudes, time_above, crossings = compute_delay_metrics_grid(model=models[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
 
         plt.figure(figsize=(6,6))
-        plt.scatter(amplitudes, fractions, c='k', alpha=0.2, s=2) # TODO: color for total delay
+        plt.scatter(amplitudes, Itot, c='k', alpha=0.2, s=2) # TODO: color for total delay
         plt.title('Effect of oscillations on the number of infections')
         plt.xlabel('Oscillation amplitudes')
         plt.ylabel('Total fraction infected')
@@ -620,71 +589,66 @@ rule plot_true_vs_reported_Rt_heatmaps:
         scenario = f'({wildcards.pathogen}, $k={k:g}$)'
         fig, _ = plot_heatmap(taus_B, taus_W, amplitudes, cmap='magma', cbar_label='Amplitude of oscillations', title=f'Stability of delayed response {scenario}', **kwargs)
         fig.savefig(output.amplitudes, dpi=image_resolution); plt.close(fig)
-        fig, _ = plot_heatmap(taus_B, taus_W, fractions, cbar_label='Fraction infected', title=f'Effect of delay on infections {scenario}', **kwargs)
-        fig.savefig(output.itot, dpi=image_resolution); plt.close(fig)
         fig, _ = plot_heatmap(taus_B, taus_W, time_above, cmap='cividis', cbar_label='Days above warning threshold', title=f'Time above warning threshold {scenario}', **kwargs)
         fig.savefig(output.time_above, dpi=image_resolution); plt.close(fig)
         fig, _ = plot_heatmap(taus_B, taus_W, crossings, cmap='plasma', cbar_label='Total times warned', title=f'Number of warning-threshold crossings {scenario}', **kwargs)
         fig.savefig(output.crossings, dpi=image_resolution); plt.close(fig)
 
+        t1 = 10000.0
+        # compute per pathogen
+        Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
+        ps = parameters[pathogen]
+        Rt, tRt, It, pk = Rt_final, time_to_below, Itot, peak_Is
+        Rt_g[pathogen] = np.array(Rt)
+        tRt_g[pathogen] = np.array(tRt)
+        _, yy0 = models[pathogen](params=ps.update(epsilon_s=0.0, epsilon_w=0.0))
+        Itot_g[pathogen] = np.array(It) / float(yy0[0,0] - yy0[-1,0])
+        Is0 = yy0[:, -(ps.n_W + ps.n_B + 2)]
+        peakIs_g[pathogen] = np.array(pk) / float(np.max(Is0))
 
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, tRt, delta_dep=0.05):
-    def metrics(w, s):
-        params = base_params.update(epsilon_w=w, epsilon_s=s)
-        tt, yy = model(params=params, t1=t1, E0=E0)
-        N = tt.shape[0]
-        dt = (tt[-1] - tt[0]) / (N - 1)
-        S = yy[:,0]
-        Is = yy[:, -(params.n_W + params.n_B + 2)]
-        rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
+        # plot
+        cols = [ # title, label, data, cmap, center_at_one, log
+            ('Rt_final', '$\\mathcal{R}_t$', Rt_g, 'RdBu_r', True, False),
+            ('time_to_below', 'Time to $\\mathcal{R}_t<1$', tRt_g, 'magma', False, True),
+            ('Itot', '$I_\\text{tot}$ (relative to baseline)', Itot_g, 'viridis', False, False),
+            ('peak_Is', 'Peak $I_s$', peakIs_g, 'viridis', False, False),
+        ]
+        for col, (title, label, data, cmap, center_at_one, logscale) in enumerate(cols):
 
-        ### final Rt ###
-        # t_0 = t_Icrit + tau_W+tau_B + 2*sigma
-        crosses = Is >= params.I_crit
-        t_I_crit = jnp.where(jnp.any(crosses), tt[jnp.argmax(crosses)],t1)
-        sd = jnp.sqrt(params.tau_W**2/params.n_W + params.tau_B**2/params.n_B)
-        t_0 = t_I_crit + params.tau_W+params.tau_B + 2.0*sd
-        # t_1 = first time after t_0 S drops below (1 - delta_dep) * S_0
-        depleted = (tt > t_0) & (S < (1.0 - delta_dep) * S[0])
-        t_1 = jnp.where(jnp.any(depleted), tt[jnp.argmax(depleted)], tt[-1])
-        t_1 = jnp.where(t_1 > 10.0*t_0, 10.0*t_0, t_1) # clip at 10*t_0
-        # plain mean over [t_0,t_1]
-        in_window = (tt >= t_0) & (tt <= t_1)
-        n_in = jnp.sum(in_window)
-        mean_Rt = jnp.where(n_in > 0, jnp.sum(rt_true * in_window) / jnp.maximum(n_in, 1), rt_true[-1])
-        # normalised autocorrelation of centred R_t
-        F = jnp.fft.fft(jnp.where(in_window, rt_true - mean_Rt, 0.0), n=2*N)
-        acorr = jnp.real(jnp.fft.ifft(F * jnp.conj(F)))[:N]
-        acorr = acorr / jnp.maximum(acorr[0],1e-12)
-        # T_osc: first local maximum
-        lags = jnp.arange(N) * dt
-        is_local_max = jnp.concatenate([jnp.array([False]), (acorr[1:-1] > acorr[:-2]) & (acorr[1:-1] > acorr[2:]), jnp.array([False])])
-        has_period = jnp.any(is_local_max)
-        T_osc = jnp.argmax(is_local_max) * dt
-        # largest m with t_0 + m * T_osc <= t_1
-        window_length = t_1 - t_0
-        m = jnp.where(has_period, jnp.floor(window_length / jnp.maximum(T_osc,1e-9)).astype(jnp.int32), jnp.int32(0))
-        # period-aligned mean
-        M = window_length / jnp.maximum(T_osc,1e-9)
-        m_floor = jnp.floor(M)
-        alpha = M - m_floor
-        t_end_floor = t_0 + m_floor * T_osc
-        window_floor = (tt >= t_0) & (tt <= t_end_floor)
-        mean_floor = jnp.sum(rt_true * window_floor) / jnp.maximum(jnp.sum(window_floor), 1)
-        t_end_ceil = t_0 + (m_floor + 1.0) * T_osc
-        window_ceil = (tt >= t_0) & (tt <= t_end_ceil) & (t_end_ceil <= t_1)
-        mean_ceil = jnp.sum(rt_true * window_ceil) / jnp.maximum(jnp.sum(window_ceil), 1)
-        period_aligned_mean = jnp.where(t_end_ceil <= t_1, (1.0-alpha)*mean_floor + alpha*mean_ceil, mean_floor)
-        Rt_final = jnp.where(has_period & (m >= 1), period_aligned_mean, mean_Rt)
+            # normalisation
+            vals = np.concatenate([d.ravel() for d in data.values()])
+            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+            if center_at_one:
+                d = max(abs(vmin - 1.0), abs(vmax - 1.0))
+                norm = mpl.colors.Normalize(vmin=1.0 - d, vmax=1.0 + d)
+            elif logscale:
+                norm = mpl.colors.LogNorm(vmin=np.max([vmin,1]), vmax=np.max([vmax,1]))
+            else:
+                norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
 
-        # other metrics
-        time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
-        Itot = yy[0,0] - yy[-1,0]
-        peak_Is = jnp.max(Is)
-        return Rt_final, time_to_below, Itot, peak_Is
-    return jax.vmap(jax.vmap(metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
-
+            # meshgrid
+            fig, ax = plt.subplots(figsize=(6,6))
+            mesh = ax.pcolormesh(np.array(taus_B), np.array(taus_W), data[pathogen], cmap=cmap, norm=norm, shading='auto', rasterized=True)
+            ax.set_aspect('equal')
+            # contours, titles, labels
+            if center_at_one: ax.contour(np.array(taus_B), np.array(taus_W), data[pathogen], levels=[1.0], colors='black', linewidths=1.0, linestyles='--')
+            ax.set_title(f'{label} ({pathogen})', fontsize=14)
+            ax.set_xlabel('Behavioural delay ($\\tau_B$)', fontsize=11)
+            ax.set_ylabel('Reporting delay ($\\tau_W$)', fontsize=11)
+            # colorbar
+            cbar = fig.colorbar(mesh, ax=ax, shrink=0.85, aspect=25, pad=0.02)
+            cbar.set_label(label, fontsize=12, labelpad=8)
+            if center_at_one: cbar.ax.axhline(1.0, color='black', linewidth=1.0)
+            #save and close
+            if title=='Rt_final':
+                fig.savefig(output.Rt_final, dpi=image_resolution, bbox_inches='tight')
+            elif title=='time_to_below':
+                fig.savefig(output.time_to_below, dpi=image_resolution, bbox_inches='tight')
+            elif title=='Itot':
+                fig.savefig(output.Itot, dpi=image_resolution, bbox_inches='tight')
+            elif title=='peak_Is':
+                fig.savefig(output.peak_Is, dpi=image_resolution, bbox_inches='tight')
+            plt.close(fig)
 
 rule plot_main_intervention_grid:
     output:
@@ -1001,7 +965,7 @@ rule plot_nonlinear_response_analysis:
         axes[2, 1].grid(True, alpha=0.3)
         fig.suptitle("Wastewater Warning Response Analysis", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-        plt.savefig(output.plot, dpi=image_resolution)
+        plt.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
 rule plot_asymptomatic_landscape:
     output:
@@ -1039,7 +1003,7 @@ rule plot_asymptomatic_landscape:
         plt.xlabel('Proportion presymptomatic and asymptomatic')
         plt.ylabel('Basic reproductive number')
         plt.legend(handles=[Patch(facecolor=colors[pathogen], label=pathogen) for pathogen in pathogens], loc='upper right')
-        plt.savefig(output.plot, dpi=image_resolution)
+        plt.savefig(output.plot, dpi=image_resolution); plt.close()
 
 
 def arg_L(omega, tau_W, tau_B, n_W=3, n_B=1):
@@ -1066,7 +1030,7 @@ rule plot_gain_margins:
         taus_B = np.linspace(1.0, 31.0, 100)
         MG = np.array([[gain_margin(tw, tb) for tb in taus_B] for tw in taus_W])
         fig, ax = plot_heatmap(taus_B, taus_W, MG, cmap='magma_r', contour_levels=[0.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Gain margin')
-        fig.savefig(output.plot, dpi=image_resolution)
+        fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
 
 rule plot_delay_margins:
@@ -1094,8 +1058,9 @@ rule plot_delay_margins:
         taus_B = np.linspace(1.0, 31.0, 100)
         MD = np.array([[delay_margin(tw, tb) for tb in taus_B] for tw in taus_W])
         fig, ax = plot_heatmap(taus_B, taus_W, MD, cmap='magma_r', contour_levels=[0.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Delay margin')
-        fig.savefig(output.plot, dpi=image_resolution)
+        fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
+# TODO: move functions to new stability script
 def _characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W=3, n_B=1):
     """pW * pB + L0 = 0."""
     P = np.convolve(
@@ -1242,8 +1207,212 @@ rule plot_period_and_damping_scatter:
         plt.tight_layout()
         plt.savefig(output.damping, dpi=image_resolution); plt.close(fig)
 
+
+# TODO: overlay deterministic trajectory
+# TODO: out of memory for SC2 1m
+rule gillespie:
+    output:
+        traj="{outdir}/gillespie/gillespie_traj_{pathogen}_{N}.png",
+        hist="{outdir}/gillespie/gillespie_hist_{pathogen}_{N}.png",
+    run:
+        os.makedirs(os.path.dirname(output.traj), exist_ok=True); os.makedirs(os.path.dirname(output.hist), exist_ok=True)
+        fig_traj, ax_traj, fig_hist, ax_hist = gillespie_models[wildcards.pathogen](params=parameters[wildcards.pathogen], N=int(wildcards.N), t1=1000.0)
+        N = float(wildcards.N)
+        tt, yy = models[wildcards.pathogen](params=parameters[wildcards.pathogen], t1=1000.0, E0=1/N)
+        S = yy.T[0] * N
+        ax_traj.plot(tt, S, 'k-', linewidth=2)
+        ax_traj.set_xlim([0,500]) if N>100 else ax_traj.set_xlim([0,250])
+        fig_traj.savefig(output.traj, dpi=image_resolution)
+        fig_hist.savefig(output.hist, dpi=image_resolution)
+        plt.close('all')
+
+rule simulate_stochastic_outcomes:
+    output:
+        npz="{outdir}/gillespie/stochastic_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
+    run:
+        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
+        num_simulations = int(wildcards.num_simulations)
+        N = int(wildcards.N)
+        res = int(wildcards.resolution)
+        t1 = 2000.0
+
+        eps_ww = np.linspace(0.0, 0.999, res)
+        eps_ss = np.linspace(0.0, 0.999, res)
+
+        Rt_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        Rt_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        time_to_below_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        time_to_below_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        Itot_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        Itot_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        peak_Is_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        peak_Is_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        extinction_time_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        extinction_time_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+
+        for i, ew in enumerate(eps_ww):
+            for j, es in enumerate(eps_ss):
+                Rt_list = []
+                time_to_below_list = []
+                Itot_list = []
+                peak_Is_list = []
+                extinction_time_list = []
+
+                ps = Params.for_SEIPAR(epsilon_s=float(es), epsilon_w=float(ew))
+                for k in range(num_simulations):
+                    tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
+                    
+                    rt_true = ps.R_0 * ps.rho * yy[:,-1] * yy[:,0]
+                    time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
+                    Itot = yy[0,0] - yy[-1,0]
+                    peak_Is = jnp.max(yy[:, -(ps.n_W + ps.n_B + 2)])
+                    extinction_time = tt[-1]
+                    Rt = 1.0 # TODO
+
+                    # Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1)
+                    Rt_list.append(Rt)
+                    time_to_below_list.append(time_to_below)
+                    Itot_list.append(Itot / N)
+                    peak_Is_list.append(peak_Is / N)
+                    extinction_time_list.append(extinction_time)
+
+                Rt_grid[i,j] = np.mean(Rt_list)
+                Rt_var_grid[i,j] = np.var(Rt_list)
+                time_to_below_grid[i,j] = np.mean(time_to_below_list)
+                time_to_below_var_grid[i,j] = np.var(time_to_below_list)
+                Itot_grid[i,j] = np.mean(Itot_list)
+                Itot_var_grid[i,j] = np.var(Itot_list)
+                peak_Is_grid[i,j] = np.mean(peak_Is_list)
+                peak_Is_var_grid[i,j] = np.var(peak_Is_list)
+                extinction_time_grid[i,j] = np.percentile(extinction_time_list, 95)
+                extinction_time_var_grid[i,j] = np.var(extinction_time_list)
+        
+        np.savez_compressed(
+            output.npz,
+            Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid,
+            time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid,
+            Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid,
+            peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid,
+            extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid
+        )
+
+rule plot_stochastic_cumulative_extinction_probability:
+    output:
+        plot ="{outdir}/gillespie/cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}.png",
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        N = float(wildcards.N)
+        eps_s = float(wildcards.eps_s)
+        eps_w = float(wildcards.eps_w)
+        t1 = 2000.0
+        num_simulations = 1000
+        extinction_times = []
+        ps = Params.for_SEIPAR(epsilon_s=eps_s, epsilon_w=eps_w)
+
+        # simulations
+        for _ in range(num_simulations):
+            times, _ = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
+            extinction_times.append((times[-1]))
+
+        # cumulative extinction times and CIs
+        sorted_times = np.sort(extinction_times)
+        cumulative_prob = np.arange(1, num_simulations+1) / num_simulations
+        z_score = 1.96
+        std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / num_simulations)
+        ci_lower = np.maximum(0, cumulative_prob - z_score*std_error)
+        ci_upper = np.minimum(1, cumulative_prob + z_score*std_error)
+
+        # plot
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax1.step(sorted_times, cumulative_prob, where='post', label='Cumulative extinction probability', color='blue', linewidth=2)
+        ax1.fill_between(sorted_times, ci_lower, ci_upper, step='post', color='blue', alpha=0.25)
+
+        # median time
+        median_time = np.median(extinction_times)
+        median_time_ci_lower = sorted_times[np.argmax(ci_upper >= 0.5)]
+        median_time_ci_upper = sorted_times[np.argmax(ci_lower >= 0.5)]
+        ax1.axvline(median_time, color='red', label=f'Median: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
+        ax1.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
+
+        # 95% time
+        time_95 = np.percentile(extinction_times, 95)
+        time_95_ci_lower = sorted_times[np.argmax(ci_upper >= 0.95)]
+        time_95_ci_upper = sorted_times[np.argmax(ci_lower >= 0.95)]
+        ax1.axvline(time_95, color='orange', label=f'95%: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
+        ax1.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
+
+        # deterministic susceptible trajectory
+        model = models[wildcards.pathogen]
+        ps = parameters[wildcards.pathogen].update(epsilon_s=eps_s, epsilon_w=eps_w)
+        tt, yy = model(params=ps, t1=t1, E0=1/N)
+        ax1.plot(tt, yy.T[0], color='green', label='Deterministic susceptible trajectory')
+
+        # histogram
+        ax2 = ax1.twinx()
+        ax2.hist(extinction_times, bins=100, density=True, color='gray', alpha=0.3, label='Extinction times histogram')
+        ax2.set_ylabel('Density', color='gray', fontsize=12)
+        ax2.tick_params(axis='y', labelcolor='gray')
+
+        # styling
+        plt.title(f'Cumulative extinction probability ({wildcards.pathogen}, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$)', fontsize=14)
+        ax1.set_xlabel('Days', fontsize=12)
+        ax1.set_ylim(0, 1.05)
+        ax1.set_xlim(-50, max(extinction_times))
+        lines_1, labels_1 = ax1.get_legend_handles_labels()
+        lines_2, labels_2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines_1+lines_2, labels_1+labels_2, loc='best')
+        ax1.grid(True, alpha=0.5)
+        fig.tight_layout()
+        plt.savefig(output.plot, dpi=image_resolution); plt.close()
+
+rule plot_stochastic_intervention_grid:
+    input:
+        npz="{outdir}/gillespie/stochastic_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz"
+    output:
+        plot="{outdir}/gillespie/{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        
+        res = int(wildcards.resolution)
+        metric = wildcards.metric
+        eps_ww = np.linspace(0.0, 0.999, res)
+        eps_ss = np.linspace(0.0, 0.999, res)
+
+        data = np.load(input.npz)[f"{metric}_grid"]
+        if metric[-1] == 'r': data /= np.load(input.npz)[f"{metric[:-4]}_grid"]
+        
+        fig, ax = plot_heatmap(
+            eps_ww, eps_ss, data.T, 
+            xlabel='Warning response efficacy $\\varepsilon_w$', 
+            ylabel='Isolation efficacy $\\varepsilon_s$',
+            title={
+                "Rt": "Average Final $R_t$",
+                "Rt_var": "CV of Final $R_t$",
+                "time_to_below": "Average Time to $R_t < 1$",
+                "time_to_below_var": "CV of Time to $R_t < 1$",
+                "Itot": "Average Proportion Infected",
+                "Itot_var": "CV of Proportion Infected",
+                "peak_Is": "Average Peak Symptomatic Proportion",
+                "peak_Is_var": "CV of Peak Symptomatic Proportion",
+                "extinction_time": "95th Percentile Extinction Time",
+                "extinction_time_var": "CV of Extinction Time"
+                }.get(metric, metric)
+        )
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+
 rule all:
     input:
+        expand(
+            rules.plot_stochastic_cumulative_extinction_probability.output.plot, outdir=outdir,
+            pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8],
+        ),
+        expand(
+            rules.plot_stochastic_intervention_grid.output.plot, outdir=outdir,
+            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[10],
+            metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"]
+        ),
+            
         expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_efficacy_grid_Itot_final.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
@@ -1267,7 +1436,7 @@ rule all:
         # expand(rules.baseline_trajectories_no_asymptomatic.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
         expand(rules.plot_true_vs_reported_Rt_scenarios_vary_k.output, pathogen=pathogens, outdir=outdir, tau_W=[14], tau_B=[7]),
-        expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
+        expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=["SARS-CoV-2"], outdir=outdir, k=[10]), #k=[1, 3, 10, 30],),
         expand(rules.plot_response_function.output.plot, outdir=outdir),
         expand(rules.plot_main_intervention_grid.output.plot, outdir=outdir),
         expand(rules.plot_R_1_contours.output.plot, outdir=outdir),

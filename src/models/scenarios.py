@@ -73,7 +73,7 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
     _, yy_base = model(params=base_params.update(epsilon_w=0.0), t1=t1, E0=E0)
     return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
 
-def outcome_metrics(tt, yy, params, t1, delta_dep):
+def outcome_metrics(tt, yy, params, t1, delta_dep=0.05):
     N = tt.shape[0]
     dt = (tt[-1] - tt[0]) / jnp.maximum(N - 1, 1)
     S = yy[:,0]
@@ -99,7 +99,6 @@ def outcome_metrics(tt, yy, params, t1, delta_dep):
     acorr = jnp.real(jnp.fft.ifft(F * jnp.conj(F)))[:N]
     acorr = acorr / jnp.maximum(acorr[0],1e-12)
     # T_osc: first local maximum
-    lags = jnp.arange(N) * dt
     is_local_max = jnp.concatenate([jnp.array([False]), (acorr[1:-1] > acorr[:-2]) & (acorr[1:-1] > acorr[2:]), jnp.array([False])])
     has_period = jnp.any(is_local_max)
     T_osc = jnp.argmax(is_local_max) * dt
@@ -127,8 +126,7 @@ def outcome_metrics(tt, yy, params, t1, delta_dep):
 
     # oscillation metrics
     rt_reported = yy[:, -(params.n_B + 1)]
-    slice_idx = jnp.maximum(rt_true.shape[0] // 100, 1) 
-    first_100th = rt_true[:slice_idx]
+    first_100th = rt_true[:max(rt_true.shape[0] // 100, 1)]
     amplitude = jnp.max(first_100th) - jnp.min(first_100th)
     above = (rt_reported >= params.R_crit).astype(jnp.int32)
     total_time_above = above.mean() * t1
