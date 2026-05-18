@@ -10,14 +10,14 @@ from typing import Callable
 from models.parameters import Params, logistic_response_function
 
 
-# TODO: also change to oscillation-aligned average here
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: float, t1: float = 100.0, E0: float = 1e-6):
     """Compute a 2D grid of Rt values with wastewater warning response efficacy on the x axis and isolation efficacy on the y axis."""
     def final_R(w, s):
         params = base_params.update(epsilon_w=w, epsilon_s=s)
-        _, yy = model(params=params, t1=t1, E0=E0)
-        return params.R_0 * params.rho * yy[-1, -1] * yy[-1, 0]
+        tt, yy = model(params=params, t1=t1, E0=E0)
+        Rt,_,_,_,_,_,_,_ = outcome_metrics(tt, yy, params, t1, delta_dep=0.05)
+        return Rt #params.R_0 * params.rho * yy[-1, -1] * yy[-1, 0]
     return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
@@ -103,20 +103,11 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05):
     has_period = jnp.any(is_local_max)
     T_osc = jnp.argmax(is_local_max) * dt
     # largest m with t_0 + m * T_osc <= t_1
-    window_length = t_1 - t_0
-    m = jnp.where(has_period, jnp.floor(window_length / jnp.maximum(T_osc,1e-9)).astype(jnp.int32), jnp.int32(0))
+    m = jnp.where(has_period, jnp.floor((t_1-t_0) / jnp.maximum(T_osc,1e-9)).astype(jnp.int32), jnp.int32(0))
     # period-aligned mean
-    M = window_length / jnp.maximum(T_osc,1e-9)
-    m_floor = jnp.floor(M)
-    alpha = M - m_floor
-    t_end_floor = t_0 + m_floor * T_osc
-    window_floor = (tt >= t_0) & (tt <= t_end_floor)
+    window_floor = (tt >= t_0) & (tt <= t_0 + m * T_osc)
     mean_floor = jnp.sum(rt_true * window_floor) / jnp.maximum(jnp.sum(window_floor), 1)
-    t_end_ceil = t_0 + (m_floor + 1.0) * T_osc
-    window_ceil = (tt >= t_0) & (tt <= t_end_ceil) & (t_end_ceil <= t_1)
-    mean_ceil = jnp.sum(rt_true * window_ceil) / jnp.maximum(jnp.sum(window_ceil), 1)
-    period_aligned_mean = jnp.where(t_end_ceil <= t_1, (1.0-alpha)*mean_floor + alpha*mean_ceil, mean_floor)
-    Rt_final = jnp.where(has_period & (m >= 1), period_aligned_mean, mean_Rt)
+    Rt_final = jnp.where(has_period & (m >= 1), mean_floor, mean_Rt)
 
     # other metrics
     time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
