@@ -1317,6 +1317,9 @@ rule simulate_stochastic_outcomes:
                 extinction_time_list = []
 
                 ps = Params.for_SEIPAR(epsilon_s=float(es), epsilon_w=float(ew))
+                alpha = 0.01
+                Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q(ps, eps_w, eps_s)))
+                
                 for k in range(num_simulations):
                     tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
                     if (wildcards.scenario == 'establishment') & (np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest):
