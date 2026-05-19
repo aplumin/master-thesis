@@ -14,14 +14,13 @@ import seaborn as sns
 
 from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W
-from models.gillespie import gillespie_SEIPAR_W, gillespie_SEIAR_W, gillespie_SEIR_W
 from models.scenarios import compute_I_tot_grid, compute_R_grid, compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, compute_I_tot_grid_delayed_ww
 
 
 def plot_heatmap(
     X, Y, Z, 
     cmap='viridis', shading='auto', norm=None,
-    contour_levels=[], contour_colors='black', contour_linestyles=['-'], contour_alpha=1.0,
+    contour_metric = None, contour_levels=[], contour_colors='black', contour_linestyles=['-'], contour_alpha=1.0,
     title=None, title_fontsize=18, title_pad=10,
     xlabel=None, ylabel=None,
     xlabelsize=14, ylabelsize=14,
@@ -35,8 +34,9 @@ def plot_heatmap(
 
     mesh = ax.pcolormesh(X, Y, Z, cmap=cmap, shading=shading, norm=norm)
     
+    if contour_metric is None: contour_metric = Z
     if contour_levels:
-        ax.contour(X, Y, Z, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles, alpha=contour_alpha)
+        ax.contour(X, Y, contour_metric, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles, alpha=contour_alpha)
     
     cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect)
     cbar.set_label(cbar_label, fontsize=cbar_labelsize, labelpad=cbar_labelpad)
@@ -268,55 +268,3 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     # save and close
     plt.savefig(path, dpi=image_resolution, bbox_inches='tight')
     plt.close(g.figure)
-
-
-def run_gillespie_SEIPAR_W(params: Params = Params.for_SEIPAR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
-    """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
-    np.random.seed(seed)
-    times_list = np.zeros(num_simulations)
-
-    fig_traj, ax_traj = plt.subplots()
-    for i in range(num_simulations):
-        times, history = gillespie_SEIPAR_W(params=params, N=N, t1=t1)
-        times_list[i] = times[-1]
-        ax_traj.plot(times, history[:,0], alpha=0.5)
-        ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
-    
-    fig_hist, ax_hist = plt.subplots()
-    ax_hist.hist(times_list, density=True)
-    
-    return fig_traj, ax_traj, fig_hist, ax_hist
-
-def run_gillespie_SEIAR_W(params: Params = Params.for_SEIAR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
-    """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
-    np.random.seed(seed)
-    times_list = np.zeros(num_simulations)
-
-    fig_traj, ax_traj = plt.subplots()
-    for i in range(num_simulations):
-        times, history = gillespie_SEIAR_W(params=params, N=N, t1=t1)
-        times_list[i] = times[-1]
-        ax_traj.plot(times, history[:,0], alpha=0.5)
-        ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
-    
-    fig_hist, ax_hist = plt.subplots()
-    ax_hist.hist(times_list, density=True)
-    
-    return fig_traj, ax_traj, fig_hist, ax_hist
-
-def run_gillespie_SEIR_W(params: Params = Params.for_SEIR(), N: int = 1000, t1: int = 100.0, num_simulations: int = 1000, seed: int = 0):
-    """Return two plots: 1. trajectories, 2. histogram of times until extinction."""
-    np.random.seed(seed)
-    times_list = np.zeros(num_simulations)
-
-    fig_traj, ax_traj = plt.subplots()
-    for i in range(num_simulations):
-        times, history = gillespie_SEIR_W(params=params, N=N, t1=t1)
-        times_list[i] = times[-1]
-        ax_traj.plot(times, history[:,0], alpha=0.5)
-        ax_traj.scatter(times[-1], history[-1,0], marker='X', alpha=0.5)
-    
-    fig_hist, ax_hist = plt.subplots()
-    ax_hist.hist(times_list, density=True)
-    
-    return fig_traj, ax_traj, fig_hist, ax_hist

@@ -9,6 +9,7 @@ from math import comb
 from functools import partial
 import itertools
 import os
+import concurrent.futures
 
 import matplotlib as mpl; mpl.use('Agg')
 import matplotlib.pyplot as plt
@@ -26,7 +27,6 @@ from models.prcc import SensitivityResults, run_sensitivity_analysis, partial_ra
 from models.plotting import (
     plot_heatmap, plot_trajectory,
     plot_final_R, plot_I_tot, plot_I_tot_delayed_ww, plot_asymptomatic_effect_for_range_of_intervention_efficacies,
-    run_gillespie_SEIPAR_W, run_gillespie_SEIAR_W, run_gillespie_SEIR_W, 
 )
 
 parameters = {
@@ -38,11 +38,6 @@ models = {
     "SARS-CoV-2": simulate_SEIPAR_W,
     "Influenza A": simulate_SEIAR_W,
     "Ebola": simulate_SEIR_W,
-}
-gillespie_models = {
-    "SARS-CoV-2": run_gillespie_SEIPAR_W,
-    "Influenza A": run_gillespie_SEIAR_W,
-    "Ebola": run_gillespie_SEIR_W,
 }
 Rt_times = {
     "SARS-CoV-2": 50.0,
@@ -1208,23 +1203,86 @@ rule plot_period_and_damping_scatter:
         plt.savefig(output.damping, dpi=image_resolution); plt.close(fig)
 
 
-# TODO: overlay deterministic trajectory
-# TODO: out of memory for SC2 1m
-rule gillespie:
+rule plot_stochastic_baseline_trajectories:
     output:
-        traj="{outdir}/gillespie/gillespie_traj_{pathogen}_{N}.png",
-        hist="{outdir}/gillespie/gillespie_hist_{pathogen}_{N}.png",
+        plot ="{outdir}/gillespie/stochastic_baseline_trajectories_{pathogen}_N{N}.png",
     run:
-        os.makedirs(os.path.dirname(output.traj), exist_ok=True); os.makedirs(os.path.dirname(output.hist), exist_ok=True)
-        fig_traj, ax_traj, fig_hist, ax_hist = gillespie_models[wildcards.pathogen](params=parameters[wildcards.pathogen], N=int(wildcards.N), t1=1000.0)
-        N = float(wildcards.N)
-        tt, yy = models[wildcards.pathogen](params=parameters[wildcards.pathogen], t1=1000.0, E0=1/N)
-        S = yy.T[0] * N
-        ax_traj.plot(tt, S, 'k-', linewidth=2)
-        ax_traj.set_xlim([0,500]) if N>100 else ax_traj.set_xlim([0,250])
-        fig_traj.savefig(output.traj, dpi=image_resolution)
-        fig_hist.savefig(output.hist, dpi=image_resolution)
-        plt.close('all')
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        N = int(wildcards.N)
+        t1 = 1000.0
+        num_simulations = 100
+        extinction_times = []
+        ps = Params.for_SEIPAR()
+        E0 = 1/N
+
+        fig, (ax_hist, ax_traj) = plt.subplots(nrows=2, ncols=1, figsize=(6,6), sharex=True, height_ratios=[1,2]) #gridspec_kw={'height_ratios': [1,2]})
+
+        extinction_times = []
+        for _ in range(num_simulations):
+            tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
+            S_traj = yy.T[0]
+            ax_traj.plot(tt, S_traj, alpha=0.05, color=colors[wildcards.pathogen])
+            extinction_times.append(tt[-1])
+
+        ymax = max(extinction_times)
+        tt_det, yy_det = models[wildcards.pathogen](params=ps, t1=t1, E0=E0)
+        S_det = yy_det.T[0] * N
+        ax_traj.plot(tt_det, S_det, color=colors[wildcards.pathogen])
+        ax_traj.set_xlim([0, ymax])
+
+        ax_hist.hist(extinction_times, density=True, color=colors[wildcards.pathogen], bins=int(ymax//10))
+        
+        ax_hist.set_title('Extinction times')
+        ax_traj.set_title('Number of susceptibles')
+        ax_traj.set_xlabel('days')
+        fig.suptitle(f'Stochastic susceptible trajectories ({wildcards.pathogen}, N={N})')
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+def calculate_mt_branching_q(ps, ew, es):
+    def extinction_prob(q):
+        asyx = ps.phi * ps.beta * ps.mu_a_inv * (1-ew/2)
+        presyx = ps.beta * ps.sigma_inv * (1-ew/2)
+        syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
+        return ps.p / (1 + asyx * (1-q)) + (1-ps.p) / ((1 + presyx * (1-q)) * (1 + syx * (1-q))) - q
+    ext_prob = 1.0
+    try: ext_prob = brentq(extinction_prob, 0.0, 1.0-1e-9)
+    except: pass
+    return ext_prob
+
+rule plot_linearised_branching_process_extinction_probabilities:
+    output:
+        plot="{outdir}/gillespie/linearised_branching_process_extinction_probabilities_{pathogen}.png",
+        I_establishment="{outdir}/gillespie/I_establishment_{pathogen}.png",
+
+    run:
+        for path in output: os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        ps = parameters[wildcards.pathogen]
+        eps_ww = np.linspace(0.0, 0.999, 100)
+        eps_ss = np.linspace(0.0, 0.999, 100)
+        qs = np.zeros((len(eps_ww), len(eps_ss)))
+        alpha = 0.01
+        Iest = np.zeros((len(eps_ww), len(eps_ss)))
+
+        for i, ew in enumerate(eps_ww):
+            for j, es in enumerate(eps_ss):
+                q = calculate_mt_branching_q(ps, ew, es)
+                qs[j,i] = q
+                Iest[j,i] = np.ceil(np.log(alpha)/np.log(q))
+
+        deterministic_Rt_grid = compute_R_grid(models[wildcards.pathogen], parameters[wildcards.pathogen]._replace(k=1), eps_ww, eps_ss, Rt_times[wildcards.pathogen])
+        fig, ax = plot_heatmap(eps_ww, eps_ss, qs, cmap='magma_r', 
+            contour_metric=deterministic_Rt_grid, contour_levels=[1.0], contour_colors='white',
+            xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
+            title='Linearised branching process extinction probabilities')
+        plt.savefig(output.plot, dpi=image_resolution); plt.close()
+
+        fig, ax = plot_heatmap(eps_ww, eps_ss, Iest, cmap='plasma', 
+            norm=mpl.colors.LogNorm(vmin=np.max([float(np.nanmin(Iest)),1]), vmax=np.max([float(np.nanmax(Iest)),1])),
+            xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
+            title='$I_\\text{establishment}$')
+        plt.savefig(output.I_establishment, dpi=image_resolution); plt.close()
+
 
 rule simulate_stochastic_outcomes:
     output:
@@ -1262,14 +1320,14 @@ rule simulate_stochastic_outcomes:
                 for k in range(num_simulations):
                     tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
                     
-                    rt_true = ps.R_0 * ps.rho * yy[:,-1] * yy[:,0]
-                    time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
-                    Itot = yy[0,0] - yy[-1,0]
-                    peak_Is = jnp.max(yy[:, -(ps.n_W + ps.n_B + 2)])
-                    extinction_time = tt[-1]
-                    Rt = 1.0 # TODO
+                    # rt_true = ps.R_0 * ps.rho * yy[:,-1] * yy[:,0]
+                    # time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
+                    # Itot = yy[0,0] - yy[-1,0]
+                    # peak_Is = jnp.max(yy[:, -(ps.n_W + ps.n_B + 2)])
+                    # extinction_time = tt[-1]
+                    # Rt = 1.0 # TODO
 
-                    # Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1)
+                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1)
                     Rt_list.append(Rt)
                     time_to_below_list.append(time_to_below)
                     Itot_list.append(Itot / N)
@@ -1295,6 +1353,128 @@ rule simulate_stochastic_outcomes:
             peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid,
             extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid
         )
+
+# TODO: integrate with non-established if it works
+rule simulate_stochastic_outcomes_established:
+    output:
+        npz="{outdir}/gillespie/established_stochastic_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
+    run:
+        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
+        num_simulations = int(wildcards.num_simulations)
+        N = int(wildcards.N)
+        res = int(wildcards.resolution)
+        t1 = 2000.0
+        alpha = 0.01
+
+        eps_ww = np.linspace(0.0, 0.999, res)
+        eps_ss = np.linspace(0.0, 0.999, res)
+
+        Rt_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        Rt_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        time_to_below_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        time_to_below_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        Itot_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        Itot_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        peak_Is_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        peak_Is_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        extinction_time_grid = np.zeros((len(eps_ww), len(eps_ss)))
+        extinction_time_var_grid = np.zeros((len(eps_ww), len(eps_ss)))
+
+        for i, ew in enumerate(eps_ww):
+            for j, es in enumerate(eps_ss):
+                Rt_list = []
+                time_to_below_list = []
+                Itot_list = []
+                peak_Is_list = []
+                extinction_time_list = []
+
+                ps = Params.for_SEIPAR(epsilon_s=float(es), epsilon_w=float(ew))
+                Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q(ps, ew, es)))
+                
+                for k in range(num_simulations):
+                    tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
+
+                    Itot = yy[0,0] - yy[-1,0]
+                    if Itot < Iest: continue
+
+                    rt_true = ps.R_0 * ps.rho * yy[:,-1] * yy[:,0]
+                    time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
+                    peak_Is = jnp.max(yy[:, -(ps.n_W + ps.n_B + 2)])
+                    extinction_time = tt[-1]
+                    Rt = 1.0 # TODO
+
+                    # Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1)
+                    Rt_list.append(Rt)
+                    time_to_below_list.append(time_to_below)
+                    Itot_list.append(Itot / N)
+                    peak_Is_list.append(peak_Is / N)
+                    extinction_time_list.append(extinction_time)
+
+                Rt_grid[i,j] = np.mean(Rt_list)
+                Rt_var_grid[i,j] = np.var(Rt_list)
+                time_to_below_grid[i,j] = np.mean(time_to_below_list)
+                time_to_below_var_grid[i,j] = np.var(time_to_below_list)
+                Itot_grid[i,j] = np.mean(Itot_list)
+                Itot_var_grid[i,j] = np.var(Itot_list)
+                peak_Is_grid[i,j] = np.mean(peak_Is_list)
+                peak_Is_var_grid[i,j] = np.var(peak_Is_list)
+                percentile_95 = np.nan
+                try: percentile_95 = np.percentile(extinction_time_list, 95)
+                except: pass
+                extinction_time_grid[i,j] = percentile_95
+                extinction_time_var_grid[i,j] = np.var(extinction_time_list)
+        
+        np.savez_compressed(
+            output.npz,
+            Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid,
+            time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid,
+            Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid,
+            peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid,
+            extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid
+        )
+
+# TODO: integrate into full stochastic grid
+rule plot_stochastic_intervention_grid_established:
+    input:
+        npz="{outdir}/gillespie/established_stochastic_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz"
+    output:
+        plot="{outdir}/gillespie/{pathogen}_outcome{metric}_N{N}_sims{num_simulations}_res{resolution}_established.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        N = int(wildcards.N)
+        res = int(wildcards.resolution)
+        metric = wildcards.metric
+        eps_ww = np.linspace(0.0, 0.999, res)
+        eps_ss = np.linspace(0.0, 0.999, res)
+
+        data = np.load(input.npz)[f"{metric}_grid"]
+        if metric[-1] == 'r': data /= np.load(input.npz)[f"{metric[:-4]}_grid"]
+        if metric.startswith("Rt"): data /= N
+        cmap = 'magma' if metric[0] == 'e' else 'viridis'
+
+        deterministic_Rt_grid = compute_R_grid(models[wildcards.pathogen], parameters[wildcards.pathogen]._replace(k=1), eps_ww, eps_ss, Rt_times[wildcards.pathogen], E0=1/N)
+        
+        fig, ax = plot_heatmap(
+            eps_ww, eps_ss, data.T, 
+            cmap=cmap,
+            contour_metric=deterministic_Rt_grid, contour_levels=[1.0], contour_colors='red',
+            xlabel='Warning response efficacy $\\varepsilon_w$', 
+            ylabel='Isolation efficacy $\\varepsilon_s$',
+            title={
+                "Rt": "Average Final $R_t$",
+                "Rt_var": "CV of Final $R_t$",
+                "time_to_below": "Average Time to $R_t < 1$",
+                "time_to_below_var": "CV of Time to $R_t < 1$",
+                "Itot": "Average Proportion Infected",
+                "Itot_var": "CV of Proportion Infected",
+                "peak_Is": "Average Peak Symptomatic Proportion",
+                "peak_Is_var": "CV of Peak Symptomatic Proportion",
+                "extinction_time": "95th Percentile Extinction Time",
+                "extinction_time_var": "CV of Extinction Time"
+                }.get(metric, metric)
+        )
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
 
 rule plot_stochastic_cumulative_extinction_probability:
     output:
@@ -1372,7 +1552,7 @@ rule plot_stochastic_intervention_grid:
         plot="{outdir}/gillespie/{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        
+        N = int(wildcards.N)
         res = int(wildcards.resolution)
         metric = wildcards.metric
         eps_ww = np.linspace(0.0, 0.999, res)
@@ -1380,9 +1560,15 @@ rule plot_stochastic_intervention_grid:
 
         data = np.load(input.npz)[f"{metric}_grid"]
         if metric[-1] == 'r': data /= np.load(input.npz)[f"{metric[:-4]}_grid"]
+        if metric.startswith("Rt"): data /= N
+        cmap = 'magma' if metric[0] == 'e' else 'viridis'
+
+        deterministic_Rt_grid = compute_R_grid(models[wildcards.pathogen], parameters[wildcards.pathogen]._replace(k=1), eps_ww, eps_ss, Rt_times[wildcards.pathogen], E0=1/N)
         
         fig, ax = plot_heatmap(
             eps_ww, eps_ss, data.T, 
+            cmap=cmap,
+            contour_metric=deterministic_Rt_grid, contour_levels=[1.0], contour_colors='red',
             xlabel='Warning response efficacy $\\varepsilon_w$', 
             ylabel='Isolation efficacy $\\varepsilon_s$',
             title={
@@ -1409,8 +1595,17 @@ rule all:
         ),
         expand(
             rules.plot_stochastic_intervention_grid.output.plot, outdir=outdir,
-            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[10],
-            metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"]
+            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[4],
+            metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"],
+        ),
+        expand(
+            rules.plot_stochastic_intervention_grid_established.output.plot, outdir=outdir,
+            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[4],
+            metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"],
+        ),
+        expand(
+            rules.plot_linearised_branching_process_extinction_probabilities.output, outdir=outdir,
+            pathogen=["SARS-CoV-2"],
         ),
             
         expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens, outdir=outdir),
@@ -1420,8 +1615,8 @@ rule all:
         expand(rules.plot_prcc_monotonicity.output.plot, outdir=outdir, pathogen=pathogens, scenario=prcc_scenarios, outcome=prcc_outcomes),
         expand(rules.plot_prcc_grid.output.plot, outdir=outdir),
         expand(rules.plot_combined_sensitivity_grid.output.plot, outdir=outdir),
-        expand(rules.gillespie.output, outdir=outdir, pathogen=["SARS-CoV-2"], #pathogens,
-            N=[100,100000], # N=gillespie_popsizes,
+        expand(rules.plot_stochastic_baseline_trajectories.output, outdir=outdir, pathogen=["SARS-CoV-2"], #pathogens,
+            N=[100, 50_000, 500_000] #,100000], # N=gillespie_popsizes,
         ),
         expand(rules.plot_trajectory.output.plot, outdir=outdir, pathogen=pathogens,
             epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8],
