@@ -1394,16 +1394,10 @@ rule simulate_stochastic_outcomes_established:
                 for k in range(num_simulations):
                     tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
 
-                    Itot = yy[0,0] - yy[-1,0]
-                    if Itot < Iest: continue
+                    # use peak Itot for establishment not total attack rate
+                    if np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest: continue
 
-                    rt_true = ps.R_0 * ps.rho * yy[:,-1] * yy[:,0]
-                    time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
-                    peak_Is = jnp.max(yy[:, -(ps.n_W + ps.n_B + 2)])
-                    extinction_time = tt[-1]
-                    Rt = 1.0 # TODO
-
-                    # Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1)
+                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1)
                     Rt_list.append(Rt)
                     time_to_below_list.append(time_to_below)
                     Itot_list.append(Itot / N)
@@ -1451,13 +1445,19 @@ rule plot_stochastic_intervention_grid_established:
         if metric[-1] == 'r': data /= np.load(input.npz)[f"{metric[:-4]}_grid"]
         if metric.startswith("Rt"): data /= N
         cmap = 'magma' if metric[0] == 'e' else 'viridis'
+        norm = None
+        contour_colors='white'
+        if metric == 'Rt':
+            cmap='RdBu_r'
+            norm=mpl.colors.CenteredNorm(vcenter=1.0)
+            contour_colors='black'
 
         deterministic_Rt_grid = compute_R_grid(models[wildcards.pathogen], parameters[wildcards.pathogen]._replace(k=1), eps_ww, eps_ss, Rt_times[wildcards.pathogen], E0=1/N)
         
         fig, ax = plot_heatmap(
             eps_ww, eps_ss, data.T, 
-            cmap=cmap,
-            contour_metric=deterministic_Rt_grid, contour_levels=[1.0], contour_colors='red',
+            cmap=cmap, norm=norm,
+            contour_metric=deterministic_Rt_grid, contour_levels=[1.0], contour_colors=contour_colors,
             xlabel='Warning response efficacy $\\varepsilon_w$', 
             ylabel='Isolation efficacy $\\varepsilon_s$',
             title={
@@ -1478,7 +1478,7 @@ rule plot_stochastic_intervention_grid_established:
 
 rule plot_stochastic_cumulative_extinction_probability:
     output:
-        plot ="{outdir}/gillespie/cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}.png",
+        plot ="{outdir}/gillespie/cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}_scenario_{scenario}.png",
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = float(wildcards.N)
@@ -1486,19 +1486,33 @@ rule plot_stochastic_cumulative_extinction_probability:
         eps_w = float(wildcards.eps_w)
         t1 = 2000.0
         num_simulations = 1000
-        extinction_times = []
+        initial_fadeout_times = []
+        established_extinction_times = []
+
         ps = Params.for_SEIPAR(epsilon_s=eps_s, epsilon_w=eps_w)
+
+        alpha = 0.01
+        Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q(ps, eps_w, eps_s)))
 
         # simulations
         for _ in range(num_simulations):
-            times, _ = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
-            extinction_times.append((times[-1]))
+            tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
+            I = yy[:,2] + yy[:,3] + yy[:,4]
+            if np.max(I) < Iest:
+                initial_fadeout_times.append((tt[-1]))
+            else:
+                established_extinction_times.append((tt[-1]))
+
+        if wildcards.scenario == 'establishment':
+            extinction_times = established_extinction_times
+        else:
+            extinction_times = np.concatenate([established_extinction_times, initial_fadeout_times])
 
         # cumulative extinction times and CIs
         sorted_times = np.sort(extinction_times)
-        cumulative_prob = np.arange(1, num_simulations+1) / num_simulations
+        cumulative_prob = np.arange(1, sorted_times.shape[0]+1) / sorted_times.shape[0]
         z_score = 1.96
-        std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / num_simulations)
+        std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / sorted_times.shape[0])
         ci_lower = np.maximum(0, cumulative_prob - z_score*std_error)
         ci_upper = np.minimum(1, cumulative_prob + z_score*std_error)
 
@@ -1534,7 +1548,7 @@ rule plot_stochastic_cumulative_extinction_probability:
         ax2.tick_params(axis='y', labelcolor='gray')
 
         # styling
-        plt.title(f'Cumulative extinction probability ({wildcards.pathogen}, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$)', fontsize=14)
+        plt.title(f'Cumulative extinction probability ({wildcards.pathogen}, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$, {wildcards.scenario})', fontsize=14)
         ax1.set_xlabel('Days', fontsize=12)
         ax1.set_ylim(0, 1.05)
         ax1.set_xlim(-50, max(extinction_times))
@@ -1562,13 +1576,19 @@ rule plot_stochastic_intervention_grid:
         if metric[-1] == 'r': data /= np.load(input.npz)[f"{metric[:-4]}_grid"]
         if metric.startswith("Rt"): data /= N
         cmap = 'magma' if metric[0] == 'e' else 'viridis'
+        norm = None
+        contour_colors='white'
+        if metric == 'Rt':
+            cmap='RdBu_r'
+            norm=mpl.colors.CenteredNorm(vcenter=1.0)
+            contour_colors='black'
 
         deterministic_Rt_grid = compute_R_grid(models[wildcards.pathogen], parameters[wildcards.pathogen]._replace(k=1), eps_ww, eps_ss, Rt_times[wildcards.pathogen], E0=1/N)
         
         fig, ax = plot_heatmap(
             eps_ww, eps_ss, data.T, 
-            cmap=cmap,
-            contour_metric=deterministic_Rt_grid, contour_levels=[1.0], contour_colors='red',
+            cmap=cmap, norm=norm,
+            contour_metric=deterministic_Rt_grid, contour_levels=[1.0], contour_colors=contour_colors,
             xlabel='Warning response efficacy $\\varepsilon_w$', 
             ylabel='Isolation efficacy $\\varepsilon_s$',
             title={
@@ -1591,7 +1611,7 @@ rule all:
     input:
         expand(
             rules.plot_stochastic_cumulative_extinction_probability.output.plot, outdir=outdir,
-            pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8],
+            pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8], scenario=['establishment', 'all'],
         ),
         expand(
             rules.plot_stochastic_intervention_grid.output.plot, outdir=outdir,
