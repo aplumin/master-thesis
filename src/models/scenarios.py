@@ -126,7 +126,7 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05):
     return Rt_final, time_to_below, Itot, peak_Is, extinction_time, amplitude, total_time_above, num_crossings
 
 @partial(jax.jit, static_argnames=['model', 't1'])
-def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, tRt=None, delta_dep=0.05):
+def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, delta_dep=0.05):
     def wrap_metrics(w, s):
             params = base_params.update(epsilon_w=w, epsilon_s=s)
             tt, yy = model(params=params, t1=t1, E0=E0)
@@ -135,7 +135,7 @@ def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, tRt=None, delta_
     return jax.vmap(jax.vmap(wrap_metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
-def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, tRt=None, t1=10000.0, E0=1e-6, delta_dep=0.05):
+def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05):
     def wrap_delay_metrics(tau_W, tau_B):
         params = base_params.update(tau_W=tau_W, tau_B=tau_B)
         tt, yy = model(params=params, t1=t1) 
