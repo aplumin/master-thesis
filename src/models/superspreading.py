@@ -13,7 +13,7 @@ def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, k_ss: float, a_
     n_W = params.n_W
     n_B = params.n_B
     num_mass_compartments = 6 # S,E,Ia,Ip,Is,R
-    num_reactions = 6 # S->E, E->Ip, E->Is, Ip->Is, Ia->R, Is->R
+    num_reactions = 8 # S(Ia)->E, S(Ip)->E, S(Is)->E, E->Ip, E->Is, Ip->Is, Ia->R, Is->R
     W_start = num_mass_compartments
     B_start = num_mass_compartments + n_W
     num_states = num_mass_compartments + n_W + n_B
