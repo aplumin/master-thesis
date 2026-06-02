@@ -73,12 +73,12 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
     _, yy_base = model(params=base_params.update(epsilon_w=0.0), t1=t1, E0=E0)
     return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
 
-def outcome_metrics(tt, yy, params, t1, delta_dep=0.05):
-    N = tt.shape[0]
-    dt = (tt[-1] - tt[0]) / jnp.maximum(N - 1, 1)
-    S = yy[:,0]
-    Is = yy[:, -(params.n_W + params.n_B + 2)]
-    rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
+def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1):
+    N_t = tt.shape[0]
+    dt = (tt[-1] - tt[0]) / jnp.maximum(N_t - 1, 1)
+    S = yy[:,0] / population_size
+    Is = yy[:, -(params.n_W + params.n_B + 2)] / population_size
+    rt_true = params.R_0 * params.rho * yy[:,-1] * S
 
     ### final Rt ###
     # t_0 = t_Icrit + tau_W+tau_B + 2*sigma
@@ -95,8 +95,8 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05):
     n_in = jnp.sum(in_window)
     mean_Rt = jnp.where(n_in > 0, jnp.sum(rt_true * in_window) / jnp.maximum(n_in, 1), rt_true[-1])
     # normalised autocorrelation of centred R_t
-    F = jnp.fft.fft(jnp.where(in_window, rt_true - mean_Rt, 0.0), n=2*N)
-    acorr = jnp.real(jnp.fft.ifft(F * jnp.conj(F)))[:N]
+    F = jnp.fft.fft(jnp.where(in_window, rt_true - mean_Rt, 0.0), n=2*N_t)
+    acorr = jnp.real(jnp.fft.ifft(F * jnp.conj(F)))[:N_t]
     acorr = acorr / jnp.maximum(acorr[0],1e-12)
     # T_osc: first local maximum
     is_local_max = jnp.concatenate([jnp.array([False]), (acorr[1:-1] > acorr[:-2]) & (acorr[1:-1] > acorr[2:]), jnp.array([False])])
@@ -111,7 +111,7 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05):
 
     # other metrics
     time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
-    Itot = yy[0,0] - yy[-1,0]
+    Itot = S[0] - S[-1]
     peak_Is = jnp.max(Is)
     extinction_time = tt[-1]
 
