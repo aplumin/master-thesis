@@ -95,11 +95,11 @@ class Params(NamedTuple):
     @classmethod
     def for_SEIAR(cls,
             R_0: float = 1.46,
-            phi: float = 0.5,
+            phi: float = 0.57,
             gamma_inv: float = 2.62,
             mu_a_inv: float = 3.38,
             mu_s_inv: float = 3.38,
-            p: float = 0.33,
+            p: float = 0.36,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
             k: float = 10.0,

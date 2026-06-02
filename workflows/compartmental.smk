@@ -50,12 +50,12 @@ E0 = 1e-6
 
 best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi; high 1/gamma, 1/mu_s
     "SARS-CoV-2": dict(R_0=2.40, gamma_inv=5.86, sigma_inv=0.52, mu_s_inv=10.0, mu_a_inv=4.63, p=0.230, phi=0.07),
-    "Influenza A": dict(R_0=1.30, gamma_inv=3.12, mu_s_inv=4.69, mu_a_inv=2.06, p=0.33, phi=0.50),
+    "Influenza A": dict(R_0=1.30, gamma_inv=3.12, mu_s_inv=4.69, mu_a_inv=2.06, p=0.32, phi=0.11),
     "Ebola": dict(R_0=1.74, gamma_inv=10.38, mu_s_inv=6.30)
 }
 worst_params_kwargs = { # low high 1/gamma, 1/mu_s; high R0, 1/sigma, 1/mu_a, p, phi
     "SARS-CoV-2": dict(R_0=2.98, gamma_inv=5.06, sigma_inv=3.00, mu_s_inv=7.80, mu_a_inv=5.50, p=0.399, phi=0.28),
-    "Influenza A": dict(R_0=1.70, gamma_inv=2.28, mu_s_inv=2.06, mu_a_inv=4.69, p=0.33, phi=0.50),
+    "Influenza A": dict(R_0=1.70, gamma_inv=2.28, mu_s_inv=2.06, mu_a_inv=4.69, p=0.4, phi=1.57),
     "Ebola": dict(R_0=2.15, gamma_inv=8.80, mu_s_inv=3.70)
 }
 colors = {"SARS-CoV-2": "tab:blue", "Influenza A": "tab:orange", "Ebola": "tab:green"}
@@ -353,22 +353,31 @@ rule export_param_bounds:
                     if p_key in bounds_data[combination]: row.append(f"$[{bounds_data[combination][p_key][0]:g}, {bounds_data[combination][p_key][1]:g}]$")
                     else: row.append("---")
                 f.write(" & ".join(row) + " \\\\\n")
-            f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption{Parameter ranges used for Latin hypercube sampling in the global sensitivity analysis.}\n\\label{tab:prcc-bounds}\n\\end{table}\n")
+            f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Parameter ranges used for sensitivity analysis]{Parameter ranges used for Latin hypercube sampling in the global sensitivity analysis.}\n\\label{tab:prcc-bounds}\n\\end{table}\n")
+
+def _get_generation_time(ps: Params):
+            nom = ps.p * ps.phi * ps.mu_a_inv**2 +(1-ps.p)*(ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
+            denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
+            return ps.gamma_inv + nom / denom
 
 rule calculate_generation_times:
     output:
         txt="{outdir}/compartmental/generation_times.txt"
     run:
         os.makedirs(os.path.dirname(output.txt), exist_ok=True)
-        def _get_generation_time(ps: Params):
-            nom = ps.p * ps.phi * ps.mu_a_inv**2 +(1-ps.p)*(ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
-            denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
-            return ps.gamma_inv + nom / denom
-
         with open(output.txt, 'w') as f:
             for pathogen in pathogens:
                 f.write(f"{pathogen}: {_get_generation_time(parameters[pathogen])}\n")
 
+rule calculate_growth_rates:
+    output:
+        txt="{outdir}/compartmental/growth_rates.txt"
+    run:
+        os.makedirs(os.path.dirname(output.txt), exist_ok=True)
+        with open(output.txt, 'w') as f:
+            for pathogen in pathogens:
+                ps = parameters[pathogen]
+                f.write(f"{pathogen}: {(ps.R_0-1)/_get_generation_time(ps)}\n")
 
 trajectory_end_times = {"SARS-CoV-2": 530, "Influenza A": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
 
@@ -966,7 +975,7 @@ rule plot_asymptomatic_landscape:
     output:
         plot="{outdir}/compartmental/asymptomatic_landscape.png"
     run:
-        def sample(mean_params, best_params, worst_params, n_samples, seed=0):
+        def sample(best_params, worst_params, n_samples, seed=0):
             rng = np.random.default_rng(seed)
             def _sample(name):
                 def _bounds(name):
@@ -990,7 +999,7 @@ rule plot_asymptomatic_landscape:
             mean_params = parameters[pathogen]
             best_params = mean_params.update(**best_params_kwargs[pathogen])
             worst_params = mean_params.update(**worst_params_kwargs[pathogen])
-            R0_s, theta_s = sample(mean_params=mean_params, best_params=best_params, worst_params=worst_params, n_samples=10000)
+            R0_s, theta_s = sample(best_params=best_params, worst_params=worst_params, n_samples=10000)
             plt.scatter(theta_s, R0_s, s=4, alpha=0.1, color=colors[pathogen], edgecolors='none')
 
         plt.xlim([-0.01, 1])
@@ -1211,30 +1220,33 @@ rule plot_stochastic_baseline_trajectories:
         N = int(wildcards.N)
         t1 = 1000.0
         num_simulations = 100
-        extinction_times = []
         ps = Params.for_SEIPAR()
         E0 = 1/N
+        alpha = 0.01
+        Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q(ps,0,0)))
 
-        fig, (ax_hist, ax_traj) = plt.subplots(nrows=2, ncols=1, figsize=(6,6), sharex=True, height_ratios=[1,2])
+        fig, (ax_traj, ax_hist) = plt.subplots(nrows=2, ncols=1, figsize=(6,6), sharex=True, height_ratios=[2,1])
 
-        extinction_times = []
+        initial_fadeout_times = []
+        established_extinction_times = []
+
         for _ in range(num_simulations):
             tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
-            S_traj = yy.T[0]
-            ax_traj.plot(tt, S_traj, alpha=0.05, color=colors[wildcards.pathogen])
-            extinction_times.append(tt[-1])
+            initial_fadeout = np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest
+            if initial_fadeout: initial_fadeout_times.append((tt[-1]))
+            else: established_extinction_times.append((tt[-1]))
+            ax_traj.plot(tt, yy.T[0], alpha=0.05, color='grey' if initial_fadeout else colors[wildcards.pathogen])
 
-        ymax = max(extinction_times)
+        ymax = max(max(initial_fadeout_times), max(established_extinction_times))
         tt_det, yy_det = models[wildcards.pathogen](params=ps, t1=t1, E0=E0)
         S_det = yy_det.T[0] * N
         ax_traj.plot(tt_det, S_det, color=colors[wildcards.pathogen])
         ax_traj.set_xlim([0, ymax])
-
-        ax_hist.hist(extinction_times, density=True, color=colors[wildcards.pathogen], bins=int(ymax//10))
-        
-        ax_hist.set_title('Extinction times')
         ax_traj.set_title('Number of susceptibles')
-        ax_traj.set_xlabel('days')
+
+        ax_hist.hist([initial_fadeout_times, established_extinction_times], density=True, stacked=True, color=['grey', colors[wildcards.pathogen]], bins=int(ymax//10))
+        ax_hist.set_title('Extinction times')
+        ax_hist.set_xlabel('days')
         fig.suptitle(f'Stochastic susceptible trajectories ({wildcards.pathogen}, N={N})')
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
@@ -1318,18 +1330,18 @@ rule simulate_stochastic_outcomes:
 
                 ps = Params.for_SEIPAR(epsilon_s=float(es), epsilon_w=float(ew))
                 alpha = 0.01
-                Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q(ps, eps_w, eps_s)))
-                
+                Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q(ps, ew, es)))
+
                 for k in range(num_simulations):
                     tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
                     if (wildcards.scenario == 'establishment') & (np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest):
                         continue
 
-                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1)
+                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1, population_size=N)
                     Rt_list.append(Rt)
                     time_to_below_list.append(time_to_below)
-                    Itot_list.append(Itot / N)
-                    peak_Is_list.append(peak_Is / N)
+                    Itot_list.append(Itot)
+                    peak_Is_list.append(peak_Is)
                     extinction_time_list.append(extinction_time)
 
                 Rt_grid[i,j] = np.mean(Rt_list)
@@ -1367,26 +1379,22 @@ rule plot_stochastic_intervention_grid:
         metric = wildcards.metric
         eps_ww = np.linspace(0.0, 0.999, res)
         eps_ss = np.linspace(0.0, 0.999, res)
-
         data = np.load(input.npz)[f"{metric}_grid"]
-        if metric[-1] == 'r': data /= np.load(input.npz)[f"{metric[:-4]}_grid"]
-        if metric.startswith("Rt"): data /= N
-        cmap = 'magma' if metric[0] == 'e' else 'RdBu_r' if metric == 'Rt' else 'viridis'
-        norm = mpl.colors.CenteredNorm(vcenter=1.0) if metric == 'Rt' else None
-        contour_colors = 'black' if metric == 'Rt' else 'white'
         
         fig, ax = plot_heatmap(
             eps_ww, eps_ss, data.T, 
-            cmap=cmap, norm=norm, contour_levels=[1.0], contour_colors=contour_colors,
+            cmap='magma' if metric.startswith('extinction_time') else 'RdBu_r' if metric == 'Rt' else 'viridis', 
+            norm=mpl.colors.CenteredNorm(vcenter=1.0) if metric == 'Rt' else None,
+            contour_levels=[1.0], contour_colors='black' if metric == 'Rt' else 'white',
             contour_metric=compute_R_grid(models[wildcards.pathogen], parameters[wildcards.pathogen]._replace(k=1), eps_ww, eps_ss, Rt_times[wildcards.pathogen], E0=1/N), 
             xlabel='Warning response efficacy $\\varepsilon_w$', 
             ylabel='Isolation efficacy $\\varepsilon_s$',
             title={
-                "Rt": "Average Final $R_t$", "Rt_var": "CV of Final $R_t$",
-                "time_to_below": "Average Time to $R_t < 1$", "time_to_below_var": "CV of Time to $R_t < 1$",
-                "Itot": "Average Proportion Infected", "Itot_var": "CV of Proportion Infected",
-                "peak_Is": "Average Peak Symptomatic Proportion", "peak_Is_var": "CV of Peak Symptomatic Proportion",
-                "extinction_time": "95th Percentile Extinction Time", "extinction_time_var": "CV of Extinction Time"
+                "Rt": "Average Final $R_t$", "Rt_var": "Variance of Final $R_t$",
+                "time_to_below": "Average Time to $R_t < 1$", "time_to_below_var": "Variance of Time to $R_t < 1$",
+                "Itot": "Average Proportion Infected", "Itot_var": "Variance of Proportion Infected",
+                "peak_Is": "Average Peak Symptomatic Proportion", "peak_Is_var": "Variance of Peak Symptomatic Proportion",
+                "extinction_time": "95th Percentile Extinction Time", "extinction_time_var": "Variance of Extinction Time"
                 }.get(metric, metric)
         )
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
@@ -1400,7 +1408,7 @@ rule plot_stochastic_cumulative_extinction_probability:
         N = float(wildcards.N)
         eps_s = float(wildcards.eps_s)
         eps_w = float(wildcards.eps_w)
-        t1 = 2000.0
+        t1 = 5000.0
         num_simulations = 1000
         initial_fadeout_times = []
         established_extinction_times = []
@@ -1484,7 +1492,7 @@ rule all:
         ),
         expand(
             rules.plot_stochastic_intervention_grid.output.plot, outdir=outdir,
-            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[4], scenario=['establishment', 'all'],
+            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[10], scenario=['establishment', 'all'],
             metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"],
         ),
         expand(rules.plot_linearised_branching_process_extinction_probabilities.output, outdir=outdir, pathogen=["SARS-CoV-2"]),
@@ -1522,6 +1530,7 @@ rule all:
         expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=outdir),
         expand(rules.plot_asymptomatic_landscape.output.plot, outdir=outdir),
         expand(rules.calculate_generation_times.output.txt, outdir=outdir),
+        expand(rules.calculate_growth_rates.output.txt, outdir=outdir),
         expand(rules.plot_gain_margins.output.plot, outdir=outdir),
         expand(rules.plot_delay_margins.output.plot, outdir=outdir),
         expand(rules.plot_period_and_damping_scatter.output, outdir=outdir, pathogen=pathogens, k=[10, 30, 60, 80]),
