@@ -18,8 +18,8 @@ import seaborn as sns
 
 from models.parameters import Params, logistic_response_function
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
-from models.scenarios import compute_R_grid, compute_asymptomatic_grid_Rt, outcome_metrics, compute_metrics, compute_delay_metrics_grid
-from models.prcc import SensitivityResults, run_sensitivity_analysis, partial_rank_residuals
+from models.metrics import compute_R_grid, compute_asymptomatic_grid_Rt, outcome_metrics, compute_metrics, compute_delay_metrics_grid
+from models.sensitivity import SensitivityResults, run_sensitivity_analysis, partial_rank_residuals
 from models.stability import arg_L, dominant_pole, compute_rt_grid, period_and_damping
 from models.gillespie import gillespie_SEIPAR_W
 from models.plotting import plot_heatmap, plot_trajectory, plot_final_R, plot_I_tot, plot_I_tot_delayed_ww, plot_asymptomatic_effect_for_range_of_intervention_efficacies

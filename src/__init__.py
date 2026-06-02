@@ -1,17 +1,18 @@
 import models.parameters as parameters
 import models.compartmental as compartmental
-import models.gillespie as gillespie
-import models.prcc as prcc
+import models.sensitivity as sensitivity
 import models.stability as stability
+import models.superspreading as superspreading
 import models.plotting as plotting
-import models.scenarios as scenarios
+import models.metrics as metrics
 
 __all__ = [
     "parameters",
     "compartmental",
     "gillespie",
-    "prcc",
+    "superspreading",
+    "sensitivity",
     "stability",
     "plotting",
-    "scenarios",
+    "metrics",
 ]

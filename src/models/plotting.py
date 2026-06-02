@@ -14,7 +14,7 @@ import seaborn as sns
 
 from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W
-from models.scenarios import compute_I_tot_grid, compute_R_grid, compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, compute_I_tot_grid_delayed_ww
+from models.metrics import compute_I_tot_grid, compute_R_grid, compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, compute_I_tot_grid_delayed_ww
 
 
 def plot_heatmap(
