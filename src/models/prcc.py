@@ -3,7 +3,6 @@ Global sensitivity analysis.
 """
 
 from typing import Callable, NamedTuple
-
 import numpy as np
 from scipy.stats import qmc, rankdata
 import jax
@@ -17,21 +16,19 @@ from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_S
 
 
 class SensitivityResults(NamedTuple):
-    param_names:   list[str]
-    bounds:        dict[str, tuple[float, float]]
-    samples:       np.ndarray  # (N, d)
-    outputs:       np.ndarray  # (N,)
-    prcc_mean:     np.ndarray  # (d,)
-    prcc_lower:    np.ndarray  # (d,)
-    prcc_upper:    np.ndarray  # (d,)
-    prcc_samples:  np.ndarray  # (n_bootstrap, d)
-    sobol_S1:      np.ndarray  # (d,)
-    sobol_S1_conf: np.ndarray  # (d,)
-    sobol_ST:      np.ndarray  # (d,)
-    sobol_ST_conf: np.ndarray  # (d,)
+    param_names: list[str]
+    bounds: dict[str, tuple[float, float]]
+    samples: np.ndarray       # (N, d)
+    outputs: np.ndarray       # (N,)
+    prcc_mean: np.ndarray     # (d,)
+    prcc_lower: np.ndarray    # (d,)
+    prcc_upper: np.ndarray    # (d,)
+    prcc_samples: np.ndarray  # (n_bootstrap, d)
+    sobol_S1: np.ndarray      # (d,)
+    sobol_S1_conf: np.ndarray # (d,)
+    sobol_ST: np.ndarray      # (d,)
+    sobol_ST_conf: np.ndarray # (d,)
 
-
-# PARAMETER BOUNDS
 _PATHOGEN_BOUNDS: dict[str, tuple[float, float]] = {
     "R_0":       (1.0, 5.0),
     "gamma_inv": (0.1, 10.0),
@@ -70,7 +67,6 @@ def parameter_bounds(model: Callable, scenario: str = "start") -> dict[str, tupl
     elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
     return bounds
 
-
 # PRCC
 def _construct_latin_hypercube(bounds: dict, n: int, seed: int | None = None) -> np.ndarray:
     """Quasi Monte Carlo sampling from Latin hypercube."""
@@ -82,19 +78,14 @@ def _construct_latin_hypercube(bounds: dict, n: int, seed: int | None = None) ->
     )
     return latin_hypercube
 
-
 def _partial_rank_corr_coeff(latin_hypercube, y_output):
     """Compute the partial rank correlation coefficients between model parameters and output."""
-    ranked_data = np.hstack((
-        np.apply_along_axis(rankdata, 0, latin_hypercube), 
-        rankdata(y_output).reshape(-1, 1)
-    ))
+    ranked_data = np.hstack((np.apply_along_axis(rankdata, 0, latin_hypercube), rankdata(y_output).reshape(-1, 1)))
     C = np.corrcoef(ranked_data, rowvar=False) 
     W = np.linalg.inv(C) # precision matrix
     prcc = np.array([
         -W[i, -1] / np.sqrt(W[i, i] * W[-1, -1]) # -Wxy / sqrt(Wxx * Wyy) for all params x and output y
-            for i in range(latin_hypercube.shape[1])
-        ])
+            for i in range(latin_hypercube.shape[1])])
     return prcc
 
 def calculate_prcc(X: np.ndarray, y: np.ndarray) -> np.ndarray:

@@ -173,13 +173,4 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
         1.0
     )
     gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
-    # gate_W = jnp.where(
-    #     reproductive_number > 2.0,
-    #     1.0,
-    #     jnp.where(
-    #         reproductive_number > 1.0,
-    #         0.5,
-    #         0.0
-    #     )
-    # )
     return 1.0 - params.epsilon_w * gate_W * gate_I
