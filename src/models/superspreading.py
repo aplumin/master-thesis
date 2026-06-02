@@ -7,7 +7,7 @@ from numba import njit
 
 
 @njit(fastmath=True)
-def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, a_ss: bool = False, p_ss: bool = False, s_ss: bool = False):
+def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, k_ss: float, a_ss: bool = False, p_ss: bool = False, s_ss: bool = False):
     """Gillespie algorithm with exact integration of the delay compartments and superspreading."""
     max_events = int(N * 10)
     n_W = params.n_W
@@ -39,7 +39,6 @@ def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, a_ss: bool = Fa
     xi_W = float(n_W) / params.tau_W
     xi_B = float(n_B) / params.tau_B
 
-    k_ss = params.k_ss
     p_nb = k_ss / (k_ss + 1.0) if k_ss > 0.0 else 1.0
     can_superspread = k_ss > 0.0
     superspreading_flags = (a_ss and can_superspread, p_ss and can_superspread, s_ss and can_superspread)
