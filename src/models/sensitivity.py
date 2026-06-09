@@ -48,7 +48,7 @@ _INTERVENTION_BOUNDS: dict[str, tuple[float, float]] = {
     "tau_W":     (1.0, 30.0),
     "tau_B":     (1.0, 30.0),
     "log_k":     (0.0, 3.0),
-    "R_crit":    (0.8, 2.0),
+    "R_crit":    (0.8, 1.5),
 }
 _THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
     "log_k_I":    (1.0, 4.0),
@@ -64,6 +64,38 @@ def parameter_bounds(model: Callable, scenario: str = "start") -> dict[str, tupl
     if name in ("SEIPAR_W", "SEIAR_W"): bounds |= _ASYMPTOMATIC_BOUNDS
     bounds |= _INTERVENTION_BOUNDS
     if scenario == "threshold": bounds |= _THRESHOLD_BOUNDS
+    elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
+    return bounds
+
+def parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean_params: Params = None) -> dict[str, tuple[float, float]]:
+    MODEL_NAMES: dict[Callable, str] = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W",}
+    name = MODEL_NAMES[model]
+    ps = mean_params if mean_params is not None else Params.for_SEIPAR if name=="SEIPAR_W" else Params.for_SEIAR if name=="SEIAR_W" else Params.for_SEIR
+    bounds: dict[str, tuple[float, float]] = dict({
+        "R_0":       (ps.R_0*0.8, ps.R_0*1.2),
+        "gamma_inv": (ps.gamma_inv*0.8, ps.gamma_inv*1.2),
+        "mu_s_inv":  (ps.mu_s_inv*0.8, ps.mu_s_inv*1.2),
+    })
+    if name == "SEIPAR_W": bounds |= {
+        "sigma_inv": (ps.sigma_inv*0.8, ps.sigma_inv*1.2),
+    }
+    if name in ("SEIPAR_W", "SEIAR_W"): bounds |= {
+        "mu_a_inv": (ps.mu_a_inv*0.8, ps.mu_a_inv*1.2),
+        "p":        (ps.p*0.8, ps.p*1.2),
+        "phi":      (ps.phi*0.8, ps.phi*1.2),
+    }
+    bounds |= {
+        "epsilon_s": (ps.epsilon_s*0.8, ps.epsilon_s*1.2),
+        "epsilon_w": (ps.epsilon_w*0.8, ps.epsilon_w*1.2),
+        "tau_W":     (ps.tau_W*0.8, ps.tau_W*1.2),
+        "tau_B":     (ps.tau_B*0.8, ps.tau_B*1.2),
+        "log_k":     (np.log(ps.k)*0.8, np.log(ps.k)*1.2),
+        "R_crit":    (ps.R_crit*0.8, ps.R_crit*1.2),
+    }
+    if scenario == "threshold": bounds |= {
+        "log_k_I":    (ps.log_k_I*0.8, ps.log_k_I*1.2),
+        "log_I_crit": (ps.log_I_crit*0.8, ps.log_I_crit*1.2),
+    }
     elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
     return bounds
 
@@ -160,11 +192,16 @@ def run_sensitivity_analysis(
     seed: int = 0,
     do_sobol: bool = True,
     manual_bounds: dict[str, tuple[float, float]] | None = None,
+    around_mean: bool = False,
 ) -> SensitivityResults:
-    bounds = parameter_bounds(model, scenario=scenario)
+    if around_mean:
+        bounds = parameter_bounds_around_mean(model,  scenario=scenario, mean_params=base_params)
+    else:
+        bounds = parameter_bounds(model, scenario=scenario)
     if manual_bounds is not None:
         for k, v in manual_bounds.items():
-            if k in bounds: bounds[k] = v
+            if k in bounds: 
+                bounds[k] = v
     bp = base_params.update(I_crit=0.0) if scenario == "start" else base_params.update(I_crit=1e-4)
 
     # prcc
