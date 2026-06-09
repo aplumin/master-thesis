@@ -22,6 +22,7 @@ from models.metrics import compute_R_grid, compute_asymptomatic_grid_Rt, outcome
 from models.sensitivity import SensitivityResults, run_sensitivity_analysis, partial_rank_residuals
 from models.stability import arg_L, dominant_pole, compute_rt_grid, period_and_damping
 from models.gillespie import gillespie_SEIPAR_W
+from models.superspreading import gillespie_SEIPAR_W_superspreading
 from models.plotting import plot_heatmap, plot_trajectory, plot_final_R, plot_I_tot, plot_I_tot_delayed_ww, plot_asymptomatic_effect_for_range_of_intervention_efficacies
 
 
@@ -30,34 +31,58 @@ parameters = {
     "SARS-CoV-2": Params.for_SEIPAR(),
     "Influenza A": Params.for_SEIAR(),
     "Ebola": Params.for_SEIR(),
+    "Omicron": Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=4.94),
+    "Measles": Params.for_SEIPAR(R_0=15.0, gamma_inv=10.5, sigma_inv=3.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi=0.0),
+    "Dengue": Params.for_SEIPAR(R_0=6.0, gamma_inv=5.0, sigma_inv=1.5, mu_s_inv=4.5, mu_a_inv=5.5, p=0.6, phi=0.5),
+    "Rhino": Params.for_SEIPAR(R_0=2.8, gamma_inv=0.75, sigma_inv=0.75, mu_s_inv=11.0, mu_a_inv=11.0, p=22.5, phi=0.1),
 }
 models = {
     "SARS-CoV-2": simulate_SEIPAR_W,
     "Influenza A": simulate_SEIAR_W,
     "Ebola": simulate_SEIR_W,
+    "Omicron": simulate_SEIPAR_W,
+    "Measles": simulate_SEIPAR_W,
+    "Dengue": simulate_SEIPAR_W,
+    "Rhino": simulate_SEIPAR_W,
 }
 Rt_times = {
     "SARS-CoV-2": 50.0,
     "Influenza A": 100.0,
     "Ebola": 100.0,
+    "Omicron": 50.0,
+    "Measles": 50.0,
+    "Dengue": 50.0,
+    "Rhino": 50.0,
 }
-pathogens = list(parameters.keys())
+pathogens = ["SARS-CoV-2", "Influenza A", "Ebola"]
 asymptomatic_pathogens = ["SARS-CoV-2", "Influenza A"]
-E0 = 1e-6
+pathogens_full_landscape = list(parameters.keys())
 
 best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi; high 1/gamma, 1/mu_s
     "SARS-CoV-2": dict(R_0=2.40, gamma_inv=5.86, sigma_inv=0.52, mu_s_inv=10.0, mu_a_inv=4.63, p=0.230, phi=0.07),
     "Influenza A": dict(R_0=1.30, gamma_inv=3.12, mu_s_inv=4.69, mu_a_inv=2.06, p=0.32, phi=0.11),
-    "Ebola": dict(R_0=1.74, gamma_inv=10.38, mu_s_inv=6.30)
+    "Ebola": dict(R_0=1.74, gamma_inv=10.38, mu_s_inv=6.30),
+    "Omicron": dict(R_0=3.5, gamma_inv=4.60, sigma_inv=0.001, mu_s_inv=6.18, mu_a_inv=3.06, p=0.230, phi=0.07),
+    "Measles": dict(R_0=12.0, gamma_inv=12.0, sigma_inv=2.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi=0.0),
+    "Dengue": dict(R_0=2.0, gamma_inv=8.0, sigma_inv=1.0, mu_s_inv=5.0, mu_a_inv=4.0, p=0.4, phi=0.1),
+    "Rhino": dict(R_0=2.3, gamma_inv=1.0, sigma_inv=0.5, mu_s_inv=14.0, mu_a_inv=8.0, p=0.1, phi=0.1),
 }
 worst_params_kwargs = { # low high 1/gamma, 1/mu_s; high R0, 1/sigma, 1/mu_a, p, phi
     "SARS-CoV-2": dict(R_0=2.98, gamma_inv=5.06, sigma_inv=3.00, mu_s_inv=7.80, mu_a_inv=5.50, p=0.399, phi=0.28),
     "Influenza A": dict(R_0=1.70, gamma_inv=2.28, mu_s_inv=2.06, mu_a_inv=4.69, p=0.4, phi=1.57),
-    "Ebola": dict(R_0=2.15, gamma_inv=8.80, mu_s_inv=3.70)
+    "Ebola": dict(R_0=2.15, gamma_inv=8.80, mu_s_inv=3.70),
+    "Omicron": dict(R_0=11.4, gamma_inv=2.51, sigma_inv=1.52, mu_s_inv=3.06, mu_a_inv=7.74, p=0.399, phi=0.28),
+    "Measles": dict(R_0=18.0, gamma_inv=9.0, sigma_inv=4.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi=0.0),
+    "Dengue": dict(R_0=10.0, gamma_inv=3.0, sigma_inv=2.0, mu_s_inv=3.0, mu_a_inv=7.0, p=0.8, phi=1.0),
+    "Rhino": dict(R_0=3.0, gamma_inv=0.5, sigma_inv=1.0, mu_s_inv=8.0, mu_a_inv=14.0, p=0.35, phi=0.1),
 }
-colors = {"SARS-CoV-2": "tab:blue", "Influenza A": "tab:orange", "Ebola": "tab:green"}
-p_CI = {"SARS-CoV-2": (0.23, 0.399), "Influenza A": (None, None)}
-phi_CI = {"SARS-CoV-2": (0.07, 0.28), "Influenza A": (None, None)}
+colors = {
+    "SARS-CoV-2": "tab:blue", "Influenza A": "tab:orange", "Ebola": "tab:green",
+    "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow",
+}
+p_CI = {"SARS-CoV-2": (0.23, 0.399), "Influenza A": (0.32, 0.40)}
+phi_CI = {"SARS-CoV-2": (0.07, 0.28), "Influenza A": (0.11, 1.54)}
+k_sc2 = 0.4
 
 prcc_scenarios = ['start', 'threshold']
 prcc_outcomes  = ['Rt', 'Itot']
@@ -71,6 +96,7 @@ PARAM_LABELS: dict[str, str] = {
     "R_crit": r"$\mathcal{R}_{\text{crit}}$", "log_I_crit": r"$\log I_{\text{crit}}$",
 }
 
+E0 = 1e-6
 gillespie_popsizes = [10000] #, 1_000_000]
 gillespie_num_simulations = [100]
 
@@ -97,12 +123,13 @@ rule baseline_trajectories_no_asymptomatic:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         plot_trajectory(model = models[wildcards.pathogen], params = {"SARS-CoV-2": Params.for_SEIPAR(p=0.0, phi=0.0), "Influenza A": Params.for_SEIAR(p=0.0, phi=0.0), "Ebola": Params.for_SEIR(),}[wildcards.pathogen], path = output.plot, title = f"No asymptomatic transmission for {wildcards.pathogen}", image_resolution = image_resolution)
 
+
 ### GENERATION TIMES ### 
 
 def _get_generation_time(ps: Params):
-            nom = ps.p * ps.phi * ps.mu_a_inv**2 +(1-ps.p)*(ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
-            denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
-            return ps.gamma_inv + nom / denom
+    nom = ps.p * ps.phi * ps.mu_a_inv**2 +(1-ps.p)*(ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
+    denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
+    return ps.gamma_inv + nom / denom
 
 rule calculate_generation_times:
     output:
@@ -186,9 +213,13 @@ rule plot_nonlinear_response_analysis:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         dt = 0.1
         t = np.arange(0, 50, dt)
-        n_W, tau_W = 3.0, 14.0
-        eps_w, k, threshold = 0.5, 10.0, 1.0
-        n_B, tau_B = 1.0, 7.0
+        n_W = 3.0
+        tau_W = 14.0
+        n_B = 1.0
+        tau_B = 7.0
+        k = 10.0
+        threshold = 1.0
+        eps_w = 1.0
 
         fig, axes = plt.subplots(3, 2, figsize=(14, 12), width_ratios=(1,2))
 
@@ -214,7 +245,7 @@ rule plot_nonlinear_response_analysis:
         axes[1, 0].axvspan(x_low, x_high, color='gray', alpha=0.1, label=f'95%: [{x_low:.2f} - {x_high:.2f}]')
         axes[1, 0].set_title(f'Logistic Response ($k={k}$)')
         axes[1, 0].set_xlabel('Reproductive number')
-        axes[1, 0].set_ylim(0, 1.2)
+        axes[1, 0].set_ylim(-0.2, 1.2)
         axes[1, 0].legend()
         axes[1, 0].grid(True, alpha=0.3)
 
@@ -257,15 +288,15 @@ rule plot_nonlinear_response_analysis:
         axes[0, 1].legend(loc='upper left')
         axes[0, 1].grid(True, alpha=0.3)
         axes[1, 1].set_title(f'Instantaneous Warning Response ($\epsilon_w={eps_w}$)')
-        axes[1, 1].set_ylim(0, 1.2)
-        axes[1, 1].legend(loc='upper right')
+        axes[1, 1].set_ylim(-0.2, 1.2)
+        # axes[1, 1].legend(loc='upper right')
         axes[1, 1].grid(True, alpha=0.3)
         axes[2, 1].set_title('Effective Transmission Modification')
         axes[2, 1].set_xlabel('Days')
-        axes[2, 1].set_ylim(0, 1.2)
-        axes[2, 1].legend(loc='upper right')
+        axes[2, 1].set_ylim(-0.2, 1.2)
+        # axes[2, 1].legend(loc='upper right')
         axes[2, 1].grid(True, alpha=0.3)
-        fig.suptitle("Wastewater Warning Response Analysis", fontsize=16)
+        # fig.suptitle("Wastewater Warning Response Analysis", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
         plt.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
@@ -298,14 +329,6 @@ rule plot_trajectory:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         params = parameters[wildcards.pathogen].update(epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
         plot_trajectory(t1=trajectory_end_times[wildcards.pathogen], model=models[wildcards.pathogen], params=params, path=output.plot, title=f"{wildcards.pathogen} ($\\varepsilon_s={wildcards.epsilon_s}, \\varepsilon_w={wildcards.epsilon_w}$)", image_resolution=image_resolution, plot_total_I=True)
-
-rule plot_trajectory_delayed_ww_intervention:
-    output:
-        plot="{outdir}/compartmental/delayed_ww_intervention_trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}_Icrit{I_crit}.png"
-    run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        params = parameters[wildcards.pathogen].update(I_crit=float(wildcards.I_crit), epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
-        plot_trajectory(model=models[wildcards.pathogen], params=params, path=output.plot, title=f"Trajectory: {wildcards.pathogen} (eps_s={wildcards.epsilon_s}, eps_w={wildcards.epsilon_w})", t1=600.0, image_resolution=image_resolution, plot_total_I=True, semilogy=True)
 
 # TODO: currently vary tau_W delay, tau_B is default
 rule delayed_ww_intervention:
@@ -342,7 +365,7 @@ rule plot_main_intervention_grid:
             ('$\\mathcal{R}_t$', Rt_g, 'RdBu_r', True, False),
             ('Time to $\\mathcal{R}_t<1$', tRt_g, 'magma', False, True),
             ('$I_\\text{tot}$ (relative to baseline)', Itot_g, 'viridis', False, False),
-            ('Peak $I_s$', peakIs_g, 'viridis', False, False),
+            ('Peak $I_s$ (relative to baseline)', peakIs_g, 'viridis', False, False),
         ]
         fig, axs = plt.subplots(nrows=len(rows), ncols=len(pathogens), figsize=(13, 16), sharex=True, sharey=True)
         for row_idx, (label, data, cmap, center_at_one, logscale) in enumerate(rows):
@@ -407,7 +430,7 @@ rule plot_R_1_contours:
             ax.contour(eps_ww, eps_ss, Rt_best, levels=[1.0], colors=[color], linestyles='--', linewidths=1)
             ax.contour(eps_ww, eps_ss, Rt_worst, levels=[1.0], colors=[color], linestyles='--', linewidths=1)
 
-        ax.set_title('Controllability boundaries ($\\mathcal{R}_t=1$) with uncertainty', fontsize=14, pad=15)
+        # ax.set_title('Controllability boundaries ($\\mathcal{R}_t=1$) with uncertainty', fontsize=14, pad=15)
         ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=12)
         ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=12)
         ax.set_xlim(0,1); ax.set_ylim(0,1)
@@ -470,13 +493,13 @@ rule plot_controllability_boundaries:
             t1 = Rt_times[pathogen]
             shade_map = {0.0: 'red', 0.2: 'orange', 0.4: 'yellow', 0.6:'lime', 0.8: 'green'}
 
-            # basic nonsymptomatic fraction heatmap
+            # nonsymptomatic fraction heatmap
             P, PHI = np.meshgrid(np.array(ps), np.array(phis), indexing='xy')
             Ra = P * PHI * base.mu_a_inv
             Rp = (1.0 - P) * base.sigma_inv
             Rs = (1.0 - P) * base.mu_s_inv
             mesh = ax.pcolormesh(np.array(ps), np.array(phis), (Ra + Rp) / (Ra + Rp + Rs), cmap='Greys', vmin=0.0, vmax=1.0, shading='auto', rasterized=True)
-            cbar = fig.colorbar(mesh)
+            if pathogen == "Influenza A": fig.colorbar(mesh)
 
             # Rt contours
             for eps_s in eps_s_levels:
@@ -494,9 +517,9 @@ rule plot_controllability_boundaries:
 
             # axes
             ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect('equal')
-            ax.set_xlabel(r'Proportion asymptomatic, $p$', fontsize=12)
+            ax.set_xlabel(r'Proportion asymptomatic $p$', fontsize=12)
             ax.set_title(pathogen, fontsize=14, pad=8)
-        axs[0].set_ylabel(r'Relative infectiousness, $\varphi$', fontsize=12)
+        axs[0].set_ylabel(r'Relative infectiousness $\varphi$', fontsize=12)
 
         # legend
         legend_handles = [
@@ -514,7 +537,7 @@ rule plot_controllability_boundaries:
         ]
         fig.legend(handles=legend_handles, loc='lower center', ncol=3, bbox_to_anchor=(0.5, -0.25), frameon=False, fontsize=10)
 
-        fig.suptitle(r'Controllability boundary ($\mathcal{R}_t=1$) for varying asymptomaticity', fontsize=13, y=1.02)
+        # fig.suptitle(r'Controllability boundary ($\mathcal{R}_t=1$) for varying asymptomaticity', fontsize=13, y=1.02)
         plt.tight_layout()
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
@@ -581,20 +604,40 @@ rule plot_asymptomatic_landscape:
             theta = (R_a + R_p) / (R_a + R_p + R_s)
             return np.asarray(_sample('R_0')), np.asarray(theta)
 
+        def _R_boundary(theta, eps_s, eps_w):
+            return 1.0 / ((1.0 - eps_w / 2.0) * (1.0 - eps_s * (1.0 - theta)))
+
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        plt.figure(figsize=(6,6))
-        for pathogen in pathogens:
+        fig, ax = plt.subplots(figsize=(6,6))
+
+        # asymptomatic landscape
+        for pathogen in pathogens_full_landscape:
             mean_params = parameters[pathogen]
             best_params = mean_params.update(**best_params_kwargs[pathogen])
             worst_params = mean_params.update(**worst_params_kwargs[pathogen])
             R0_s, theta_s = sample(best_params=best_params, worst_params=worst_params, n_samples=10000)
-            plt.scatter(theta_s, R0_s, s=4, alpha=0.1, color=colors[pathogen], edgecolors='none')
+            ax.scatter(theta_s, R0_s, s=4, alpha=0.1, color=colors[pathogen], edgecolors='none')
 
-        plt.xlim([-0.01, 1])
-        plt.ylim([0, 5])
-        plt.xlabel('Proportion presymptomatic and asymptomatic')
-        plt.ylabel('Basic reproductive number')
-        plt.legend(handles=[Patch(facecolor=colors[pathogen], label=pathogen) for pathogen in pathogens], loc='upper right')
+        # controllability boundaries
+        thetas = np.linspace(0, 1, 500)
+        scenarios = [
+            {"label": "Warning ($\epsilon_s=0, \epsilon_w=0.8$)", "eps_s": 0.0, "eps_w": 0.8, "color": "black"},
+            {"label": "Isolation ($\epsilon_s=0.8, \epsilon_w=0$)", "eps_s": 0.8, "eps_w": 0.0, "color": "grey"},
+            {"label": "Combined ($\epsilon_s=0.8, \epsilon_w=0.8$)", "eps_s": 0.8, "eps_w": 0.8, "color": "green"},
+        ]
+        for s in scenarios:
+            R_boundary = _R_boundary(thetas, s["eps_s"], s["eps_w"])
+            ax.plot(thetas, R_boundary, color=s["color"], linewidth=2, linestyle='-', label=s["label"])
+
+        # plotting
+        ax.set_xlim([-0.01, 1])
+        ax.set_ylim([0, 20])
+        ax.set_xlabel('Proportion presymptomatic and asymptomatic $\\theta$', fontsize=12)
+        ax.set_ylabel('Basic reproductive number $\\mathcal{R}_0$', fontsize=12)
+        ax.add_artist(ax.legend(handles=[Patch(facecolor=colors[p], label=p) for p in pathogens_full_landscape], loc='upper left', title="Pathogens"))
+        ax.legend(loc='upper right', title="Controllability ($\\mathcal{R}_t<1$)")
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
         plt.savefig(output.plot, dpi=image_resolution); plt.close()
 
 
@@ -604,7 +647,7 @@ rule plot_asymptomatic_landscape:
 
 rule compute_prcc:
     output:
-        npz="{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}.npz"
+        npz="{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz"
     run:
         os.makedirs(os.path.dirname(output.npz), exist_ok=True)
         p = wildcards.pathogen
@@ -615,7 +658,8 @@ rule compute_prcc:
             l_val = min(best[k], worst[k]); u_val = max(best[k], worst[k])
             if l_val == u_val: u_val += 1e-5
             specific_bounds[k] = (l_val, u_val)
-        results = run_sensitivity_analysis(model=models[wildcards.pathogen], base_params=parameters[wildcards.pathogen], manual_bounds=specific_bounds, scenario=wildcards.scenario, outcome=wildcards.outcome, t1=t1, E0=E0, n_lhs=5000, n_bootstrap=100, n_sobol_base=1024, avg_frac=0.1)
+        around_mean = wildcards.bounds=="symmetric"
+        results = run_sensitivity_analysis(model=models[wildcards.pathogen], base_params=parameters[wildcards.pathogen].update(epsilon_s=0.4, epsilon_w=0.8), manual_bounds=specific_bounds, scenario=wildcards.scenario, outcome=wildcards.outcome, t1=t1, E0=E0, n_lhs=5000, n_bootstrap=100, n_sobol_base=1024, avg_frac=0.1, around_mean=around_mean)
         np.savez_compressed(output.npz, param_names=np.array(results.param_names), lower_bounds=np.array([results.bounds[k][0] for k in results.param_names]), upper_bounds=np.array([results.bounds[k][1] for k in results.param_names]), samples=results.samples, outputs=results.outputs, prcc_mean=results.prcc_mean, prcc_lower=results.prcc_lower, prcc_upper=results.prcc_upper, prcc_samples=results.prcc_samples, sobol_S1=results.sobol_S1, sobol_S1_conf=results.sobol_S1_conf, sobol_ST=results.sobol_ST, sobol_ST_conf=results.sobol_ST_conf)
 
 def load_sensitivity_results(path: str) -> SensitivityResults:
@@ -627,7 +671,7 @@ rule plot_prcc_monotonicity:
     input:
         npz=rules.compute_prcc.output.npz
     output:
-        plot="{outdir}/compartmental/prcc/monotonicity_{pathogen}_{scenario}_{outcome}.png"
+        plot="{outdir}/compartmental/prcc/monotonicity_{pathogen}_{scenario}_{outcome}_{bounds}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         results = load_sensitivity_results(input.npz)
@@ -676,9 +720,9 @@ rule plot_prcc_monotonicity:
 
 rule plot_prcc_grid:
     input:
-        npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}.npz", outdir=wc.outdir, pathogen=pathogens, scenario=['start', 'threshold'], outcome=prcc_outcomes)
+        npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz", outdir=wc.outdir, pathogen=pathogens, scenario=['start', 'threshold'], outcome=prcc_outcomes, bounds=wc.bounds)
     output:
-        plot="{outdir}/compartmental/combined_prcc_grid.png"
+        plot="{outdir}/compartmental/combined_prcc_grid_{bounds}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         
@@ -738,6 +782,72 @@ rule plot_prcc_grid:
         # save and close
         plt.tight_layout()
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+rule plot_prcc_grid_no_espilons:
+    input:
+        npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}.npz", outdir=wc.outdir, pathogen=pathogens, scenario=['start', 'threshold'], outcome=prcc_outcomes)
+    output:
+        plot="{outdir}/compartmental/combined_prcc_grid_no_espilons.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        
+        # all params for global x axis
+        all_params = []
+        for path in input.npz:
+            res = load_sensitivity_results(path)
+            for p in res.param_names: 
+                if p not in all_params and not p.startswith('epsilon'): all_params.append(p)  
+        labels = [PARAM_LABELS.get(n, n) for n in all_params]
+        x = np.arange(len(all_params))
+
+        def params_aligned(res, metric, is_err=False, is_abs=False):
+            """Align params to shared x axis: insert nan if not available"""
+            a = []
+            for p in all_params:
+                if p in res.param_names:
+                    idx = res.param_names.index(p)
+                    if metric == 'prcc_err': val = (res.prcc_upper[idx]-res.prcc_lower[idx])/2
+                    else:
+                        val = getattr(res, metric)[idx]
+                        if is_abs: val = np.abs(val)
+                    a.append(val)
+                else: a.append(np.nan)
+            return np.array(a)
+
+        # plot
+        n_rows = len(pathogens)
+        n_cols = len(prcc_outcomes)
+        fig, axs = plt.subplots(n_rows, n_cols, figsize=(7*n_cols, 5*n_rows), sharey=True)
+        w = 0.32
+        for r, pathogen in enumerate(pathogens):
+            color = colors[pathogen]
+            for c, outcome in enumerate(prcc_outcomes):
+                ax = axs[r, c]
+                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}.npz")
+                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}.npz")
+                # bars
+                err_kw = dict(ecolor='k', linewidth=0.6, capsize=1.5)
+                edge_kw = dict(edgecolor='k', linewidth=0.3)
+                ax.bar(x - 0.5*w, params_aligned(results_start, 'prcc_mean', is_abs=False), yerr=params_aligned(results_start, 'prcc_err'), width=w, color=color, **edge_kw, error_kw=err_kw)
+                ax.bar(x + 0.5*w, params_aligned(results_threshold, 'prcc_mean', is_abs=False), yerr=params_aligned(results_threshold, 'prcc_err'), width=w, color=color, alpha=0.5, hatch='////', **edge_kw, error_kw=err_kw)                
+                # ticks
+                ax.set_xticks(x)
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=14)
+                # grid
+                ax.set_ylim(-1.05, 1.05)
+                ax.grid(axis='y', alpha=0.3)
+                # labels
+                if c == 0: ax.set_ylabel(f'{pathogen}', fontsize=20)
+                if r == 0: ax.set_title(prcc_outcome_titles.get(outcome, outcome), fontsize=20)
+        # legend
+        fig.legend(
+            handles=[Patch(facecolor='gray', label=r'PRCC ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', hatch='////', label=r'PRCC ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3, alpha=0.5)],
+            loc='lower center', ncol=6, bbox_to_anchor=(0.5, -0.03), fontsize=14, frameon=True)
+        # save and close
+        plt.tight_layout()
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
 
 rule plot_combined_sensitivity_grid:
     input:
@@ -815,7 +925,7 @@ rule plot_combined_sensitivity_grid:
 
 rule export_param_bounds:
     input:
-        npzs=expand(rules.compute_prcc.output.npz, pathogen=pathogens, scenario=prcc_scenarios, outcome="Itot", outdir=outdir)
+        npzs=expand(rules.compute_prcc.output.npz, pathogen=pathogens, scenario=prcc_scenarios, outcome="Itot", outdir=outdir, bounds="empirical")
     output:
         tex="{outdir}/compartmental/prcc/sensitivity_bounds_table.tex"
     run:
@@ -1134,7 +1244,7 @@ rule plot_period_and_damping_scatter:
         ax.set_xlabel('analytical')
         ax.set_ylabel('simulated')
         ax.set_title(f'Oscillation periods ({wildcards.pathogen}, $k={k:g}$)')
-        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)')
+        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)', shrink=0.7)
         plt.tight_layout()
         plt.savefig(output.period, dpi=image_resolution); plt.close(fig)
 
@@ -1151,7 +1261,7 @@ rule plot_period_and_damping_scatter:
         ax.set_xlabel('analytical')
         ax.set_ylabel('simulated')
         ax.set_title(f'Decay rates ({wildcards.pathogen}, $k={k:g}$)')
-        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)')
+        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)', shrink=0.7)
         plt.tight_layout()
         plt.savefig(output.damping, dpi=image_resolution); plt.close(fig)
 
@@ -1318,7 +1428,7 @@ rule plot_stochastic_intervention_grid:
     input:
         npz="{outdir}/gillespie/{scenario}_stochastic_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
     output:
-        plot="{outdir}/gillespie/{scenario}_pathogen{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
+        plot="{outdir}/gillespie/stochastic_{scenario}_pathogen{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = int(wildcards.N)
@@ -1430,6 +1540,362 @@ rule plot_stochastic_cumulative_extinction_probability:
         plt.savefig(output.plot, dpi=image_resolution); plt.close()
 
 
+### SUPERSPREADING ###
+# TODO: combine rules with stochastic
+
+def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
+    def g_r(q,r):
+        return 1-(1+(1-q)/r)**(-r)
+    def extinction_prob(q):
+        asyx = ps.phi * ps.beta * ps.mu_a_inv * (1-ew/2)
+        presyx = ps.beta * ps.sigma_inv * (1-ew/2)
+        syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
+        return ps.p / (1 + asyx * g_r(q,k)) + (1-ps.p) / ((1 + presyx * g_r(q,k)) * (1 + syx * g_r(q,k))) - q
+    ext_prob = 1.0
+    try: ext_prob = brentq(extinction_prob, 0.0, 1.0 - 1e-9)
+    except ValueError: pass
+    return ext_prob
+
+rule plot_superspreading_baseline_trajectories:
+    output:
+        plot ="{outdir}/gillespie/superspreading_baseline_trajectories_{pathogen}_N{N}.png",
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        N = int(wildcards.N)
+        t1 = 1000.0
+        num_simulations = 100
+        ps = Params.for_SEIPAR()
+        E0 = 1/N
+        alpha = 0.01
+        q = calculate_mt_branching_q_with_superspreading(k_sc2,ps,0,0)
+        Iest = np.ceil(np.log(alpha)/np.log(q))
+
+        fig, (ax_traj, ax_hist) = plt.subplots(nrows=2, ncols=1, figsize=(6,6), sharex=True, height_ratios=[2,1])
+
+        initial_fadeout_times = []
+        established_extinction_times = []
+
+        for _ in range(num_simulations):
+            tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_sc2, a_ss=True, p_ss=True, s_ss=True)
+            initial_fadeout = np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest
+            if initial_fadeout: initial_fadeout_times.append((tt[-1]))
+            else: established_extinction_times.append((tt[-1]))
+            ax_traj.plot(tt, yy.T[0], alpha=0.05, color='grey' if initial_fadeout else colors[wildcards.pathogen])
+
+        try: 
+            ymax = max(max(initial_fadeout_times, default=0), max(established_extinction_times, default=0))
+            if ymax > 0:
+                ax_traj.set_xlim([0, ymax])
+                num_bins = max(1, int(ymax // 10))
+                ax_hist.hist(
+                    [initial_fadeout_times, established_extinction_times], 
+                    density=True, stacked=True, color=['grey', colors[wildcards.pathogen]], bins=num_bins
+                )
+        except Exception as e: 
+            print(e)
+        tt_det, yy_det = models[wildcards.pathogen](params=ps, t1=t1, E0=E0)
+        S_det = yy_det.T[0] * N
+        ax_traj.plot(tt_det, S_det, color=colors[wildcards.pathogen])
+
+        ax_traj.set_title('Number of susceptibles')
+        ax_hist.set_title('Extinction times')
+        ax_hist.set_xlabel('days')
+        fig.suptitle(f'Stochastic susceptible trajectories ({wildcards.pathogen}, N={N})')
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+
+rule plot_stochastic_cumulative_extinction_probability_superspreading:
+    output:
+        plot ="{outdir}/gillespie/superspreading_cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}_scenario_{scenario}.png",
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        N = float(wildcards.N)
+        eps_s = float(wildcards.eps_s)
+        eps_w = float(wildcards.eps_w)
+        t1 = 5000.0
+        num_simulations = 1000
+        initial_fadeout_times = []
+        established_extinction_times = []
+
+        ps = Params.for_SEIPAR(epsilon_s=eps_s, epsilon_w=eps_w)
+
+        alpha = 0.01
+        Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q_with_superspreading(k_sc2, ps, eps_w, eps_s)))
+
+        # simulations
+        for _ in range(num_simulations):
+            tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_sc2, a_ss=True, p_ss=True, s_ss=True)
+            I = yy[:,2] + yy[:,3] + yy[:,4]
+            if np.max(I) < Iest:
+                initial_fadeout_times.append((tt[-1]))
+            else:
+                established_extinction_times.append((tt[-1]))
+
+        if wildcards.scenario == 'establishment':
+            extinction_times = established_extinction_times
+        else:
+            extinction_times = np.concatenate([established_extinction_times, initial_fadeout_times])
+
+        # cumulative extinction times and CIs
+        sorted_times = np.sort(extinction_times)
+        cumulative_prob = np.arange(1, sorted_times.shape[0]+1) / sorted_times.shape[0]
+        z_score = 1.96
+        std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / sorted_times.shape[0])
+        ci_lower = np.maximum(0, cumulative_prob - z_score*std_error)
+        ci_upper = np.minimum(1, cumulative_prob + z_score*std_error)
+
+        # plot
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax1.step(sorted_times, cumulative_prob, where='post', label='Cumulative extinction probability', color='blue', linewidth=2)
+        ax1.fill_between(sorted_times, ci_lower, ci_upper, step='post', color='blue', alpha=0.25)
+
+        # median time
+        median_time = np.median(extinction_times)
+        median_time_ci_lower = sorted_times[np.argmax(ci_upper >= 0.5)]
+        median_time_ci_upper = sorted_times[np.argmax(ci_lower >= 0.5)]
+        ax1.axvline(median_time, color='red', label=f'Median: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
+        ax1.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
+
+        # 95% time
+        time_95 = np.percentile(extinction_times, 95)
+        time_95_ci_lower = sorted_times[np.argmax(ci_upper >= 0.95)]
+        time_95_ci_upper = sorted_times[np.argmax(ci_lower >= 0.95)]
+        ax1.axvline(time_95, color='orange', label=f'95%: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
+        ax1.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
+
+        # deterministic susceptible trajectory
+        model = models[wildcards.pathogen]
+        ps = parameters[wildcards.pathogen].update(epsilon_s=eps_s, epsilon_w=eps_w)
+        tt, yy = model(params=ps, t1=t1, E0=1/N)
+        ax1.plot(tt, yy.T[0], color='green', label='Deterministic susceptible trajectory')
+
+        # histogram
+        ax2 = ax1.twinx()
+        ax2.hist(extinction_times, bins=100, density=True, color='gray', alpha=0.3, label='Extinction times histogram')
+        ax2.set_ylabel('Density', color='gray', fontsize=12)
+        ax2.tick_params(axis='y', labelcolor='gray')
+
+        # styling
+        plt.title(f'Cumulative extinction probability ({wildcards.pathogen}, $k={k_sc2}$, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$, {wildcards.scenario})', fontsize=14)
+        ax1.set_xlabel('Days', fontsize=12)
+        ax1.set_ylim(0, 1.05)
+        ax1.set_xlim(-50, max(extinction_times))
+        lines_1, labels_1 = ax1.get_legend_handles_labels()
+        lines_2, labels_2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines_1+lines_2, labels_1+labels_2, loc='best')
+        ax1.grid(True, alpha=0.5)
+        fig.tight_layout()
+        plt.savefig(output.plot, dpi=image_resolution); plt.close()
+
+rule simulate_superspreading_outcomes:
+    output:
+        npz="{outdir}/gillespie/{scenario}_superspreading_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
+    run:
+        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
+        num_simulations = int(wildcards.num_simulations)
+        N = int(wildcards.N)
+        res = int(wildcards.resolution)
+        t1 = 2000.0
+
+        es = 0.5
+        eps_ww = np.linspace(0.0, 0.999, res)
+        kk = np.linspace(0.01, 1.0, res)
+
+        Rt_grid = np.zeros((len(eps_ww), len(kk)))
+        Rt_var_grid = np.zeros((len(eps_ww), len(kk)))
+        time_to_below_grid = np.zeros((len(eps_ww), len(kk)))
+        time_to_below_var_grid = np.zeros((len(eps_ww), len(kk)))
+        Itot_grid = np.zeros((len(eps_ww), len(kk)))
+        Itot_var_grid = np.zeros((len(eps_ww), len(kk)))
+        peak_Is_grid = np.zeros((len(eps_ww), len(kk)))
+        peak_Is_var_grid = np.zeros((len(eps_ww), len(kk)))
+        extinction_time_grid = np.zeros((len(eps_ww), len(kk)))
+        extinction_time_var_grid = np.zeros((len(eps_ww), len(kk)))
+
+        for i, ew in enumerate(eps_ww):
+            for j, k_ss in enumerate(kk):
+                Rt_list = []
+                time_to_below_list = []
+                Itot_list = []
+                peak_Is_list = []
+                extinction_time_list = []
+
+                ps = Params.for_SEIPAR(epsilon_s=float(es), epsilon_w=float(ew))
+                alpha = 0.01
+                Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q_with_superspreading(k_ss, ps, ew, es)))
+
+                for _ in range(num_simulations):
+                    tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_ss, a_ss=True, p_ss=True, s_ss=False)
+                    if (wildcards.scenario == 'establishment') & (np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest):
+                        continue
+
+                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1, population_size=N)
+                    Rt_list.append(Rt)
+                    time_to_below_list.append(time_to_below)
+                    Itot_list.append(Itot)
+                    peak_Is_list.append(peak_Is)
+                    extinction_time_list.append(extinction_time)
+
+                Rt_grid[i,j] = np.mean(Rt_list)
+                Rt_var_grid[i,j] = np.var(Rt_list)
+                time_to_below_grid[i,j] = np.mean(time_to_below_list)
+                time_to_below_var_grid[i,j] = np.var(time_to_below_list)
+                Itot_grid[i,j] = np.mean(Itot_list)
+                Itot_var_grid[i,j] = np.var(Itot_list)
+                peak_Is_grid[i,j] = np.mean(peak_Is_list)
+                peak_Is_var_grid[i,j] = np.var(peak_Is_list)
+                percentile_95 = np.nan
+                try: percentile_95 = np.percentile(extinction_time_list, 95)
+                except: pass
+                extinction_time_grid[i,j] = percentile_95
+                extinction_time_var_grid[i,j] = np.var(extinction_time_list)
+        
+        np.savez_compressed(
+            output.npz,
+            Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid,
+            time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid,
+            Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid,
+            peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid,
+            extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid
+        )
+
+rule plot_superspreading_intervention_grid:
+    input:
+        npz="{outdir}/gillespie/{scenario}_superspreading_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
+    output:
+        plot="{outdir}/gillespie/superspreading_{scenario}_pathogen{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        N = int(wildcards.N)
+        res = int(wildcards.resolution)
+        metric = wildcards.metric
+        es = 0.5
+        eps_ww = np.linspace(0.0, 0.999, res)
+        kk = np.linspace(0.01, 1.0, res)
+        data = np.load(input.npz)[f"{metric}_grid"]
+        
+        fig, ax = plot_heatmap(
+            eps_ww, kk, data.T, 
+            cmap='magma' if metric.startswith('extinction_time') else 'RdBu_r' if metric == 'Rt' else 'viridis', 
+            norm=mpl.colors.CenteredNorm(vcenter=1.0) if metric == 'Rt' else None,
+            xlabel='Warning response efficacy $\\varepsilon_w$', 
+            ylabel='Dispersion parameter $r$',
+            title={
+                "Rt": "Average Final $R_t$", "Rt_var": "Variance of Final $R_t$",
+                "time_to_below": "Average Time to $R_t < 1$", "time_to_below_var": "Variance of Time to $R_t < 1$",
+                "Itot": "Average Proportion Infected", "Itot_var": "Variance of Proportion Infected",
+                "peak_Is": "Average Peak Symptomatic Proportion", "peak_Is_var": "Variance of Peak Symptomatic Proportion",
+                "extinction_time": "95th Percentile Extinction Time", "extinction_time_var": "Variance of Extinction Time"
+                }.get(metric, metric)
+        )
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+
+rule simulate_superspreading_outcomes_all_superspreading:
+    output:
+        npz="{outdir}/gillespie/{scenario}_superspreading_all_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
+    run:
+        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
+        num_simulations = int(wildcards.num_simulations)
+        N = int(wildcards.N)
+        res = int(wildcards.resolution)
+        t1 = 2000.0
+
+        es = 0.5
+        eps_ww = np.linspace(0.0, 0.999, res)
+        kk = np.linspace(0.01, 1.0, res)
+
+        Rt_grid = np.zeros((len(eps_ww), len(kk)))
+        Rt_var_grid = np.zeros((len(eps_ww), len(kk)))
+        time_to_below_grid = np.zeros((len(eps_ww), len(kk)))
+        time_to_below_var_grid = np.zeros((len(eps_ww), len(kk)))
+        Itot_grid = np.zeros((len(eps_ww), len(kk)))
+        Itot_var_grid = np.zeros((len(eps_ww), len(kk)))
+        peak_Is_grid = np.zeros((len(eps_ww), len(kk)))
+        peak_Is_var_grid = np.zeros((len(eps_ww), len(kk)))
+        extinction_time_grid = np.zeros((len(eps_ww), len(kk)))
+        extinction_time_var_grid = np.zeros((len(eps_ww), len(kk)))
+
+        for i, ew in enumerate(eps_ww):
+            for j, k_ss in enumerate(kk):
+                Rt_list = []
+                time_to_below_list = []
+                Itot_list = []
+                peak_Is_list = []
+                extinction_time_list = []
+
+                ps = Params.for_SEIPAR(epsilon_s=float(es), epsilon_w=float(ew))
+                alpha = 0.01
+                Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q_with_superspreading(k_ss, ps, ew, es)))
+
+                for _ in range(num_simulations):
+                    tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_ss, a_ss=True, p_ss=True, s_ss=False)
+                    if (wildcards.scenario == 'establishment') & (np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest):
+                        continue
+
+                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=es, epsilon_w=ew), t1, population_size=N)
+                    Rt_list.append(Rt)
+                    time_to_below_list.append(time_to_below)
+                    Itot_list.append(Itot)
+                    peak_Is_list.append(peak_Is)
+                    extinction_time_list.append(extinction_time)
+
+                Rt_grid[i,j] = np.mean(Rt_list)
+                Rt_var_grid[i,j] = np.var(Rt_list)
+                time_to_below_grid[i,j] = np.mean(time_to_below_list)
+                time_to_below_var_grid[i,j] = np.var(time_to_below_list)
+                Itot_grid[i,j] = np.mean(Itot_list)
+                Itot_var_grid[i,j] = np.var(Itot_list)
+                peak_Is_grid[i,j] = np.mean(peak_Is_list)
+                peak_Is_var_grid[i,j] = np.var(peak_Is_list)
+                percentile_95 = np.nan
+                try: percentile_95 = np.percentile(extinction_time_list, 95)
+                except: pass
+                extinction_time_grid[i,j] = percentile_95
+                extinction_time_var_grid[i,j] = np.var(extinction_time_list)
+        
+        np.savez_compressed(
+            output.npz,
+            Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid,
+            time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid,
+            Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid,
+            peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid,
+            extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid
+        )
+
+rule plot_superspreading_intervention_grid_all_superspreading:
+    input:
+        npz="{outdir}/gillespie/{scenario}_superspreading_all_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
+    output:
+        plot="{outdir}/gillespie/ss_all_{scenario}_pathogen{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        N = int(wildcards.N)
+        res = int(wildcards.resolution)
+        metric = wildcards.metric
+        es = 0.5
+        eps_ww = np.linspace(0.0, 0.999, res)
+        kk = np.linspace(0.01, 1.0, res)
+        data = np.load(input.npz)[f"{metric}_grid"]
+        
+        fig, ax = plot_heatmap(
+            eps_ww, kk, data.T, 
+            cmap='magma' if metric.startswith('extinction_time') else 'RdBu_r' if metric == 'Rt' else 'viridis', 
+            norm=mpl.colors.CenteredNorm(vcenter=1.0) if metric == 'Rt' else None,
+            xlabel='Warning response efficacy $\\varepsilon_w$', 
+            ylabel='Dispersion parameter $r$',
+            title={
+                "Rt": "Average Final $R_t$", "Rt_var": "Variance of Final $R_t$",
+                "time_to_below": "Average Time to $R_t < 1$", "time_to_below_var": "Variance of Time to $R_t < 1$",
+                "Itot": "Average Proportion Infected", "Itot_var": "Variance of Proportion Infected",
+                "peak_Is": "Average Peak Symptomatic Proportion", "peak_Is_var": "Variance of Peak Symptomatic Proportion",
+                "extinction_time": "95th Percentile Extinction Time", "extinction_time_var": "Variance of Extinction Time"
+                }.get(metric, metric)
+        )
+        fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
+
+
+
 ###############################################
 # ALL
 ###############################################
@@ -1440,8 +1906,25 @@ rule all:
             rules.plot_stochastic_cumulative_extinction_probability.output.plot, outdir=outdir,
             pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8], scenario=['establishment', 'all'],
         ),
+        expand(rules.plot_superspreading_baseline_trajectories.output, outdir=outdir, pathogen=["SARS-CoV-2"], #pathogens,
+            N=[100, 50_000, 500_000] #,100000], # N=gillespie_popsizes,
+        ),
+        expand(
+            rules.plot_stochastic_cumulative_extinction_probability_superspreading.output.plot, outdir=outdir,
+            pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8], scenario=['establishment', 'all'],
+        ),
         expand(
             rules.plot_stochastic_intervention_grid.output.plot, outdir=outdir,
+            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[10], scenario=['establishment', 'all'],
+            metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"],
+        ),
+        expand(
+            rules.plot_superspreading_intervention_grid.output.plot, outdir=outdir,
+            pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[10], scenario=['establishment', 'all'],
+            metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"],
+        ),
+        expand(
+            rules.plot_superspreading_intervention_grid_all_superspreading.output.plot, outdir=outdir,
             pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[10], scenario=['establishment', 'all'],
             metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"],
         ),
@@ -1450,17 +1933,15 @@ rule all:
         expand(rules.plot_efficacy_grid_Itot_final.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
         expand(rules.plot_asymptomatic_grid_Itot_final.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
-        expand(rules.plot_prcc_monotonicity.output.plot, outdir=outdir, pathogen=pathogens, scenario=prcc_scenarios, outcome=prcc_outcomes),
-        expand(rules.plot_prcc_grid.output.plot, outdir=outdir),
+        expand(rules.plot_prcc_monotonicity.output.plot, outdir=outdir, pathogen=pathogens, scenario=prcc_scenarios, outcome=prcc_outcomes, bounds=["empirical", "symmetric"]),
+        expand(rules.plot_prcc_grid.output.plot, outdir=outdir, bounds=["empirical", "symmetric"]),
+        # expand(rules.plot_prcc_grid_no_espilons.output.plot, outdir=outdir),
         expand(rules.plot_combined_sensitivity_grid.output.plot, outdir=outdir),
         expand(rules.plot_stochastic_baseline_trajectories.output, outdir=outdir, pathogen=["SARS-CoV-2"], #pathogens,
             N=[100, 50_000, 500_000] #,100000], # N=gillespie_popsizes,
         ),
         expand(rules.plot_trajectory.output.plot, outdir=outdir, pathogen=pathogens,
             epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8],
-        ),
-        expand(rules.plot_trajectory_delayed_ww_intervention.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens,
-            epsilon_s=[0.8], epsilon_w=[0.8], I_crit=[1e-5, 1e-4, 1e-3, 1e-2],
         ),
         expand(rules.delayed_ww_intervention.output.plot, 
             outdir=outdir, pathogen=["SARS-CoV-2"], # TODO: change main rule for generalisation

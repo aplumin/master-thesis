@@ -93,8 +93,8 @@ def parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean_
         "R_crit":    (ps.R_crit*0.8, ps.R_crit*1.2),
     }
     if scenario == "threshold": bounds |= {
-        "log_k_I":    (ps.log_k_I*0.8, ps.log_k_I*1.2),
-        "log_I_crit": (ps.log_I_crit*0.8, ps.log_I_crit*1.2),
+        "log_k_I":    (np.log(ps.k_I)*0.8, np.log(ps.k_I)*1.2),
+        "log_I_crit": (np.log(ps.I_crit)*0.8, np.log(ps.I_crit)*1.2),
     }
     elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
     return bounds
@@ -103,11 +103,15 @@ def parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean_
 def _construct_latin_hypercube(bounds: dict, n: int, seed: int | None = None) -> np.ndarray:
     """Quasi Monte Carlo sampling from Latin hypercube."""
     names = list(bounds)
-    latin_hypercube = qmc.scale(
-        sample = qmc.LatinHypercube(d=len(names), seed=seed).random(n=n), 
-        l_bounds = np.array([bounds[p][0] for p in names]),
-        u_bounds = np.array([bounds[p][1] for p in names]),
-    )
+    try:
+        latin_hypercube = qmc.scale(
+            sample = qmc.LatinHypercube(d=len(names), seed=seed).random(n=n), 
+            l_bounds = np.array([bounds[p][0] for p in names]),
+            u_bounds = np.array([bounds[p][1] for p in names]),
+        )
+    except Exception as e:
+        print(e)
+        print(bounds)
     return latin_hypercube
 
 def _partial_rank_corr_coeff(latin_hypercube, y_output):

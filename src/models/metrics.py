@@ -94,10 +94,12 @@ def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float,
     """
     def final_R(p, phi):
         params = base_params.update(p=p, phi=phi)
-        _, yy = model(params=params, t1=t1, E0=E0)
-        Is_final = yy[-1, -(params.n_W + params.n_B + 2)]
-        # TODO: this assumes n_B > 0
-        return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
+        tt, yy = model(params=params, t1=t1, E0=E0)
+        Rt,_,_,_,_,_,_,_ = outcome_metrics(tt, yy, params, t1, delta_dep=0.05)
+        return Rt
+        # Is_final = yy[-1, -(params.n_W + params.n_B + 2)]
+        # # TODO: this assumes n_B > 0
+        # return params.R_0 * params.rho * logistic_response_function(yy[-1,-1], params, Is_final) * yy[-1,0]
     return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(p, phi)
 
 @partial(jax.jit, static_argnames=['model', 't1'])

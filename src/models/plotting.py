@@ -160,7 +160,7 @@ def plot_trajectory(
             return 1-Z-np.exp(-R0*Z)
         return fsolve(final_size_equation, x0=0.5)[0]
     final_size = calculate_final_size(params.R_0)
-    ax_main.axhline(final_size, label=f'$Z=${final_size:.2f}', color='grey', linestyle='--')
+    ax_main.axhline(final_size, label=r'$I_\text{tot}=$'+f'{final_size:.2f}', color='grey', linestyle='--')
     ax_main.legend(loc='upper right')
 
     # Rt
