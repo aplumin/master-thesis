@@ -13,6 +13,7 @@ from SALib.analyze.sobol import analyze
 
 from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
+from models.metrics import outcome_metrics
 
 
 class SensitivityResults(NamedTuple):
@@ -67,6 +68,10 @@ def parameter_bounds(model: Callable, scenario: str = "start") -> dict[str, tupl
     elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
     return bounds
 
+def _symmetric_log10_bounds(value: float, frac: float = 0.2, default: float = 1.0):
+    v = value if (np.isfinite(value) and value > 0.0) else default
+    return (np.log10(v * (1.0-frac)), np.log10(v * (1.0+frac)))
+
 def parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean_params: Params = None) -> dict[str, tuple[float, float]]:
     MODEL_NAMES: dict[Callable, str] = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W",}
     name = MODEL_NAMES[model]
@@ -89,13 +94,14 @@ def parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean_
         "epsilon_w": (ps.epsilon_w*0.8, ps.epsilon_w*1.2),
         "tau_W":     (ps.tau_W*0.8, ps.tau_W*1.2),
         "tau_B":     (ps.tau_B*0.8, ps.tau_B*1.2),
-        "log_k":     (np.log(ps.k)*0.8, np.log(ps.k)*1.2),
+        "log_k":     _symmetric_log10_bounds(ps.k),
         "R_crit":    (ps.R_crit*0.8, ps.R_crit*1.2),
     }
-    if scenario == "threshold": bounds |= {
-        "log_k_I":    (np.log(ps.k_I)*0.8, np.log(ps.k_I)*1.2),
-        "log_I_crit": (np.log(ps.I_crit)*0.8, np.log(ps.I_crit)*1.2),
-    }
+    if scenario == "threshold":
+        bounds |= {
+            "log_k_I":    _symmetric_log10_bounds(ps.k_I),
+            "log_I_crit": _symmetric_log10_bounds(ps.I_crit, default=1e-4),
+        }
     elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
     return bounds
 
@@ -170,14 +176,15 @@ def evaluate_samples(model: Callable, base_params: Params, bounds: dict, samples
         if outcome == "Itot":
             def _eval(row):
                 params = _apply(row)
-                _, yy = model(params=params, t1=t1, E0=E0)
-                return yy[0, 0] - yy[-1, 0]
+                tt, yy = model(params=params, t1=t1, E0=E0)
+                _, _, Itot, _, _, _, _, _ = outcome_metrics(tt, yy, params, t1)
+                return Itot
         else:
             def _eval(row):
                 params = _apply(row)
-                _, yy = model(params=params, t1=t1, E0=E0)
-                k_tail = max(int(avg_frac * yy.shape[0]), 1)
-                return jnp.mean(params.R_0 * params.rho * yy[-k_tail:, -1] * yy[-k_tail:, 0])
+                tt, yy = model(params=params, t1=t1, E0=E0)
+                Rt_final, _, _, _, _, _, _, _ = outcome_metrics(tt, yy, params, t1)
+                return Rt_final
         return jax.jit(jax.vmap(_eval))
     return np.asarray(_evaluator(model=model, base_params=base_params, names=list(bounds), t1=t1, E0=E0, outcome=outcome, avg_frac=avg_frac)(jnp.asarray(samples)))
 
@@ -199,7 +206,7 @@ def run_sensitivity_analysis(
     around_mean: bool = False,
 ) -> SensitivityResults:
     if around_mean:
-        bounds = parameter_bounds_around_mean(model,  scenario=scenario, mean_params=base_params)
+        bounds = parameter_bounds_around_mean(model, scenario=scenario, mean_params=base_params)
     else:
         bounds = parameter_bounds(model, scenario=scenario)
     if manual_bounds is not None:
