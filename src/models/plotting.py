@@ -26,7 +26,7 @@ def plot_heatmap(
     xlabelsize=14, ylabelsize=14,
     x_logscale=False, y_logscale=False, 
     cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=14, cbar_labelpad=10,
-    cbar_axhlines=[], cbar_axhlines_colors=[], cbar_axhlines_linestyles=[],
+    cbar_axhlines=[], cbar_axhlines_colors=[], cbar_axhlines_linestyles=[], cbar_ticks=[],
 ):
     """General heatmap plotting function."""
     fig, ax = plt.subplots(figsize=(10, 10))
@@ -38,7 +38,11 @@ def plot_heatmap(
     if contour_levels:
         ax.contour(X, Y, contour_metric, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles, alpha=contour_alpha)
     
-    cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect)
+    if len(cbar_ticks) > 0:
+        cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect, ticks=cbar_ticks)
+        cbar.ax.set_yticklabels(cbar_ticks)
+    else:
+        cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect)
     cbar.set_label(cbar_label, fontsize=cbar_labelsize, labelpad=cbar_labelpad)
     for i, hline in enumerate(cbar_axhlines):
         cbar.ax.axhline(hline, color=cbar_axhlines_colors[i], linestyle=cbar_axhlines_linestyles[i])

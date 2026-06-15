@@ -305,22 +305,6 @@ rule plot_nonlinear_response_analysis:
 # INTERVENTIONS
 ###############################################
 
-rule plot_efficacy_grid_Rt_final:
-    output:
-        plot="{outdir}/compartmental/efficacy_grid_Rt_final_{pathogen}.png"
-    run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        fig = plot_final_R(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=Rt_times[wildcards.pathogen], E0=E0, title=f"Reproductive number after interventions: {wildcards.pathogen}")
-        fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
-
-rule plot_efficacy_grid_Itot_final:
-    output:
-        plot="{outdir}/compartmental/efficacy_grid_Itot_final_{pathogen}.png"
-    run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        fig = plot_I_tot(model=models[wildcards.pathogen], params=parameters[wildcards.pathogen], t1=600.0, E0=E0, title=f"Total number infected: {wildcards.pathogen}")
-        fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
-
 trajectory_end_times = {"SARS-CoV-2": 530, "Influenza A": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
 rule plot_trajectory:
     output:
@@ -659,7 +643,12 @@ rule compute_prcc:
             if l_val == u_val: u_val += 1e-5
             specific_bounds[k] = (l_val, u_val)
         around_mean = wildcards.bounds=="symmetric"
-        results = run_sensitivity_analysis(model=models[wildcards.pathogen], base_params=parameters[wildcards.pathogen].update(epsilon_s=0.4, epsilon_w=0.8), manual_bounds=specific_bounds, scenario=wildcards.scenario, outcome=wildcards.outcome, t1=t1, E0=E0, n_lhs=5000, n_bootstrap=100, n_sobol_base=1024, avg_frac=0.1, around_mean=around_mean)
+        results = run_sensitivity_analysis(
+            model=models[wildcards.pathogen], scenario=wildcards.scenario, outcome=wildcards.outcome,
+            base_params=parameters[wildcards.pathogen].update(epsilon_s=0.4, epsilon_w=0.8),
+            manual_bounds=None if around_mean else specific_bounds,
+            t1=t1, E0=E0, n_lhs=5000, n_bootstrap=100, n_sobol_base=1024, avg_frac=0.1, around_mean=around_mean,
+        )
         np.savez_compressed(output.npz, param_names=np.array(results.param_names), lower_bounds=np.array([results.bounds[k][0] for k in results.param_names]), upper_bounds=np.array([results.bounds[k][1] for k in results.param_names]), samples=results.samples, outputs=results.outputs, prcc_mean=results.prcc_mean, prcc_lower=results.prcc_lower, prcc_upper=results.prcc_upper, prcc_samples=results.prcc_samples, sobol_S1=results.sobol_S1, sobol_S1_conf=results.sobol_S1_conf, sobol_ST=results.sobol_ST, sobol_ST_conf=results.sobol_ST_conf)
 
 def load_sensitivity_results(path: str) -> SensitivityResults:
@@ -758,8 +747,8 @@ rule plot_prcc_grid:
             color = colors[pathogen]
             for c, outcome in enumerate(prcc_outcomes):
                 ax = axs[r, c]
-                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}.npz")
-                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}.npz")
+                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}_{wildcards.bounds}.npz")
+                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}_{wildcards.bounds}.npz")
                 # bars
                 err_kw = dict(ecolor='k', linewidth=0.6, capsize=1.5)
                 edge_kw = dict(edgecolor='k', linewidth=0.3)
@@ -925,25 +914,25 @@ rule plot_combined_sensitivity_grid:
 
 rule export_param_bounds:
     input:
-        npzs=expand(rules.compute_prcc.output.npz, pathogen=pathogens, scenario=prcc_scenarios, outcome="Itot", outdir=outdir, bounds="empirical")
+        npzs=lambda wc: expand(rules.compute_prcc.output.npz, pathogen=pathogens, scenario="threshold", outcome="Itot", outdir=outdir, bounds=wc.bounds)
     output:
-        tex="{outdir}/compartmental/prcc/sensitivity_bounds_table.tex"
+        tex="{outdir}/compartmental/prcc/sensitivity_bounds_table_{bounds}.tex"
     run:
         os.makedirs(os.path.dirname(output.tex), exist_ok=True)
-        combinations = list(itertools.product(pathogens, prcc_scenarios))
-        col_mapping = {("SARS-CoV-2", "start"): "SARS-CoV-2", ("SARS-CoV-2", "threshold"): "SARS-CoV-2 $I_\\text{crit}$", ("Influenza A", "start"): "H1N1", ("Influenza A", "threshold"): "H1N1 $I_\\text{crit}$", ("Ebola", "start"): "Ebola", ("Ebola", "threshold"): "Ebola $I_\\text{crit}$"}
+        combinations = list(itertools.product(pathogens, ["threshold"]))
+        col_mapping = {("SARS-CoV-2", "threshold"): "SARS-CoV-2", ("Influenza A", "threshold"): "H1N1", ("Ebola", "threshold"): "Ebola"}
         param_defs = {
             "R_0": ("$\\mathcal{R}_0$", "basic reproductive number"), "gamma_inv": ("$1/\\gamma$", "latent period"), "mu_s_inv": ("$1/\\mu_s$", "symptomatic period"), 
             "sigma_inv": ("$1/\\sigma$", "presymptomatic period"), 
             "mu_a_inv": ("$1/\\mu_a$", "asymptomatic period"), "p": ("$p$", "proportion asymptomatic"), "phi": ("$\\varphi$", "relative asympt. infectiousness"), 
             "epsilon_s": ("$\\varepsilon_s$", "isolation efficacy"), "epsilon_w": ("$\\varepsilon_w$", "warning response efficacy"), "tau_W": ("$\\tau_W$", "reporting delay"), "tau_B": ("$\\tau_B$", "behavioural delay"), 
             "log_k": ("$\\log_{10} k$", "warning gate sharpness"), "R_crit": ("$\\mathcal{R}_{\\text{crit}}$", "warning threshold"), 
-            "log_k_I": ("$\\log_{10} k_I$", "prevalence gate sharpness"), "log_I_crit": ("$\\log_{10} I_{\\text{crit}}$", "prevalence threshold"), 
+            "log_k_I": ("$\\log_{10} k_I$", "prevalence gate sharpness (*)"), "log_I_crit": ("$\\log_{10} I_{\\text{crit}}$", "prevalence threshold (*)"), 
         }
         bounds_data = {}
         for combination, fpath in zip(combinations, input.npzs): bounds_data[combination] = load_sensitivity_results(fpath).bounds
         with open(output.tex, 'w') as f:
-            f.write("\\begin{table}\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{llcccccc}\n\\toprule\n")
+            f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{llccc}\n\\toprule\n")
             header = ["Parameter", ""] + [col_mapping[c] for c in combinations]
             f.write(" & ".join(header) + " \\\\\n\\midrule\n")
             for p_key, (symbol, desc) in param_defs.items():
@@ -952,7 +941,7 @@ rule export_param_bounds:
                     if p_key in bounds_data[combination]: row.append(f"$[{bounds_data[combination][p_key][0]:g}, {bounds_data[combination][p_key][1]:g}]$")
                     else: row.append("---")
                 f.write(" & ".join(row) + " \\\\\n")
-            f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Parameter ranges used for sensitivity analysis]{Parameter ranges used for Latin hypercube sampling in the global sensitivity analysis.}\n\\label{tab:prcc-bounds}\n\\end{table}\n")
+            f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Parameter ranges used for sensitivity analysis]{Parameter ranges used for Latin hypercube sampling in the global sensitivity analysis. Parameters marked with an asterisk (*) are only included when the symptomatic threshold $I_\\text{crit}=10^{-4}$ is active.}\n\\label{tab:prcc-bounds}\n\\end{table}\n")
 
 
 ###############################################
@@ -1162,7 +1151,11 @@ rule plot_gain_margins:
         taus_W = np.linspace(1.0, 31.0, 100)
         taus_B = np.linspace(1.0, 31.0, 100)
         MG = np.array([[gain_margin(tw, tb) for tb in taus_B] for tw in taus_W])
-        fig, ax = plot_heatmap(taus_B, taus_W, MG, cmap='magma_r', contour_levels=[0.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Gain margin')
+        
+        vmin, vmax = float(np.nanmin(MG)), float(np.nanmax(MG))
+        norm = mpl.colors.LogNorm(vmin=np.max([vmin,1]), vmax=np.max([vmax,1]))
+        ticks = [1,2,3,4,5,10,20]
+        fig, ax = plot_heatmap(taus_B, taus_W, MG, norm=norm, cmap='magma_r', cbar_ticks=ticks, contour_levels=[1.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Gain margin')
         fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
 rule plot_delay_margins:
@@ -1244,7 +1237,7 @@ rule plot_period_and_damping_scatter:
         ax.set_xlabel('analytical')
         ax.set_ylabel('simulated')
         ax.set_title(f'Oscillation periods ({wildcards.pathogen}, $k={k:g}$)')
-        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)', shrink=0.7)
+        plt.colorbar(sc, ax=ax, label=r'total delay $\tau_W + \tau_B$ (days)', shrink=0.7)
         plt.tight_layout()
         plt.savefig(output.period, dpi=image_resolution); plt.close(fig)
 
@@ -1253,15 +1246,16 @@ rule plot_period_and_damping_scatter:
         fig, ax = plt.subplots(figsize=(6, 6))
         sc = ax.scatter(analytical_damping[valid], simulation_damping[valid], c=total_delay[valid], cmap='viridis', s=10, alpha=0.8)
         if valid.any():
-            lim = [min(analytical_damping[valid].min(), simulation_damping[valid].min()), 1.05*max(analytical_damping[valid].max(), simulation_damping[valid].max())]
+            lim = [0, 1.05*max(analytical_damping[valid].max(), simulation_damping[valid].max())] #[min(analytical_damping[valid].min(), simulation_damping[valid].min()), 
             ax.plot(lim, lim, 'k--', lw=1)
             ax.axhline(0, color='k', lw=0.5, ls='--'); ax.axvline(0, color='k', lw=0.5, ls='--')
-            ax.set_xlim(lim); ax.set_ylim(lim)
+            # ax.set_xlim(lim)
+            ax.set_ylim(lim)
         ax.set_aspect('equal')
         ax.set_xlabel('analytical')
         ax.set_ylabel('simulated')
         ax.set_title(f'Decay rates ({wildcards.pathogen}, $k={k:g}$)')
-        plt.colorbar(sc, ax=ax, label=r'$\tau_W + \tau_B$ (days)', shrink=0.7)
+        plt.colorbar(sc, ax=ax, label=r'total delay $\tau_W + \tau_B$ (days)', shrink=0.7)
         plt.tight_layout()
         plt.savefig(output.damping, dpi=image_resolution); plt.close(fig)
 
@@ -1929,8 +1923,6 @@ rule all:
             metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"],
         ),
         expand(rules.plot_linearised_branching_process_extinction_probabilities.output, outdir=outdir, pathogen=["SARS-CoV-2"]),
-        expand(rules.plot_efficacy_grid_Rt_final.output.plot, pathogen=pathogens, outdir=outdir),
-        expand(rules.plot_efficacy_grid_Itot_final.output.plot, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
         expand(rules.plot_asymptomatic_grid_Itot_final.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
         expand(rules.plot_prcc_monotonicity.output.plot, outdir=outdir, pathogen=pathogens, scenario=prcc_scenarios, outcome=prcc_outcomes, bounds=["empirical", "symmetric"]),
@@ -1955,7 +1947,7 @@ rule all:
         expand(rules.plot_main_intervention_grid.output.plot, outdir=outdir),
         expand(rules.plot_R_1_contours.output.plot, outdir=outdir),
         expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=outdir),
-        expand(rules.export_param_bounds.output.tex, outdir=outdir),
+        expand(rules.export_param_bounds.output.tex, outdir=outdir, bounds=["empirical", "symmetric"]),
         expand(rules.plot_controllability_boundaries.output.plot, outdir=outdir),
         expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=outdir),
         expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=outdir),
@@ -1964,4 +1956,4 @@ rule all:
         expand(rules.calculate_growth_rates.output.txt, outdir=outdir),
         expand(rules.plot_gain_margins.output.plot, outdir=outdir),
         expand(rules.plot_delay_margins.output.plot, outdir=outdir),
-        expand(rules.plot_period_and_damping_scatter.output, outdir=outdir, pathogen=pathogens, k=[10, 30, 60, 80]),
+        expand(rules.plot_period_and_damping_scatter.output, outdir=outdir, pathogen=pathogens, k=[10, 30]),
