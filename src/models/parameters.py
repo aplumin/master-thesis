@@ -6,13 +6,6 @@ import jax.numpy as jnp
 from typing import NamedTuple
 
 
-def calculate_r_eps(p, phi, mu_a_inv, sigma_inv, epsilon_s, mu_s_inv):
-    return p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
-
-def calculate_r(p, phi, mu_a_inv, sigma_inv, mu_s_inv):
-    return p * phi * mu_a_inv + (1-p) * (sigma_inv + mu_s_inv)
-
-
 class Params(NamedTuple):
     """
     Parameters for compartmental models.
@@ -37,6 +30,9 @@ class Params(NamedTuple):
         k_I (float): Sharpness of infection threshold gate.
         n_W (int): Number of reporting delay compartments.
         n_B (int): Number of behavioural delay compartments.
+        R_off (float): Lower threshold of the asymmetric warning trigger.
+        eval_interval (float): Minimum time the warning state is kept before re-evaluation.
+        T_lead (float): Lead time for which the estimated Rt trend is extrapolated.
     """
     R_0: float
     beta: float
@@ -57,7 +53,10 @@ class Params(NamedTuple):
     k_I: float
     n_W: int
     n_B: int
-    
+    R_off: float
+    eval_interval: float
+    T_lead: float
+
     @classmethod
     def for_SEIPAR(cls, 
             R_0: float = 2.69,
@@ -76,7 +75,10 @@ class Params(NamedTuple):
             I_crit: float = 0.0, 
             k_I: float = 1e6,
             n_W: int = 3,
-            n_B: int = 1
+            n_B: int = 1,
+            R_off: float = 1.0,
+            eval_interval: float = 14.0,
+            T_lead: float = 0.0
         ) -> "Params":
         """
         Parameters for the full model with presymptomatic and asymptomatic transmission.
@@ -89,7 +91,8 @@ class Params(NamedTuple):
         return cls(
             R_0=R_0, phi=phi, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, n_W=n_W, n_B=n_B
+            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
+            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
         )
 
     @classmethod
@@ -109,7 +112,10 @@ class Params(NamedTuple):
             I_crit: float = 0.0, 
             k_I: float = 10_000.0,
             n_W: int = 3,
-            n_B: int = 1
+            n_B: int = 1,
+            R_off: float = 1.0,
+            eval_interval: float = 14.0,
+            T_lead: float = 0.0
         ) -> "Params":
         """
         Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
@@ -122,7 +128,8 @@ class Params(NamedTuple):
         return cls(
             R_0=R_0, phi=phi, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, n_W=n_W, n_B=n_B
+            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
+            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
         )
 
     @classmethod
@@ -139,7 +146,10 @@ class Params(NamedTuple):
             I_crit: float = 0.0, 
             k_I: float = 10_000.0,
             n_W: int = 3,
-            n_B: int = 1
+            n_B: int = 1,
+            R_off: float = 1.0,
+            eval_interval: float = 14.0,
+            T_lead: float = 0.0
         ) -> "Params":
         """
         Parameters for the SEIR model without asymptomatic or presymptomatic transmission.
@@ -150,7 +160,8 @@ class Params(NamedTuple):
         return cls(
             R_0=R_0, phi=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=0.0, mu_s_inv=mu_s_inv, p=0.0, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, n_W=n_W, n_B=n_B
+            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
+            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
         )
 
     def update(self, **kwargs) -> "Params":
@@ -165,12 +176,26 @@ class Params(NamedTuple):
             kwargs["R_0"] = jnp.where(r > 0, v["R_0"], 0.0)
         return self._replace(**kwargs)
 
+
+def calculate_r_eps(p, phi, mu_a_inv, sigma_inv, epsilon_s, mu_s_inv):
+    return p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
+
+def calculate_r(p, phi, mu_a_inv, sigma_inv, mu_s_inv):
+    return p * phi * mu_a_inv + (1-p) * (sigma_inv + mu_s_inv)
+
 def logistic_response_function(reproductive_number: float, params: Params, number_infected: float):
     """Logistic response function of the reproductive number for the wastewater warning response."""
-    gate_I = jnp.where( # no effect if threshold set to 0
+    gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
+    return gate_W * binary_response_function(warning_state=1.0, params=params, number_infected=number_infected)
+
+def binary_response_function(warning_state: float, params: Params, number_infected: float):
+    """Contact-rate multiplier for a binary on/off warning state."""
+    return 1.0 - params.epsilon_w * warning_state * prevalence_gate(number_infected, params)
+
+def prevalence_gate(number_infected: float, params: Params):
+    """Logistic gate that disables the intervention below the prevalence threshold I_crit."""
+    return jnp.where( # no effect if threshold set to 0
         params.I_crit > 0.0, 
         1.0 / (1.0 + jnp.exp(-params.k_I * (number_infected - params.I_crit))), 
         1.0
     )
-    gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
-    return 1.0 - params.epsilon_w * gate_W * gate_I
