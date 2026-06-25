@@ -186,16 +186,9 @@ def calculate_r(p, phi, mu_a_inv, sigma_inv, mu_s_inv):
 def logistic_response_function(reproductive_number: float, params: Params, number_infected: float):
     """Logistic response function of the reproductive number for the wastewater warning response."""
     gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
-    return gate_W * binary_response_function(warning_state=1.0, params=params, number_infected=number_infected)
-
-def binary_response_function(warning_state: float, params: Params, number_infected: float):
-    """Contact-rate multiplier for a binary on/off warning state."""
-    return 1.0 - params.epsilon_w * warning_state * prevalence_gate(number_infected, params)
-
-def prevalence_gate(number_infected: float, params: Params):
-    """Logistic gate that disables the intervention below the prevalence threshold I_crit."""
-    return jnp.where( # no effect if threshold set to 0
+    gate_I = jnp.where( # no effect if threshold set to 0
         params.I_crit > 0.0, 
         1.0 / (1.0 + jnp.exp(-params.k_I * (number_infected - params.I_crit))), 
         1.0
     )
+    return 1.0 - params.epsilon_w * gate_W * gate_I
