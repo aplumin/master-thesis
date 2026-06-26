@@ -1,5 +1,3 @@
-# TODO: parameter values
-
 import jax
 jax.config.update('jax_enable_x64', True)
 
@@ -34,10 +32,10 @@ jax_enable_x64=True
 
 ### PARAMETERS ###
 parameters = {
-    "SARS-CoV-2": Params.for_SEIPAR(),
-    "Influenza A": Params.for_SEIAR(),
-    "Ebola": Params.for_SEIR(),
-    "Omicron": Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=4.94),
+    "SARS-CoV-2": Params.for_SEIPAR(R_0=2.69, gamma_inv=3.8, sigma_inv=2.3, mu_s_inv=9.3, mu_a_inv=5.0, p=0.351, phi=0.32),
+    "Influenza A": Params.for_SEIAR(R_0=1.46, gamma_inv=1.65, mu_s_inv=3.38, mu_a_inv=3.38, p=0.36, phi=0.57),
+    "Ebola": Params.for_SEIR(R_0=1.95, gamma_inv=8.5, mu_s_inv=5.0),
+    "Omicron": Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=4.94, p=0.351, phi=0.32),
     "Measles": Params.for_SEIPAR(R_0=15.0, gamma_inv=10.5, sigma_inv=3.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi=0.0),
     "Dengue": Params.for_SEIPAR(R_0=6.0, gamma_inv=5.0, sigma_inv=1.5, mu_s_inv=4.5, mu_a_inv=5.5, p=0.6, phi=0.5),
     "Rhino": Params.for_SEIPAR(R_0=2.8, gamma_inv=0.75, sigma_inv=0.75, mu_s_inv=11.0, mu_a_inv=11.0, p=22.5, phi=0.1),
@@ -142,7 +140,7 @@ def _get_generation_time(ps: Params):
     denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
     return ps.gamma_inv + nom / denom
 
-updated_covid_params = Params.for_SEIPAR(gamma_inv=3.8, sigma_inv=2.3, mu_a_inv=5.0, p=0.351, phi=0.32, mu_s_inv=3.2)
+updated_covid_params = Params.for_SEIPAR(gamma_inv=3.8, sigma_inv=2.3, mu_a_inv=5.0, p=0.351, phi=0.32, mu_s_inv=9.3)
 
 rule calculate_generation_times:
     output:
