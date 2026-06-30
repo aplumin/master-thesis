@@ -255,6 +255,7 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
             ax.errorbar(params.p, params.phi, xerr=xerr, yerr=yerr, fmt='o', color='white', markeredgecolor='black', ecolor='white', elinewidth=1.5, capsize=3, markersize=5)
         else:
             ax.plot(params.p, params.phi, marker='o', color='white', markeredgecolor='black', markersize=5)
+        ax.set_ylim([0.0,1.0])
         return mesh
     g.map_dataframe(_meshmap, **plot_kwargs)
 

@@ -328,7 +328,7 @@ rule plot_main_intervention_grid:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         eps_ww = jnp.linspace(0.0, 0.999, 100)
         eps_ss = jnp.linspace(0.0, 0.999, 100)
-        t1 = 10000.0
+        t1 = 30000.0
 
         # compute per pathogen
         Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
@@ -394,10 +394,10 @@ rule plot_R_1_contours:
         eps_ss = jnp.linspace(0.0, 0.999, 100)
         
         for pathogen in pathogens:
-            mean_params = parameters[pathogen]
+            mean_params = parameters[pathogen].update(k=1.0)
             best_params = mean_params.update(**best_params_kwargs[pathogen])
             worst_params = mean_params.update(**worst_params_kwargs[pathogen])
-            t1 = Rt_times[pathogen]
+            t1 = 3000 #Rt_times[pathogen]
             model = models[pathogen]
             
             Rt_mean = np.array(compute_R_grid(model=model, base_params=mean_params, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1))
@@ -420,7 +420,7 @@ rule plot_R_1_contours:
         ax.legend(handles=[Patch(facecolor=colors[p], alpha=0.5, label=p) for p in pathogens], loc='upper right')
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight')
         plt.close(fig)
-  
+
 rule plot_combined_contour_grid_R1_Itot:
     output:
         plot="{outdir}/compartmental/combined_R1_and_Itot_reduction_contours.png"
@@ -429,7 +429,7 @@ rule plot_combined_contour_grid_R1_Itot:
         
         eps_ww = jnp.linspace(0.0, 0.999, 100)
         eps_ss = jnp.linspace(0.0, 0.999, 100)
-        t1 = 500.0
+        t1 = 3000.0
         R_crits = [0.8, 1.0, 1.2, 1.5]
         linestyles = ['--', '-', '-.', ':']
 
@@ -437,7 +437,6 @@ rule plot_combined_contour_grid_R1_Itot:
         for pathogen in pathogens:
             model = models[pathogen]
             base_params = parameters[pathogen]
-            tRt = Rt_times[pathogen]
             color = colors[pathogen]
             _, yy0 = model(params=base_params.update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0)
             baseline_Itot = yy0[0,0] - yy0[-1,0]
@@ -472,7 +471,7 @@ rule plot_controllability_boundaries:
         for ax, pathogen in zip(axs, asymptomatic_pathogens):
             base = parameters[pathogen]
             model = models[pathogen]
-            t1 = Rt_times[pathogen]
+            t1 = 10000 #Rt_times[pathogen]
             shade_map = {0.0: 'red', 0.2: 'orange', 0.4: 'yellow', 0.6:'lime', 0.8: 'green'}
 
             # nonsymptomatic fraction heatmap
@@ -559,7 +558,7 @@ rule plot_asymptomatic_generation_time:
 
         fig, ax = plot_heatmap(
             X=P, Y=PHI, Z=generation_times, cmap='magma', contour_levels=[11,12,13,14,15],
-            title='Influence of asymptomatic transmission on generation time',
+            title='Asymptomatic transmission and generation intervals',
             xlabel=r'Proportion asymptomatic, $p$', ylabel=r'Relative infectiousness, $\varphi$',
         )
         fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
@@ -810,8 +809,8 @@ rule plot_combined_sensitivity_grid:
             color = colors[pathogen]
             for c, outcome in enumerate(prcc_outcomes):
                 ax = axs[r, c]
-                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}.npz")
-                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}.npz")
+                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}_empirical.npz")
+                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}_empirical.npz")
                 # bars
                 err_kw = dict(ecolor='k', linewidth=0.6, capsize=1.5)
                 edge_kw = dict(edgecolor='k', linewidth=0.3)
@@ -880,16 +879,16 @@ rule export_param_bounds:
 # STABILITY ANALYSIS
 ###############################################
 
-# TODO: response stays < 1: check logic
 rule plot_true_vs_reported_Rt_scenarios:
     output:
-        plot="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_scenarios.png",
+        plot="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_scenarios.png",
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
 
-        taus_W = [3.0, 7.0, 14.0, 21.0]
-        taus_B = [1.0, 3.0, 7.0, 14.0]
-        k = float(wildcards.k)
+        taus_W = [7.0, 14.0, 21.0]
+        taus_B = [3.0, 7.0, 14.0]
+        ks = [5.0, 10.0, 50.0]
+        k = 10.0
         t1 = 300.0
 
         epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
@@ -897,7 +896,7 @@ rule plot_true_vs_reported_Rt_scenarios:
         model = models[wildcards.pathogen]
 
         sns.set_theme(style="white", rc={"axes.grid": False})
-        fig, axs = plt.subplots(nrows=len(taus_W), ncols=len(taus_B), figsize=(12, 12), sharex=True, sharey=True)
+        fig, axs = plt.subplots(nrows=len(taus_W)+1, ncols=len(taus_B), figsize=(12, 12), sharex=True, sharey=True)
 
         for i, tau_W in enumerate(taus_W):
             for j, tau_B in enumerate(taus_B):
@@ -915,33 +914,9 @@ rule plot_true_vs_reported_Rt_scenarios:
                 ax.plot(tt, rt_true, color='black')
                 ax.plot(tt, rt_reported, color='red')
                 ax.axhline(params.R_crit, color='grey', linestyle='--')
-                ax.text(0.97, 0.95, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
+                ax.text(0.97, 0.15, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
 
-        fig.suptitle(f'{wildcards.pathogen}: $k={k:g}$', fontsize=18, y=0.995)
-        fig.legend(
-            [Line2D([0], [0], color='black', lw=2), Line2D([0], [0], color='red', lw=2)],
-            ['True $R_t$', 'Reported $R_t$'],
-            loc='lower center', ncol=2, bbox_to_anchor=(0.5, -0.02), fontsize=16,
-        )
-        plt.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close()
-
-rule plot_true_vs_reported_Rt_scenarios_vary_k:
-    output:
-        plot="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_tauW{tau_W}_tauB{tau_B}_scenarios.png",
-    run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-
-        ks = [1.0, 5.0, 10.0, 50.0, 100.0]
-        tau_W = float(wildcards.tau_W)
-        tau_B = float(wildcards.tau_B)
-        t1 = 300.0
-
-        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
-        base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, tau_W=tau_W, tau_B=tau_B)
-        model = models[wildcards.pathogen]
-
-        sns.set_theme(style="white", rc={"axes.grid": False})
-        fig, axs = plt.subplots(nrows=1, ncols=len(ks), figsize=(3*len(ks), 4), sharex=True, sharey=True)
+        base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, tau_W=14.0, tau_B=7.0)
 
         for i, k in enumerate(ks):
             params = base_params.update(k=k)
@@ -952,18 +927,18 @@ rule plot_true_vs_reported_Rt_scenarios_vary_k:
             total_time_above = float(above.mean() * t1)
             num_crossings = int(jnp.sum(jnp.diff(above) > 0))
 
-            ax = axs[i]
+            ax = axs[len(taus_W),i]
             ax.set_title(f'$k={k}$', fontsize=16)
+            ax.set_ylabel(f'$\\tau_W={params.tau_W},\\tau_B={params.tau_B}$', fontsize=16)
             ax.plot(tt, rt_true, color='black')
             ax.plot(tt, rt_reported, color='red')
             ax.axhline(params.R_crit, color='grey', linestyle='--')
-            ax.text(0.97, 0.1, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
+            ax.text(0.97, 0.15, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
 
-        fig.suptitle(f'{wildcards.pathogen}: $\\tau_W={params.tau_W:g}$, $\\tau_B={params.tau_B:g}$', fontsize=18, y=0.995)
         fig.legend(
             [Line2D([0], [0], color='black', lw=2), Line2D([0], [0], color='red', lw=2)],
             ['True $R_t$', 'Reported $R_t$'],
-            loc='lower center', ncol=2, bbox_to_anchor=(0.5, -0.1), fontsize=16,
+            loc='lower center', ncol=2, bbox_to_anchor=(0.5, 0.02), fontsize=16,
         )
         plt.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close()
 
@@ -1383,7 +1358,7 @@ rule plot_stochastic_intervention_grid:
 
 rule plot_stochastic_cumulative_extinction_probability:
     output:
-        plot ="{outdir}/gillespie/cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}_scenario_{scenario}.png",
+        plot ="{outdir}/gillespie/cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}_combined.png",
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = float(wildcards.N)
@@ -1404,63 +1379,87 @@ rule plot_stochastic_cumulative_extinction_probability:
             tt, yy = gillespie_SEIPAR_W(params=ps, N=N, t1=t1)
             I = yy[:,2] + yy[:,3] + yy[:,4]
             if np.max(I) < Iest:
-                initial_fadeout_times.append((tt[-1]))
+                initial_fadeout_times.append(tt[-1])
             else:
-                established_extinction_times.append((tt[-1]))
-
-        if wildcards.scenario == 'establishment':
-            extinction_times = established_extinction_times
-        else:
-            extinction_times = np.concatenate([established_extinction_times, initial_fadeout_times])
-
-        # cumulative extinction times and CIs
-        sorted_times = np.sort(extinction_times)
-        cumulative_prob = np.arange(1, sorted_times.shape[0]+1) / sorted_times.shape[0]
-        z_score = 1.96
-        std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / sorted_times.shape[0])
-        ci_lower = np.maximum(0, cumulative_prob - z_score*std_error)
-        ci_upper = np.minimum(1, cumulative_prob + z_score*std_error)
-
-        # plot
-        fig, ax1 = plt.subplots(figsize=(10, 6))
-        ax1.step(sorted_times, cumulative_prob, where='post', label='Cumulative extinction probability', color='blue', linewidth=2)
-        ax1.fill_between(sorted_times, ci_lower, ci_upper, step='post', color='blue', alpha=0.25)
-
-        # median time
-        median_time = np.median(extinction_times)
-        median_time_ci_lower = sorted_times[np.argmax(ci_upper >= 0.5)]
-        median_time_ci_upper = sorted_times[np.argmax(ci_lower >= 0.5)]
-        ax1.axvline(median_time, color='red', label=f'Median: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
-        ax1.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
-
-        # 95% time
-        time_95 = np.percentile(extinction_times, 95)
-        time_95_ci_lower = sorted_times[np.argmax(ci_upper >= 0.95)]
-        time_95_ci_upper = sorted_times[np.argmax(ci_lower >= 0.95)]
-        ax1.axvline(time_95, color='orange', label=f'95%: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
-        ax1.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
+                established_extinction_times.append(tt[-1])
+        extinction_times_est = np.array(established_extinction_times)
+        extinction_times_all = np.concatenate([established_extinction_times, initial_fadeout_times])
 
         # deterministic susceptible trajectory
         model = models[wildcards.pathogen]
-        ps = parameters[wildcards.pathogen].update(epsilon_s=eps_s, epsilon_w=eps_w)
-        tt, yy = model(params=ps, t1=t1, E0=1/N)
-        ax1.plot(tt, yy.T[0], color='green', label='Deterministic susceptible trajectory')
+        ps_det = parameters[wildcards.pathogen].update(epsilon_s=eps_s, epsilon_w=eps_w)
+        tt_det, yy_det = model(params=ps_det, t1=t1, E0=1/N)
+        S_det = yy_det.T[0]
 
-        # histogram
-        ax2 = ax1.twinx()
-        ax2.hist(extinction_times, bins=100, density=True, color='gray', alpha=0.3, label='Extinction times histogram')
-        ax2.set_ylabel('Density', color='gray', fontsize=12)
-        ax2.tick_params(axis='y', labelcolor='gray')
+        # subplots with shared x axis
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10,10), sharex=True)
 
-        # styling
-        plt.title(f'Cumulative extinction probability ({wildcards.pathogen}, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$, {wildcards.scenario})', fontsize=14)
-        ax1.set_xlabel('Days', fontsize=12)
-        ax1.set_ylim(0, 1.05)
-        ax1.set_xlim(-50, max(extinction_times))
-        lines_1, labels_1 = ax1.get_legend_handles_labels()
-        lines_2, labels_2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines_1+lines_2, labels_1+labels_2, loc='best')
-        ax1.grid(True, alpha=0.5)
+        def plot_scenario(ax, times, title_label):
+            if len(times) == 0:
+                return
+            sorted_times = np.sort(times)
+            n_events = sorted_times.shape[0]
+            cumulative_prob = np.arange(1, n_events + 1) / n_events
+            
+            z_score = 1.96
+            std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / n_events)
+            ci_lower = np.maximum(0, cumulative_prob - z_score*std_error)
+            ci_upper = np.minimum(1, cumulative_prob + z_score*std_error)
+
+            ax.step(sorted_times, cumulative_prob, where='post', label='Cumulative extinction probability', color='blue', linewidth=2)
+            ax.fill_between(sorted_times, ci_lower, ci_upper, step='post', color='blue', alpha=0.25)
+
+            # median time
+            median_time = np.median(times)
+            idx_med_upper = np.argmax(ci_upper >= 0.5)
+            idx_med_lower = np.argmax(ci_lower >= 0.5)
+            if idx_med_upper < n_events and ci_upper[-1] >= 0.5:
+                median_time_ci_lower = sorted_times[idx_med_upper]
+                median_time_ci_upper = sorted_times[idx_med_lower] if ci_lower[-1] >= 0.5 else sorted_times[-1]
+                ax.axvline(median_time, color='red', label=f'Median: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
+                ax.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
+            else:
+                ax.axvline(median_time, color='red', label=f'Median: {median_time:.2f}')
+
+            # 95% time
+            time_95 = np.percentile(times, 95)
+            idx_95_upper = np.argmax(ci_upper >= 0.95)
+            idx_95_lower = np.argmax(ci_lower >= 0.95)
+            if idx_95_upper < n_events and ci_upper[-1] >= 0.95:
+                time_95_ci_lower = sorted_times[idx_95_upper]
+                time_95_ci_upper = sorted_times[idx_95_lower] if ci_lower[-1] >= 0.95 else sorted_times[-1]
+                ax.axvline(time_95, color='orange', label=f'95%: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
+                ax.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
+            else:
+                ax.axvline(time_95, color='orange', label=f'95%: {time_95:.2f}')
+
+            # deterministic susceptible trajectory
+            ax.plot(tt_det, S_det, color='green', label='Deterministic susceptible trajectory')
+
+            # histogram
+            ax_hist = ax.twinx()
+            ax_hist.hist(times, bins=100, density=True, color='gray', alpha=0.3, label='Extinction times histogram')
+            ax_hist.set_ylabel('Density', color='gray', fontsize=11)
+            ax_hist.tick_params(axis='y', labelcolor='gray')
+
+            # styling
+            ax.set_title(title_label, fontsize=12)
+            ax.set_ylim(0, 1.05)
+            ax.grid(True, alpha=0.5)
+            
+            # legends
+            lines_1, labels_1 = ax.get_legend_handles_labels()
+            lines_2, labels_2 = ax_hist.get_legend_handles_labels()
+            ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc='best', fontsize=9)
+
+        # global plotting
+        plot_scenario(ax1, extinction_times_all, "All introductions")
+        plot_scenario(ax2, extinction_times_est, "Established outbreaks")
+        ax2.set_xlabel('days', fontsize=12)
+        if len(extinction_times_all) > 0:
+            ax2.set_xlim(-50, max(extinction_times_all))
+        
+        plt.suptitle(f'Cumulative Extinction Probability ({wildcards.pathogen}, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$)', fontsize=14, y=0.98)
         fig.tight_layout()
         plt.savefig(output.plot, dpi=image_resolution); plt.close()
 
@@ -1837,7 +1836,7 @@ METRIC_NAMES = [
     "time above $R_{crit}$",
     "total contact reduction cost",
     "total number of infections",
-    "peak number of symptomatic infections",
+    "symptomatic peak",
 ]
 
 METRIC_BOUNDS = [
@@ -1878,9 +1877,9 @@ def _strategy_grid(pathogen, k, eps_w, eps_s, t1=300.0, taus_W=np.linspace(1.0, 
                 data[s][:, i, j] = _strategy_metrics(model, params_ij, t1, asym, disc, ci)
     return data, list(taus_W), list(taus_B)
 
-rule compute_strategy_grid:
+rule compute_alternative_warning_strategies_grid:
     output:
-        data="{outdir}/compartmental/strategy_grid_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.npz",
+        data="{outdir}/compartmental/alternative_warning_strategies_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.npz",
     run:
         os.makedirs(os.path.dirname(output.data), exist_ok=True)
         data, taus_W, taus_B = _strategy_grid(
@@ -1893,59 +1892,69 @@ rule compute_strategy_grid:
             strategies=np.asarray(strategies), metrics=np.asarray(METRIC_NAMES)
         )
 
-rule plot_strategy_comparison_maps:
+rule plot_alternative_warning_strategies:
     input:
-        data="{outdir}/compartmental/strategy_grid_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.npz",
+        data="{outdir}/compartmental/alternative_warning_strategies_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.npz",
     output:
-        plot="{outdir}/compartmental/strategy_comparison_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.png",
+        plot="{outdir}/compartmental/alternative_warning_strategies_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.png",
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         k = float(wildcards.k); eps_w = float(wildcards.eps_w); eps_s = float(wildcards.eps_s)
         t1 = 300.0
 
         npz = np.load(input.data)
-        grid = npz["grid"]; taus_W = npz["taus_W"]; taus_B = npz["taus_B"]
+        grid = npz["grid"]
+        taus_W = npz["taus_W"]
+        taus_B = npz["taus_B"]
         strategies = [str(s) for s in npz["strategies"]]
         metric_names = [str(m) for m in npz["metrics"]]
-        nS, nM = len(strategies), len(metric_names)
-        ncols = nM + 1
+        nS = len(strategies)
+        nM = len(metric_names)
+        nrows = nM + 1
 
         model = models_piecewise[wildcards.pathogen]
         base = parameters[wildcards.pathogen].update(
             epsilon_s=eps_s, epsilon_w=eps_w, k=k, R_off=R_OFF, eval_interval=EVAL_INTERVAL)
 
         sns.set_theme(style="white", rc={"axes.grid": False})
-        fig = plt.figure(figsize=(3.05 * ncols, 3.05 * nS + 1.4))
-        gs = fig.add_gridspec(nS + 2, ncols, height_ratios=[1.0] * nS + [0.16, 0.16], hspace=0.18, wspace=0.12)
-        axs = np.empty((nS, ncols), dtype=object)
-        for r in range(nS):
-            for c in range(ncols):
+        fig = plt.figure(figsize=(3.05 * nS + 1.4, 3.05 * nrows))
+        gs = fig.add_gridspec(
+            nrows, nS + 2, 
+            width_ratios=[1.0] * nS + [0.16, 0.16], 
+            height_ratios=[1.0] * nM + [1.0], 
+            hspace=0.18, wspace=0.12
+        )
+        
+        axs = np.empty((nrows, nS), dtype=object)
+        for r in range(nrows):
+            for c in range(nS):
                 axs[r, c] = fig.add_subplot(gs[r, c])
                 axs[r, c].set_box_aspect(1)
 
         # heatmaps
         ims = [None] * nM
-        for r, s in enumerate(strategies):
-            for c in range(nM):
+        for c, s in enumerate(strategies):
+            for r in range(nM):
                 ax = axs[r, c]
-                vmin, vmax = METRIC_BOUNDS[c]
-                ims[c] = ax.imshow(
-                    grid[r, c], origin="lower", aspect="auto", cmap="magma",
+                vmin, vmax = METRIC_BOUNDS[r] 
+                im = ax.imshow(
+                    grid[c, r], origin="lower", aspect="auto", cmap="magma",
                     vmin=vmin, vmax=vmax, extent=[taus_B[0], taus_B[-1], taus_W[0], taus_W[-1]],
-                )
+                )   
                 if r == 0:
-                    ax.set_title(metric_names[c], fontsize=10)
+                    ax.set_title(strategies[c], fontsize=10)
                 if c == 0:
-                    ax.set_ylabel(f"{s}\n$\\tau_W$", fontsize=12)
+                    ims[r] = im
+                    ax.set_ylabel(f"{metric_names[r]}\n$\\tau_W$", fontsize=12)
                 else:
                     ax.tick_params(labelleft=False)
-                if r == nS - 1:
+                if r == nM - 1:
                     ax.set_xlabel("$\\tau_B$")
                 else:
                     ax.tick_params(labelbottom=False)
 
         # oscillations
-        for r, s in enumerate(strategies):
+        for c, s in enumerate(strategies):
             asym, disc, tl, ci = STRATEGIES[s]
             params = base.update(tau_W=14.0, tau_B=7.0, T_lead=tl)
             tt, yy, mm = model(params=params, t1=t1, asymmetric=asym, discrete_eval=disc, check_interval=ci)
@@ -1953,32 +1962,27 @@ rule plot_strategy_comparison_maps:
             rt_reported = yy[:, -(params.n_B + 1)]
             above = (rt_reported >= params.R_crit).astype(jnp.float32)
 
-            ax = axs[r, -1]
+            ax = axs[-1, c]
             ax.plot(tt, rt_true, color="black")
             ax.plot(tt, rt_reported, color="red")
             ax.axhline(params.R_crit, color="grey", linestyle="--")
             ax.set_ylim(0, 1.75); ax.set_xlim(0, t1)
-            ax.yaxis.set_label_position("right"); ax.yaxis.tick_right()
-            ax.set_ylabel("$R_t$", fontsize=11)
-            if r == 0:
-                ax.set_title("true vs reported $R_t$\n($\\tau_W=14$, $\\tau_B=7$)", fontsize=10)
-            if r == nS - 1:
-                ax.set_xlabel("time (days)")
-            else:
-                ax.tick_params(labelbottom=False)
+            if c == 0:
+                ax.set_ylabel("true vs reported $R_t$\n($\\tau_W=14$, $\\tau_B=7$)", fontsize=11)
+            ax.set_xlabel("Time (days)")
             ax.text(0.96, 0.94,
                     f'{float(above.mean() * t1):.0f} days above $R_{{crit}}$\n{int(jnp.sum(jnp.diff(above) > 0))} warnings',
                     transform=ax.transAxes, ha="right", va="top", fontsize=7)
 
         # legends
-        for c in range(nM):
-            cax = fig.add_subplot(gs[nS + 1, c])
-            fig.colorbar(ims[c], cax=cax, orientation="horizontal")
-        lax = fig.add_subplot(gs[nS + 1, ncols - 1]); lax.axis("off")
+        for r in range(nM):
+            cax = fig.add_subplot(gs[r, nS + 1])
+            fig.colorbar(ims[r], cax=cax, orientation="vertical")
+        lax = fig.add_subplot(gs[nrows - 1, nS + 1]); lax.axis("off")
         lax.legend(
             [Line2D([0], [0], color="black", lw=2), Line2D([0], [0], color="red", lw=2)],
             ["True $R_t$", "Reported $R_t$"],
-            loc="center", ncol=1, fontsize=9, frameon=False,
+            loc="center", ncol=1, fontsize=11, frameon=False,
         )
         fig.suptitle(f"Warning strategy comparison ({wildcards.pathogen}, $\\varepsilon_s={eps_s:g}$, $\\varepsilon_w={eps_w:g}$, $k={k:g}$)", fontsize=18, y=0.94)
         plt.savefig(output.plot, dpi=image_resolution, bbox_inches="tight")
@@ -2042,12 +2046,12 @@ rule plot_true_vs_reported_Rt_scenarios_piecewise:
 ###############################################
 rule all:
     input:
-        expand(rules.plot_strategy_comparison_maps.output.plot, 
+        expand(rules.plot_alternative_warning_strategies.output.plot, 
             outdir=outdir, pathogen=["SARS-CoV-2"], k=[10], eps_s=[0.5], eps_w=[0.0, 0.4, 0.8, 1.0]
         ),
         expand(
             rules.plot_stochastic_cumulative_extinction_probability.output.plot, outdir=outdir,
-            pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8], scenario=['establishment', 'all'],
+            pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8], #scenario=['establishment', 'all'],
         ),
         expand(rules.plot_superspreading_baseline_trajectories.output, outdir=outdir, pathogen=["SARS-CoV-2"], #pathogens,
             N=[100, 50_000, 500_000] #,100000], # N=gillespie_popsizes,
@@ -2088,9 +2092,8 @@ rule all:
         ),
         expand(rules.baseline_trajectories.output.plot, pathogen=pathogens, outdir=outdir),
         # expand(rules.baseline_trajectories_no_asymptomatic.output.plot, pathogen=pathogens, outdir=outdir),
-        expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=pathogens, outdir=outdir, k=[1, 3, 10, 30],),
+        expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=pathogens, outdir=outdir),
         expand(rules.plot_true_vs_reported_Rt_scenarios_piecewise.output, pathogen=["SARS-CoV-2"], outdir=outdir, k=[10], scenario=list(STRATEGIES)),
-        expand(rules.plot_true_vs_reported_Rt_scenarios_vary_k.output, pathogen=pathogens, outdir=outdir, tau_W=[14], tau_B=[7]),
         expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=["SARS-CoV-2"], outdir=outdir, k=[10]), #k=[1, 3, 10, 30],),
         expand(rules.plot_response_function.output.plot, outdir=outdir),
         expand(rules.plot_main_intervention_grid.output.plot, outdir=outdir),
