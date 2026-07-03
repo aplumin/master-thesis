@@ -4,6 +4,9 @@ Functions for running models.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+from scipy.optimize import brentq
+
 from functools import partial
 from typing import Callable
 
@@ -11,6 +14,7 @@ from models.parameters import Params
 
 
 def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None):
+    """Compute outcome metrics from model trajectories."""
     N_t = tt.shape[0]
     dt = (tt[-1] - tt[0]) / jnp.maximum(N_t - 1, 1)
     S = yy[:,0] / population_size
@@ -165,3 +169,130 @@ def compute_amplitude_duration_piecewise(model, base_params, sweep_values, sweep
         _, _, _, _, _, amplitude, total_time_above, num_crossings = outcome_metrics(tt, yy, params, t1, delta_dep, warning_state=ms)
         return amplitude, total_time_above, num_crossings
     return jax.vmap(wrap)(sweep_values)
+
+def R0_decomposition(params: Params) -> dict[str, float]:
+    """Decomposition of R0 into asymptomatic, presymptomatic and symptomatic contributions."""
+    R_a = float(params.beta * params.p * params.phi * params.mu_a_inv)
+    R_p = float(params.beta * (1.0 - params.p) * params.sigma_inv)
+    R_s = float(params.beta * (1.0 - params.p) * params.mu_s_inv)
+    return {"a": R_a, "p": R_p, "s": R_s}
+
+def transmission_fractions(params: Params) -> dict[str, float]:
+    """Fraction of all transmission events from to each type."""
+    R = R0_decomposition(params)
+    total = R["a"] + R["p"] + R["s"]
+    return {k: (R[k] / total if total > 0 else 0.0) for k in ("a", "p", "s")}
+
+def _infection_jacobian(params: Params) -> tuple[np.ndarray, list[str]]:
+    """Jacobian linearised around the disease-free equilibrium."""
+    beta = float(params.beta)
+    gamma = 1.0 / float(params.gamma_inv)
+    mu_s = 1.0 / float(params.mu_s_inv)
+    p = float(params.p)
+    phi = float(params.phi)
+    has_presymptomatic = float(params.sigma_inv) > 0.0
+    has_asymptomatic = float(params.mu_a_inv) > 0.0
+    if has_presymptomatic and has_asymptomatic: # SEIPAR
+        sigma = 1.0 / float(params.sigma_inv)
+        mu_a = 1.0 / float(params.mu_a_inv)
+        J = np.array([
+            [-gamma,        beta * phi, beta,   beta ],
+            [p * gamma,     -mu_a,      0.0,    0.0  ],
+            [(1-p) * gamma, 0.0,        -sigma, 0.0  ],
+            [0.0,           0.0,        sigma,  -mu_s],
+        ])
+        labels = ["a", "p", "s"]
+    elif has_asymptomatic: # SEIAR
+        mu_a = 1.0 / float(params.mu_a_inv)
+        J = np.array([
+            [-gamma,          beta * phi, beta ],
+            [p * gamma,       -mu_a,      0.0  ],
+            [(1 - p) * gamma, 0.0,        -mu_s],
+        ])
+        labels = ["a", "s"]
+    else: # SEIR
+        J = np.array([
+            [-gamma, beta ],
+            [gamma,  -mu_s],
+        ])
+        labels = ["s"]
+    return J, labels
+
+def growth_rate(params: Params) -> float:
+    """Initial exponential growth rate alpha (dominant eigenvalue of the Jacobian)."""
+    J, _ = _infection_jacobian(params)
+    return float(np.linalg.eig(J)[0].real.max())
+
+def infectious_fractions(params: Params) -> dict[str, float]:
+    """Fraction of infectious individuals of each type during the initial exponential growth phase."""
+    J, labels = _infection_jacobian(params)
+    w, V = np.linalg.eig(J)
+    v = np.abs(np.real(V[:, int(np.argmax(w.real))]))
+    infectious = v[1:]
+    total = infectious.sum()
+    fractions = infectious / total if total > 0 else infectious
+    f = {"a": 0.0, "p": 0.0, "s": 0.0}
+    f.update({lab: float(f) for lab, f in zip(labels, fractions)})
+    return f
+
+def calculate_mt_branching_q(ps, ew, es):
+    def extinction_prob(q):
+        asyx = ps.phi * ps.beta * ps.mu_a_inv * (1-ew/2)
+        presyx = ps.beta * ps.sigma_inv * (1-ew/2)
+        syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
+        return ps.p / (1 + asyx * (1-q)) + (1-ps.p) / ((1 + presyx * (1-q)) * (1 + syx * (1-q))) - q
+    ext_prob = 1.0
+    try: ext_prob = brentq(extinction_prob, 0.0, 1.0-1e-9)
+    except: pass
+    return ext_prob
+
+def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
+    def g_r(q,r):
+        return 1-(1+(1-q)/r)**(-r)
+    def extinction_prob(q):
+        asyx = ps.phi * ps.beta * ps.mu_a_inv * (1-ew/2)
+        presyx = ps.beta * ps.sigma_inv * (1-ew/2)
+        syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
+        return ps.p / (1 + asyx * g_r(q,k)) + (1-ps.p) / ((1 + presyx * g_r(q,k)) * (1 + syx * g_r(q,k))) - q
+    ext_prob = 1.0
+    try: ext_prob = brentq(extinction_prob, 0.0, 1.0 - 1e-9)
+    except ValueError: pass
+    return ext_prob
+
+def calculate_generation_time(ps: Params):
+    nom = ps.p * ps.phi * ps.mu_a_inv**2 +(1-ps.p)*(ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
+    denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
+    return ps.gamma_inv + nom / denom
+
+def _trapz(y, x):
+    return float(np.sum(0.5 * (y[1:] + y[:-1]) * np.diff(x)))
+
+def strategy_metrics(model, params, t1, asymmetric, discrete_eval, check_interval):
+    ts, ys, _ = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
+    ts = np.asarray(ts)
+    ys = np.asarray(ys)
+    S, B_out = ys[:, 0], ys[:, -1]
+    rt_true = float(params.R_0) * float(params.rho) * B_out * S
+    late = rt_true[ts >= 2.0 * t1 / 3.0]
+    amplitude = float(late.max() - late.min())
+    time_above = float((rt_true > params.R_crit).mean() * t1)
+    cost = _trapz(1.0 - B_out, ts)
+    Itot = S[0] - S[-1]
+    Is = ys[:, -(params.n_W + params.n_B + 2)]
+    peak_Is = np.max(Is)
+    return amplitude, time_above, cost, Itot, peak_Is
+
+def strategy_grid(
+    model, base_params, k, eps_w, eps_s, strategies,
+    t1=300.0, taus_W=np.linspace(1.0, 30.0, 100), taus_B=np.linspace(1.0, 30.0, 100), 
+    R_off=0.8, eval_interval=14.0,
+):
+    base_params = base_params.update(epsilon_s=eps_s, epsilon_w=eps_w, k=k, R_off=R_off, eval_interval=eval_interval)
+    nW, nB = len(taus_W), len(taus_B)
+    data = {s: np.zeros((5, nW, nB)) for s in strategies}
+    for s, (asym, disc, tl, ci) in strategies.items():
+        for i, tau_W in enumerate(taus_W):
+            for j, tau_B in enumerate(taus_B):
+                params_ij = base_params.update(tau_W=tau_W, tau_B=tau_B, T_lead=tl)
+                data[s][:, i, j] = strategy_metrics(model, params_ij, t1, asym, disc, ci)
+    return data, list(taus_W), list(taus_B)

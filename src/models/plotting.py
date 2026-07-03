@@ -5,6 +5,7 @@ Plotting functions.
 import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import fsolve
+from scipy.stats import gamma
 from typing import Callable
 
 import matplotlib as mpl
@@ -273,3 +274,136 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     # save and close
     plt.savefig(path, dpi=image_resolution, bbox_inches='tight')
     plt.close(g.figure)
+
+def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
+    if len(times) == 0: return
+    
+    sorted_times = np.sort(times)
+    n_events = sorted_times.shape[0]
+    cumulative_prob = np.arange(1, n_events + 1) / n_events
+    
+    z_score = 1.96
+    std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / n_events)
+    ci_lower = np.maximum(0, cumulative_prob - z_score*std_error)
+    ci_upper = np.minimum(1, cumulative_prob + z_score*std_error)
+    ax.step(sorted_times, cumulative_prob, where='post', label='Cumulative extinction probability', color='blue', linewidth=2)
+    ax.fill_between(sorted_times, ci_lower, ci_upper, step='post', color='blue', alpha=0.25)
+    
+    # median time
+    median_time = np.median(times)
+    idx_med_upper = np.argmax(ci_upper >= 0.5)
+    idx_med_lower = np.argmax(ci_lower >= 0.5)
+    if idx_med_upper < n_events and ci_upper[-1] >= 0.5:
+        median_time_ci_lower = sorted_times[idx_med_upper]
+        median_time_ci_upper = sorted_times[idx_med_lower] if ci_lower[-1] >= 0.5 else sorted_times[-1]
+        ax.axvline(median_time, color='red', label=f'Median: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
+        ax.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
+    else:
+        ax.axvline(median_time, color='red', label=f'Median: {median_time:.2f}')
+    
+    # 95% time
+    time_95 = np.percentile(times, 95)
+    idx_95_upper = np.argmax(ci_upper >= 0.95)
+    idx_95_lower = np.argmax(ci_lower >= 0.95)
+    if idx_95_upper < n_events and ci_upper[-1] >= 0.95:
+        time_95_ci_lower = sorted_times[idx_95_upper]
+        time_95_ci_upper = sorted_times[idx_95_lower] if ci_lower[-1] >= 0.95 else sorted_times[-1]
+        ax.axvline(time_95, color='orange', label=f'95%: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
+        ax.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
+    else:
+        ax.axvline(time_95, color='orange', label=f'95%: {time_95:.2f}')
+    
+    # deterministic susceptible trajectory
+    ax.plot(tt_det, S_det, color='green', label='Deterministic susceptible trajectory')
+    
+    # histogram
+    ax_hist = ax.twinx()
+    ax_hist.hist(times, bins=100, density=True, color='gray', alpha=0.3, label='Extinction times histogram')
+    ax_hist.set_ylabel('Density', color='gray', fontsize=11)
+    ax_hist.tick_params(axis='y', labelcolor='gray')
+    
+    # styling
+    ax.set_title(title_label, fontsize=12)
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, alpha=0.5)
+    
+    # legends
+    lines_1, labels_1 = ax.get_legend_handles_labels()
+    lines_2, labels_2 = ax_hist.get_legend_handles_labels()
+    ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc='best', fontsize=9)
+
+def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, eps_w, path, res, pathogens, colors, parameters, best_params_kwargs, worst_params_kwargs):
+    t = np.arange(0, 50, dt)
+    fig, axes = plt.subplots(3, 2, figsize=(14, 12), width_ratios=(1,2))
+    # Reporting delay
+    reporting_delay = gamma.pdf(t, a=n_W, scale=tau_W/n_W)
+    axes[0, 0].plot(t, reporting_delay, color='purple', linewidth=2)
+    axes[0, 0].fill_between(t, reporting_delay, alpha=0.1, color='purple')
+    axes[0, 0].axvline(tau_W, color='purple', linestyle=':', linewidth=2, label=f'Mean: $\\tau_W={tau_W:.0f}$')
+    axes[0, 0].set_title(f'Reporting Delay ($n_W={n_W}$)')
+    axes[0, 0].set_xlabel('Days')
+    axes[0, 0].legend()
+    axes[0, 0].set_ylim(0, 0.06)
+    axes[0, 0].grid(True, alpha=0.3)
+    # Logistic response
+    x_pure = np.linspace(0, 3.5, 400)
+    y_pure = 1 - (eps_w / (1 + np.exp(-k * (x_pure - threshold))))
+    axes[1, 0].plot(x_pure, y_pure, color='black', linewidth=2)
+    axes[1, 0].axvline(threshold, color='grey', linestyle='--', linewidth=2, label=r'$\mathcal{R}_\text{crit}=1.0$')
+    # 95% interval
+    p_low, p_high = 0.025, 0.975 
+    x_low, x_high = threshold + (1 / k) * np.log(p_low / (1 - p_low)), threshold + (1 / k) * np.log(p_high / (1 - p_high))
+    axes[1, 0].axvspan(x_low, x_high, color='gray', alpha=0.1, label=f'95%: [{x_low:.2f} - {x_high:.2f}]')
+    axes[1, 0].set_title(f'Logistic Response ($k={k}$)')
+    axes[1, 0].set_xlabel('Reproductive number')
+    axes[1, 0].set_ylim(-0.2, 1.2)
+    axes[1, 0].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+    # Behavioural delay
+    beh_delay = gamma.pdf(t, a=n_B, scale=tau_B/n_B)
+    axes[2, 0].plot(t, beh_delay, color='brown', linewidth=2)
+    axes[2, 0].fill_between(t, beh_delay, alpha=0.1, color='brown')
+    axes[2, 0].axvline(tau_B, color='brown', linestyle=':', linewidth=2, label=f'Mean: $\\tau_B={tau_B:.0f}$')
+    axes[2, 0].set_title(f'Behavioural Delay ($n_B={n_B}$)')
+    axes[2, 0].set_xlabel('Days')
+    axes[2, 0].legend()
+    axes[2, 0].set_ylim(0, 0.15)
+    axes[2, 0].grid(True, alpha=0.3)
+    # Combined response
+    def total_response(amp):
+        x = amp * gamma.cdf(t, a=n_W, scale=tau_W/n_W)
+        y = 1 - (eps_w / (1 + np.exp(-k * (x - threshold))))
+        z_padded = np.convolve(np.concatenate([np.ones(len(t)), y]), gamma.pdf(t, a=n_B, scale=tau_B/n_B), mode='full') * dt
+        z = z_padded[len(t) : 2 * len(t)]
+        return x, y, z
+    
+    for p in pathogens:
+        x_m, y_m, z_m = total_response(parameters[p].R_0)
+        x_l, y_l, z_l = total_response(best_params_kwargs[p]["R_0"])
+        x_h, y_h, z_h = total_response(worst_params_kwargs[p]["R_0"])
+        color = colors[p]
+        axes[0, 1].plot(t, x_m, color=color, linewidth=2, label=p)
+        axes[0, 1].fill_between(t, x_l, x_h, color=color, alpha=0.2)
+        axes[1, 1].plot(t, y_m, color=color, linewidth=2)
+        axes[1, 1].fill_between(t, np.minimum(y_l, y_h), np.maximum(y_l, y_h), color=color, alpha=0.2)
+        axes[2, 1].plot(t, z_m, color=color, linewidth=2)
+        axes[2, 1].fill_between(t, np.minimum(z_l, z_h), np.maximum(z_l, z_h), color=color, alpha=0.2)
+    axes[0, 1].axhline(threshold, color='grey', linestyle='--', linewidth=2, label=r'$\mathcal{R}_\text{crit}=1.0$')
+    axes[1, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=r'$\varepsilon_w=0.5$')
+    axes[2, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=r'$\varepsilon_w=0.5$')
+    # Formatting
+    axes[0, 1].set_title('Reported Reproductive Number')
+    axes[0, 1].legend(loc='upper left')
+    axes[0, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_title(f'Instantaneous Warning Response ($\epsilon_w={eps_w}$)')
+    axes[1, 1].set_ylim(-0.2, 1.2)
+    # axes[1, 1].legend(loc='upper right')
+    axes[1, 1].grid(True, alpha=0.3)
+    axes[2, 1].set_title('Effective Transmission Modification')
+    axes[2, 1].set_xlabel('Days')
+    axes[2, 1].set_ylim(-0.2, 1.2)
+    # axes[2, 1].legend(loc='upper right')
+    axes[2, 1].grid(True, alpha=0.3)
+    # fig.suptitle("Wastewater Warning Response Analysis", fontsize=16)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    plt.savefig(path, dpi=res); plt.close(fig)

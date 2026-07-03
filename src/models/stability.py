@@ -5,6 +5,7 @@ Stability analysis.
 import numpy as np
 import jax
 from math import comb
+from scipy.optimize import brentq
 from scipy.ndimage import gaussian_filter1d
 from functools import partial
 
@@ -81,3 +82,20 @@ def period_and_damping(t, x, t0=50.0, t1=250.0, smoothing_days=20.0, peak_thresh
                     alpha = -np.log(h2/h1) / period
                     return period, alpha
     return period, alpha
+
+def gain_margin(eps_w, tau_W, tau_B, n_W=3.0, n_B=1.0, k=10.0):
+    def _omega_PC(tau_W, tau_B):
+        return brentq(lambda w: np.pi + arg_L(omega=w,tau_W=tau_W,tau_B=tau_B,n_W=n_W,n_B=n_B), 1e-10, 1000.0)
+    omega_PC = _omega_PC(tau_W, tau_B)
+    if omega_PC is None: return np.inf
+    return (2*(2-eps_w))/(eps_w*k) * (1+(omega_PC*tau_W/n_W)**2)**(n_W/2) * (1+(omega_PC*tau_B/n_B)**2)**(n_B/2)
+
+def delay_margin(eps_w, tau_W, tau_B, n_W=3.0, n_B=1.0, k=10.0):
+    L0 = (eps_w*k)/(2*(2-eps_w))
+    def _omega_c(tau_W, tau_B):
+        def g(omega): return (L0**2 * (1 + (omega*tau_W/n_W)**2)**(-n_W) * (1 + (omega*tau_B/n_B)**2)**(-n_B) - 1)
+        if g(0) <= 0: return None
+        return brentq(g, 1e-10, 1000.0)
+    omega_c = _omega_c(tau_W, tau_B)
+    if omega_c is None: return np.inf
+    return (np.pi - arg_L(omega=omega_c, tau_W=tau_W, tau_B=tau_B, n_W=n_W, n_B=n_B)) / omega_c

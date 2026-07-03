@@ -5,6 +5,9 @@ Stochastic compartmental models with superspreading.
 import numpy as np
 from numba import njit
 
+from models.parameters import Params
+from models.metrics import outcome_metrics, calculate_mt_branching_q_with_superspreading
+
 
 @njit(fastmath=True)
 def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, k_ss: float, a_ss: bool = False, p_ss: bool = False, s_ss: bool = False):
@@ -142,7 +145,6 @@ def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, k_ss: float, a_
                 break
 
         # execute next event
-        # TODO: rejection sampling could be faster since Z=0 doesn't change the state (which is most times)
         if event_idx <= 2:
             Z = 1.0
             if superspreading_flags[event_idx]:
@@ -162,3 +164,50 @@ def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, k_ss: float, a_
         step += 1
         
     return times[:step], states[:step]
+
+def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, scenario, npz):
+    Rt_grid = np.zeros((len(eps_ww), len(kk)))
+    Rt_var_grid = np.zeros((len(eps_ww), len(kk)))
+    time_to_below_grid = np.zeros((len(eps_ww), len(kk)))
+    time_to_below_var_grid = np.zeros((len(eps_ww), len(kk)))
+    Itot_grid = np.zeros((len(eps_ww), len(kk)))
+    Itot_var_grid = np.zeros((len(eps_ww), len(kk)))
+    peak_Is_grid = np.zeros((len(eps_ww), len(kk)))
+    peak_Is_var_grid = np.zeros((len(eps_ww), len(kk)))
+    extinction_time_grid = np.zeros((len(eps_ww), len(kk)))
+    extinction_time_var_grid = np.zeros((len(eps_ww), len(kk)))
+    
+    for i, ew in enumerate(eps_ww):
+        for j, k_ss in enumerate(kk):
+            Rt_list = []
+            time_to_below_list = []
+            Itot_list = []
+            peak_Is_list = []
+            extinction_time_list = []
+            ps = Params.for_SEIPAR(epsilon_s=float(eps_s), epsilon_w=float(ew))
+            alpha = 0.01
+            Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q_with_superspreading(k_ss, ps, ew, eps_s)))
+            for _ in range(num_simulations):
+                tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_ss, a_ss=True, p_ss=True, s_ss=False)
+                if (scenario == 'establishment') & (np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest): continue
+                Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, Params.for_SEIPAR(epsilon_s=eps_s, epsilon_w=ew), t1, population_size=N)
+                Rt_list.append(Rt)
+                time_to_below_list.append(time_to_below)
+                Itot_list.append(Itot)
+                peak_Is_list.append(peak_Is)
+                extinction_time_list.append(extinction_time)
+            Rt_grid[i,j] = np.mean(Rt_list)
+            Rt_var_grid[i,j] = np.var(Rt_list)
+            time_to_below_grid[i,j] = np.mean(time_to_below_list)
+            time_to_below_var_grid[i,j] = np.var(time_to_below_list)
+            Itot_grid[i,j] = np.mean(Itot_list)
+            Itot_var_grid[i,j] = np.var(Itot_list)
+            peak_Is_grid[i,j] = np.mean(peak_Is_list)
+            peak_Is_var_grid[i,j] = np.var(peak_Is_list)
+            percentile_95 = np.nan
+            try: percentile_95 = np.percentile(extinction_time_list, 95)
+            except: pass
+            extinction_time_grid[i,j] = percentile_95
+            extinction_time_var_grid[i,j] = np.var(extinction_time_list)
+    
+    np.savez_compressed(npz, Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid, time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid, Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid, peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid, extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid)
