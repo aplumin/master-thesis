@@ -6,6 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import fsolve
 from scipy.stats import gamma
+from scipy.integrate import trapezoid
+
 from typing import Callable
 
 import matplotlib as mpl
@@ -15,7 +17,11 @@ import seaborn as sns
 
 from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W
-from models.metrics import compute_I_tot_grid, compute_R_grid, compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, compute_I_tot_grid_delayed_ww
+from models.metrics import (
+    outcome_metrics, infectious_fractions, transmission_fractions,
+    compute_I_tot_grid, compute_R_grid, 
+    compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, compute_I_tot_grid_delayed_ww,
+)
 
 
 def plot_heatmap(
@@ -131,7 +137,7 @@ def plot_trajectory(
     Is = I_compartments[-1]
     
     # plot
-    fig, (ax_main, ax_rt) = plt.subplots(nrows=2, ncols=1, figsize=(6, 8), gridspec_kw={'height_ratios': [6,2]})
+    fig, (ax_main, ax_rt, ax_trans) = plt.subplots(nrows=3, ncols=1, figsize=(6, 14), gridspec_kw={'height_ratios': [6,2,6]})
 
     # trajectories
     if plot_S: ax_main.plot(tt, compartments[0], label='$S$', color='green')
@@ -186,6 +192,30 @@ def plot_trajectory(
     if rt_p.any() > 0: ax_rt.fill_between(tt, rt_a, rt_a + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
     ax_rt.fill_between(tt, rt_a + rt_p, rt_a + rt_p + rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
     ax_rt.legend()
+
+    # infections vs transmissions
+    type_order  = ["a", "p", "s"]
+    type_color  = {"a": "purple", "p": "skyblue", "s": "blue"}
+    type_I_tex  = {"a": r"$I_a$", "p": r"$I_p$", "s": r"$I_s$"}
+    type_R_tex  = {"a": r"$\mathcal{R}_a$", "p": r"$\mathcal{R}_p$", "s": r"$\mathcal{R}_s$"}
+
+    cols = [infectious_fractions(params)[j] for j in type_order]
+    rows = [transmission_fractions(params)[i] for i in type_order]
+    xb = np.concatenate([[0.0], np.cumsum(cols)])
+    yb = np.concatenate([[0.0], np.cumsum(rows)])
+    for row, i in enumerate(type_order):
+        for col, j in enumerate(type_order):
+            w, h = cols[col], rows[row]
+            if w <= 0 or h <= 0: continue
+            x0, y0 = xb[col], 1.0 - yb[row+1]
+            ax_trans.add_patch(mpl.patches.Rectangle((x0, y0), w, h, facecolor=type_color[type_order[row]], alpha=1-0.25*(2-col), edgecolor="white"))
+            ax_trans.text(x0+w/2, y0+h/2, f"{100*h*w:.0f}%", ha="center", va="center", fontsize=10, zorder=3, color="white")
+            ax_trans.text(xb[col]+cols[col]/2, 1.04, type_R_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=11, fontweight="bold", color=type_color[j])
+            ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_I_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=11, fontweight="bold", color=type_color[i])
+        ax_trans.set_xlim(-0.12, 1.0)
+        ax_trans.set_ylim(0.0, 1.12)
+        ax_trans.set_aspect("equal")
+        ax_trans.axis("off")
 
     # save and close
     plt.tight_layout()
@@ -407,3 +437,49 @@ def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, e
     # fig.suptitle("Wastewater Warning Response Analysis", fontsize=16)
     plt.tight_layout(rect=[0, 0.03, 1, 0.96])
     plt.savefig(path, dpi=res); plt.close(fig)
+
+def table_scenario_label(name, eps_s, eps_w, bold=False):
+    parts = []
+    if eps_s > 0: 
+        parts.append("\\mathbf{\\varepsilon_s="+f"{eps_s:g}"+"}") if bold else parts.append(f"\\varepsilon_s={eps_s:g}")
+    if eps_w > 0: 
+        parts.append("\\mathbf{\\varepsilon_w="+f"{eps_w:g}"+"}") if bold else parts.append(f"\\varepsilon_w={eps_w:g}")
+    return name if not parts else f"{name} (${', '.join(parts)}$)"
+
+def f_days(m): 
+    return "---" if np.isnan(m["time_to_peak"]) else f"{m['time_to_peak']:.1f}", "---" if np.isnan(m["wave_time"]) else f"{m['wave_time']:.1f}"
+
+def f_pct(x, dp=0):
+    return "---" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:.{dp}f}\\%"
+
+def table_row_metrics(ps, model, eps_s, eps_w, t1, E0=1e-6, itot_baseline=None, icrit=1e-4, strategy="baseline"):
+    ps = ps.update(epsilon_s=eps_s, epsilon_w=eps_w)
+    if strategy=="asymmetric":
+        tt, yy, *_ = model(params=ps, t1=t1, E0=E0, asymmetric=True)
+    elif strategy=="interval":
+        tt, yy, *_ = model(params=ps, t1=t1, E0=E0, discrete_eval=True)
+    else:
+        tt, yy, *_ = model(params=ps, t1=t1, E0=E0)
+    Rt_final = float(outcome_metrics(tt, yy, ps, t1)[0])
+    S = yy[:, 0]
+    B_out = yy[:, -1]
+    Is = yy[:, -(ps.n_W + ps.n_B + 2)]
+    itot = float(S[0] - S[-1])
+    prevented = np.nan if itot_baseline in (None, 0.0) else 1.0 - itot / itot_baseline
+    peak_idx = int(np.argmax(Is))
+    peak_Is = float(Is[peak_idx])
+    above_idx = np.where(Is > icrit)[0]
+    if above_idx.size == 0: time_to_peak = wave_time = np.nan
+    else:
+        t_start = tt[above_idx[0]]
+        last = int(above_idx[-1])
+        if last + 1 < len(tt): t_end = tt[last + 1]
+        else: t_end = tt[-1]
+        time_to_peak = float(tt[peak_idx] - t_start)
+        wave_time = float(t_end - t_start)
+    warning_cost = float(trapezoid(1.0 - B_out, tt))
+    isolation_cost = float(trapezoid(eps_s * Is, tt))
+    return dict(
+        Rt=Rt_final, peak_Is=peak_Is, time_to_peak=time_to_peak, wave_time=wave_time, itot=itot, 
+        prevented=prevented, warning_cost=warning_cost, isolation_cost=isolation_cost, cost=warning_cost + isolation_cost
+    )

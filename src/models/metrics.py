@@ -12,16 +12,7 @@ from typing import Callable
 
 from models.parameters import Params
 
-
-def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None):
-    """Compute outcome metrics from model trajectories."""
-    N_t = tt.shape[0]
-    dt = (tt[-1] - tt[0]) / jnp.maximum(N_t - 1, 1)
-    S = yy[:,0] / population_size
-    Is = yy[:, -(params.n_W + params.n_B + 2)] / population_size
-    rt_true = params.R_0 * params.rho * yy[:,-1] * S
-
-    ### final Rt ###
+def calculate_averaged_Rt(params: Params, tt, t1, dt, N_t, S, Is, rt_true, delta_dep):
     # t_0 = t_Icrit + tau_W+tau_B + 2*sigma
     crosses = Is >= params.I_crit
     t_I_crit = jnp.where(jnp.any(crosses), tt[jnp.argmax(crosses)],t1)
@@ -49,14 +40,22 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warni
     window_floor = (tt >= t_0) & (tt <= t_0 + m * T_osc)
     mean_floor = jnp.sum(rt_true * window_floor) / jnp.maximum(jnp.sum(window_floor), 1)
     Rt_final = jnp.where(has_period & (m >= 1), mean_floor, mean_Rt)
+    return Rt_final
 
-    # other metrics
+def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None):
+    """Compute outcome metrics from model trajectories."""
+    N_t = tt.shape[0]
+    dt = (tt[-1] - tt[0]) / jnp.maximum(N_t - 1, 1)
+    S = yy[:,0] / population_size
+    Is = yy[:, -(params.n_W + params.n_B + 2)] / population_size
+    rt_true = params.R_0 * params.rho * yy[:,-1] * S
+
+    # final Rt
+    Rt_final = calculate_averaged_Rt(params, tt, t1, dt, N_t, S, Is, rt_true, delta_dep)
     time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
     Itot = S[0] - S[-1]
     peak_Is = jnp.max(Is)
     extinction_time = tt[-1]
-
-    # oscillation metrics
     first_100th = rt_true[:max(rt_true.shape[0] // 100, 1)]
     amplitude = jnp.max(first_100th) - jnp.min(first_100th)
 
@@ -264,23 +263,34 @@ def calculate_generation_time(ps: Params):
     denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
     return ps.gamma_inv + nom / denom
 
-def _trapz(y, x):
-    return float(np.sum(0.5 * (y[1:] + y[:-1]) * np.diff(x)))
-
 def strategy_metrics(model, params, t1, asymmetric, discrete_eval, check_interval):
-    ts, ys, _ = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
+    ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
     ts = np.asarray(ts)
     ys = np.asarray(ys)
     S, B_out = ys[:, 0], ys[:, -1]
     rt_true = float(params.R_0) * float(params.rho) * B_out * S
-    late = rt_true[ts >= 2.0 * t1 / 3.0]
-    amplitude = float(late.max() - late.min())
-    time_above = float((rt_true > params.R_crit).mean() * t1)
-    cost = _trapz(1.0 - B_out, ts)
+    last_third = rt_true[ts >= 2.0 * t1 / 3.0]
+    amplitude = float(last_third.max() - last_third.min())
+    if asymmetric or discrete_eval:
+        time_above = float(ms.mean() * t1)
+    else:
+        W_out = ys[:, -(1+int(params.n_B))]
+        if params.T_lead > 0.0:
+            R_est = W_out + params.T_lead * (params.n_W / float(params.tau_W)) * (ys[:, -(1+int(params.n_B))-1] - W_out)
+        else:
+            R_est = W_out
+        time_above = float((R_est >= float(params.R_crit)).mean() * t1)
+    cost = np.trapezoid(1.0 - B_out, ts)
     Itot = S[0] - S[-1]
     Is = ys[:, -(params.n_W + params.n_B + 2)]
     peak_Is = np.max(Is)
-    return amplitude, time_above, cost, Itot, peak_Is
+
+    N_t = ts.shape[0]
+    dt = (ts[-1] - ts[0]) / jnp.maximum(N_t - 1, 1)
+    delta_dep = 0.05
+    Rt_final = calculate_averaged_Rt(params, ts, t1, dt, N_t, S, Is, rt_true, delta_dep)
+
+    return Rt_final, Itot, peak_Is, amplitude, time_above, cost
 
 def strategy_grid(
     model, base_params, k, eps_w, eps_s, strategies,
