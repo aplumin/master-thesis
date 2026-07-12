@@ -25,16 +25,16 @@ class SpatialParams(NamedTuple):
             **{k: v for k, v in kwargs.items() if k not in fields}
         )
 
-@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'ww_in_B', 'n_ts'])
+@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'ww_in_B', 'response_in_B_to_A', 'n_ts'])
 def simulate_SEIPAR_W_spatial(
     spatial_params: SpatialParams = SpatialParams(epi_params=Params.for_SEIPAR(), N_A=1.0, m=0.0),
-    t1: float = 200.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, 
-    primary_in_A: bool = True, ww_in_B: bool = False, n_ts: int = 5000,
+    t1: float = 200.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, n_ts: int = 5000,
+    primary_in_A: bool = True, ww_in_B: bool = False, response_in_B_to_A: bool = False,
 ):
     """
     Two-deme SEIPAR model with migration.
     States: S_A, E_A, Ia_A, Ip_A, Is_A, R_A, S_B, E_B, Ia_B, Ip_A, Is_B, R_B, W_A(n_W), B_A(n_B), [W_B(n_W), B_B(n_B)]
-    The W_B/B_B chains are only included if ww_in_B=True.
+    The W_B/B_B chains are only included if ww_in_B=True or response_in_B_to_A=True.
     """
     epi_params = spatial_params.epi_params
     N_A = spatial_params.N_A
@@ -54,7 +54,9 @@ def simulate_SEIPAR_W_spatial(
 
         W_out_A = W_A[-1]
         B_out_A = B_A[-1]
-        B_out_B = B_B[-1] if ww_in_B else 1.0
+        B_out_B = B_B[-1] if ww_in_B else jnp.full_like(B_out_A, 1.0)
+        if response_in_B_to_A:
+            B_out_B = jnp.copy(B_A[-1])
 
         # compute mass flows
         prevalence_syx_A = jnp.where(N_A > 0.0, Is_A / N_A, 0.0)
@@ -97,7 +99,7 @@ def simulate_SEIPAR_W_spatial(
 
         # reporting and behavioural delay in A
         reporting_delay_rate = n_W / epi_params.tau_W
-        Rt_A = epi_params.R_0 * epi_params.rho * B_out_A * S_A/N_A
+        Rt_A = jnp.where(N_A > 0.0, epi_params.R_0 * epi_params.rho * B_out_A * S_A/N_A, 0.0)
         W_in_A = jnp.concatenate([jnp.array([Rt_A]), W_A[:-1]])
         dW_A = reporting_delay_rate * (W_in_A - W_A)
 
@@ -111,7 +113,7 @@ def simulate_SEIPAR_W_spatial(
         # reporting and behavioural delay in B
         if ww_in_B:
             W_out_B = W_B[-1]
-            Rt_B = epi_params.R_0 * epi_params.rho * B_out_B * S_B/N_B
+            Rt_B = jnp.where(N_B > 0.0, epi_params.R_0 * epi_params.rho * B_out_B * S_B/N_B, 0.0)
             W_in_B = jnp.concatenate([jnp.array([Rt_B]), W_B[:-1]])
             dW_B = reporting_delay_rate * (W_in_B - W_B)
             Rt_reported_B = logistic_response_function(W_out_B, epi_params, prevalence_syx_B)
@@ -147,16 +149,16 @@ def simulate_SEIPAR_W_spatial(
     return solution.ts, solution.ys
 
 
-@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'ww_in_B', 'n_ts'])
+@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'ww_in_B', 'response_in_B_to_A', 'n_ts'])
 def simulate_SEIAR_W_spatial(
     spatial_params: SpatialParams = SpatialParams(epi_params=Params.for_SEIAR(), N_A=1.0, m=0.0),
-    t1: float = 200.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, 
-    primary_in_A: bool = True, ww_in_B: bool = False, n_ts: int = 5000,
+    t1: float = 200.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, n_ts: int = 5000,
+    primary_in_A: bool = True, ww_in_B: bool = False, response_in_B_to_A: bool = False,
 ):
     """
     Two-deme SEIAR model with migration.
     States: S_A, E_A, Ia_A, Is_A, R_A, S_B, E_B, Ia_B, Is_B, R_B, W_A(n_W), B_A(n_B), [W_B(n_W), B_B(n_B)]
-    The W_B/B_B chains are only included if ww_in_B=True.
+    The W_B/B_B chains are only included if ww_in_B=True or response_in_B_to_A=True.
     """
     epi_params = spatial_params.epi_params
     N_A = spatial_params.N_A
@@ -176,7 +178,9 @@ def simulate_SEIAR_W_spatial(
 
         W_out_A = W_A[-1]
         B_out_A = B_A[-1]
-        B_out_B = B_B[-1] if ww_in_B else 1.0
+        B_out_B = B_B[-1] if ww_in_B else jnp.full_like(B_out_A, 1.0)
+        if response_in_B_to_A:
+            B_out_B = jnp.copy(B_A[-1])
 
         # compute mass flows
         prevalence_syx_A = jnp.where(N_A > 0.0, Is_A / N_A, 0.0)
@@ -213,7 +217,7 @@ def simulate_SEIAR_W_spatial(
 
         # reporting and behavioural delay in A
         reporting_delay_rate = n_W / epi_params.tau_W
-        Rt_A = epi_params.R_0 * epi_params.rho * B_out_A * S_A/N_A
+        Rt_A = jnp.where(N_A > 0.0, epi_params.R_0 * epi_params.rho * B_out_A * S_A/N_A, 0.0)
         W_in_A = jnp.concatenate([jnp.array([Rt_A]), W_A[:-1]])
         dW_A = reporting_delay_rate * (W_in_A - W_A)
 
@@ -227,7 +231,7 @@ def simulate_SEIAR_W_spatial(
         # reporting and behavioural delay in B
         if ww_in_B:
             W_out_B = W_B[-1]
-            Rt_B = epi_params.R_0 * epi_params.rho * B_out_B * S_B/N_B
+            Rt_B = jnp.where(N_B > 0.0, epi_params.R_0 * epi_params.rho * B_out_B * S_B/N_B, 0.0)
             W_in_B = jnp.concatenate([jnp.array([Rt_B]), W_B[:-1]])
             dW_B = reporting_delay_rate * (W_in_B - W_B)
             Rt_reported_B = logistic_response_function(W_out_B, epi_params, prevalence_syx_B)
@@ -263,16 +267,16 @@ def simulate_SEIAR_W_spatial(
     return solution.ts, solution.ys
 
 
-@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'ww_in_B', 'n_ts'])
+@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'ww_in_B', 'response_in_B_to_A', 'n_ts'])
 def simulate_SEIR_W_spatial(
     spatial_params: SpatialParams = SpatialParams(epi_params=Params.for_SEIR(), N_A=1.0, m=0.0),
-    t1: float = 200.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, 
-    primary_in_A: bool = True, ww_in_B: bool = False, n_ts: int = 5000,
+    t1: float = 200.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, n_ts: int = 5000,
+    primary_in_A: bool = True, ww_in_B: bool = False, response_in_B_to_A: bool = False,
 ):
     """
     Two-deme SEIR model with migration.
     States: S_A, E_A, I_A, R_A, S_B, E_B, I_B, R_B, W_A(n_W), B_A(n_B), [W_B(n_W), B_B(n_B)]
-    The W_B/B_B chains are only included if ww_in_B=True.
+    The W_B/B_B chains are only included if ww_in_B=True or response_in_B_to_A=True.
     """
     epi_params = spatial_params.epi_params
     N_A = spatial_params.N_A
@@ -292,7 +296,9 @@ def simulate_SEIR_W_spatial(
 
         W_out_A = W_A[-1]
         B_out_A = B_A[-1]
-        B_out_B = B_B[-1] if ww_in_B else 1.0
+        B_out_B = B_B[-1] if ww_in_B else jnp.full_like(B_out_A, 1.0)
+        if response_in_B_to_A:
+            B_out_B = jnp.copy(B_A[-1])
 
         # compute mass flows
         prevalence_A = jnp.where(N_A > 0.0, I_A / N_A, 0.0)
@@ -323,7 +329,7 @@ def simulate_SEIR_W_spatial(
 
         # reporting and behavioural delay in A
         reporting_delay_rate = n_W / epi_params.tau_W
-        Rt_A = epi_params.R_0 * epi_params.rho * B_out_A * S_A/N_A
+        Rt_A = jnp.where(N_A > 0.0, epi_params.R_0 * epi_params.rho * B_out_A * S_A/N_A, 0.0)
         W_in_A = jnp.concatenate([jnp.array([Rt_A]), W_A[:-1]])
         dW_A = reporting_delay_rate * (W_in_A - W_A)
 
@@ -337,7 +343,7 @@ def simulate_SEIR_W_spatial(
         # reporting and behavioural delay in B
         if ww_in_B:
             W_out_B = W_B[-1]
-            Rt_B = epi_params.R_0 * epi_params.rho * B_out_B * S_B/N_B
+            Rt_B = jnp.where(N_B > 0.0, epi_params.R_0 * epi_params.rho * B_out_B * S_B/N_B, 0.0)
             W_in_B = jnp.concatenate([jnp.array([Rt_B]), W_B[:-1]])
             dW_B = reporting_delay_rate * (W_in_B - W_B)
             Rt_reported_B = logistic_response_function(W_out_B, epi_params, prevalence_B)
@@ -374,54 +380,54 @@ def simulate_SEIR_W_spatial(
 
 
 
-def run_spatial_SEIR(N_A_v, m_v, epi_params=None, t1=1000.0, E0=1e-6):
-    sp = SpatialParams(epi_params=epi_params, N_A=N_A_v, m=m_v)
-    _, ys = simulate_SEIR_W_spatial(sp, primary_in_A=False, t1=t1, E0=E0)
+def run_spatial_SEIR(N_A, m, epi_params=None, response_in_B_to_A=False, t1=1000.0, E0=1e-6):
+    sp = SpatialParams(epi_params=epi_params, N_A=N_A, m=m)
+    _, ys = simulate_SEIR_W_spatial(sp, primary_in_A=False, response_in_B_to_A=response_in_B_to_A, t1=t1, E0=E0)
     d = unpack_spatial(ys, model="SEIR")
-    N_B = 1 - N_A_v
-    Itot_A = d["R_A"][-1] / jnp.maximum(N_A_v, 1e-6)
+    N_B = 1 - N_A
+    Itot_A = d["R_A"][-1] / jnp.maximum(N_A, 1e-6)
     Itot_B = d["R_B"][-1] / jnp.maximum(N_B, 1e-6)
-    peak_Is_A = jnp.max(d["I_A"] / jnp.maximum(N_A_v, 1e-6))
+    peak_Is_A = jnp.max(d["I_A"] / jnp.maximum(N_A, 1e-6))
     peak_Is_B = jnp.max(d["I_B"] / jnp.maximum(N_B, 1e-6))
     total_infections = d["R_A"][-1] + d["R_B"][-1]
     return Itot_A, Itot_B, peak_Is_A, peak_Is_B, total_infections
 
-def run_spatial_SEIAR(N_A_v, m_v, epi_params=None, t1=1000.0, E0=1e-6):
-    sp = SpatialParams(epi_params=epi_params, N_A=N_A_v, m=m_v)
-    _, ys = simulate_SEIAR_W_spatial(sp, primary_in_A=False, t1=t1, E0=E0)
+def run_spatial_SEIAR(N_A, m, epi_params=None, response_in_B_to_A=False, t1=1000.0, E0=1e-6):
+    sp = SpatialParams(epi_params=epi_params, N_A=N_A, m=m)
+    _, ys = simulate_SEIAR_W_spatial(sp, primary_in_A=False, response_in_B_to_A=response_in_B_to_A, t1=t1, E0=E0)
     d = unpack_spatial(ys, model="SEIAR")
-    N_B = 1 - N_A_v
+    N_B = 1 - N_A
     I_tot_A = d["Ia_A"] + d["Is_A"]
     I_tot_B = d["Ia_B"] + d["Is_B"]
-    Itot_A = d["R_A"][-1] / jnp.maximum(N_A_v, 1e-6)
+    Itot_A = d["R_A"][-1] / jnp.maximum(N_A, 1e-6)
     Itot_B = d["R_B"][-1] / jnp.maximum(N_B, 1e-6)
-    peak_Is_A = jnp.max(I_tot_A / jnp.maximum(N_A_v, 1e-6))
+    peak_Is_A = jnp.max(I_tot_A / jnp.maximum(N_A, 1e-6))
     peak_Is_B = jnp.max(I_tot_B / jnp.maximum(N_B, 1e-6))
     total_infections = d["R_A"][-1] + d["R_B"][-1]
     return Itot_A, Itot_B, peak_Is_A, peak_Is_B, total_infections
 
-def run_spatial_SEIPAR(N_A_v, m_v, epi_params=None, t1=1000.0, E0=1e-6):
-    sp = SpatialParams(epi_params=epi_params, N_A=N_A_v, m=m_v)
-    _, ys = simulate_SEIPAR_W_spatial(sp, primary_in_A=False, t1=t1, E0=E0)
+def run_spatial_SEIPAR(N_A, m, epi_params=None, response_in_B_to_A=False, t1=1000.0, E0=1e-6):
+    sp = SpatialParams(epi_params=epi_params, N_A=N_A, m=m)
+    _, ys = simulate_SEIPAR_W_spatial(sp, primary_in_A=False, response_in_B_to_A=response_in_B_to_A, t1=t1, E0=E0)
     d = unpack_spatial(ys, model="SEIPAR")
-    N_B = 1 - N_A_v
+    N_B = 1 - N_A
     Is_A = d["Is_A"]
     Is_B = d["Is_B"]
-    Itot_A = d["R_A"][-1] / jnp.maximum(N_A_v, 1e-6)
+    Itot_A = d["R_A"][-1] / jnp.maximum(N_A, 1e-6)
     Itot_B = d["R_B"][-1] / jnp.maximum(N_B, 1e-6)
-    peak_Is_A = jnp.max(Is_A / jnp.maximum(N_A_v, 1e-6))
+    peak_Is_A = jnp.max(Is_A / jnp.maximum(N_A, 1e-6))
     peak_Is_B = jnp.max(Is_B / jnp.maximum(N_B, 1e-6))
     total_infections = d["R_A"][-1] + d["R_B"][-1]
     return Itot_A, Itot_B, peak_Is_A, peak_Is_B, total_infections
 
-def run_spatial(N_A_v, m_v, epi_params=None, model="SEIPAR", t1=1000.0, E0=1e-6):
-    if model == "SEIR": return run_spatial_SEIR(N_A_v, m_v, epi_params=epi_params, t1=t1, E0=E0)
-    elif model == "SEIAR": return run_spatial_SEIAR(N_A_v, m_v, epi_params=epi_params, t1=t1, E0=E0)
-    elif model == "SEIPAR": return run_spatial_SEIPAR(N_A_v, m_v, epi_params=epi_params, t1=t1, E0=E0)
+def run_spatial(N_A, m, epi_params=None, response_in_B_to_A=False, model="SEIPAR", t1=1000.0, E0=1e-6):
+    if model == "SEIR": return run_spatial_SEIR(N_A, m, epi_params=epi_params, response_in_B_to_A=response_in_B_to_A, t1=t1, E0=E0)
+    elif model == "SEIAR": return run_spatial_SEIAR(N_A, m, epi_params=epi_params, response_in_B_to_A=response_in_B_to_A, t1=t1, E0=E0)
+    elif model == "SEIPAR": return run_spatial_SEIPAR(N_A, m, epi_params=epi_params, response_in_B_to_A=response_in_B_to_A, t1=t1, E0=E0)
     else: raise ValueError(f"Unknown model: {model}")
 
 
-def unpack_spatial_SEIR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False):
+def unpack_spatial_SEIR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False, response_in_B_to_A: bool = False):
     out = {"S_A": ys[:,0], "E_A": ys[:,1], "I_A": ys[:,2], "R_A": ys[:,3], "S_B": ys[:,4], "E_B": ys[:,5], "I_B": ys[:,6], "R_B": ys[:,7]}
     idx = 8
     out["W_A"] = ys[:,idx:idx + n_W]; idx += n_W
@@ -429,9 +435,11 @@ def unpack_spatial_SEIR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False):
     if ww_in_B:
         out["W_B"] = ys[:,idx:idx + n_W]; idx += n_W
         out["B_B"] = ys[:,idx:idx + n_B]; idx += n_B
+    elif response_in_B_to_A:
+        out["W_B"], out["B_B"] = out["W_A"], out["B_A"]
     return out
 
-def unpack_spatial_SEIAR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False):
+def unpack_spatial_SEIAR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False, response_in_B_to_A: bool = False):
     out = {"S_A": ys[:,0], "E_A": ys[:,1], "Ia_A": ys[:,2], "Is_A": ys[:,3], "R_A": ys[:,4], "S_B": ys[:,5], "E_B": ys[:,6], "Ia_B": ys[:,7], "Is_B": ys[:,8], "R_B": ys[:,9]}
     idx = 10
     out["W_A"] = ys[:,idx:idx + n_W]; idx += n_W
@@ -439,9 +447,11 @@ def unpack_spatial_SEIAR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False):
     if ww_in_B:
         out["W_B"] = ys[:,idx:idx + n_W]; idx += n_W
         out["B_B"] = ys[:,idx:idx + n_B]; idx += n_B
+    elif response_in_B_to_A:
+        out["W_B"], out["B_B"] = out["W_A"], out["B_A"]
     return out
 
-def unpack_spatial_SEIPAR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False):
+def unpack_spatial_SEIPAR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False, response_in_B_to_A: bool = False):
     out = {"S_A": ys[:,0], "E_A": ys[:,1], "Ia_A": ys[:,2], "Ip_A": ys[:,3], "Is_A": ys[:,4], "R_A": ys[:,5], "S_B": ys[:,6], "E_B": ys[:,7], "Ia_B": ys[:,8], "Ip_B": ys[:,9], "Is_B": ys[:,10], "R_B": ys[:,11]}
     idx = 12
     out["W_A"] = ys[:,idx:idx + n_W]; idx += n_W
@@ -449,10 +459,12 @@ def unpack_spatial_SEIPAR(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False)
     if ww_in_B:
         out["W_B"] = ys[:,idx:idx + n_W]; idx += n_W
         out["B_B"] = ys[:,idx:idx + n_B]; idx += n_B
+    elif response_in_B_to_A:
+        out["W_B"], out["B_B"] = out["W_A"], out["B_A"]
     return out
 
-def unpack_spatial(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False, model: str = "SEIR"):
-    if model == "SEIR": return unpack_spatial_SEIR(ys, n_W=n_W, n_B=n_B, ww_in_B=ww_in_B)
-    elif model == "SEIAR": return unpack_spatial_SEIAR(ys, n_W=n_W, n_B=n_B, ww_in_B=ww_in_B)
-    elif model == "SEIPAR": return unpack_spatial_SEIPAR(ys, n_W=n_W, n_B=n_B, ww_in_B=ww_in_B)
+def unpack_spatial(ys, n_W: int = 3, n_B: int = 1, ww_in_B: bool = False, response_in_B_to_A: bool = False, model: str = "SEIR"):
+    if model == "SEIR": return unpack_spatial_SEIR(ys, n_W=n_W, n_B=n_B, ww_in_B=ww_in_B, response_in_B_to_A=response_in_B_to_A)
+    elif model == "SEIAR": return unpack_spatial_SEIAR(ys, n_W=n_W, n_B=n_B, ww_in_B=ww_in_B, response_in_B_to_A=response_in_B_to_A)
+    elif model == "SEIPAR": return unpack_spatial_SEIPAR(ys, n_W=n_W, n_B=n_B, ww_in_B=ww_in_B, response_in_B_to_A=response_in_B_to_A)
     else: raise ValueError(f"Unknown model: {model}")
