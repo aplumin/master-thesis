@@ -48,7 +48,7 @@ from models.compartmental_erlang import linear_chain
 
 ### PARAMETERS ###
 parameters = {
-    "SARS-CoV-2": Params.for_SEIPAR(R_0=2.69, gamma_inv=3.8, sigma_inv=2.3, mu_s_inv=9.3, mu_a_inv=5.0, p=0.351, phi=0.32),
+    "SARS-CoV-2": Params.for_SEIPAR(R_0=2.69, gamma_inv=3.2, sigma_inv=2.3, mu_s_inv=9.3, mu_a_inv=5.0, p=0.351, phi=0.32),
     "Influenza A": Params.for_SEIAR(R_0=1.46, gamma_inv=1.65, mu_s_inv=3.38, mu_a_inv=3.38, p=0.36, phi=0.57),
     "Ebola": Params.for_SEIR(R_0=1.95, gamma_inv=8.5, mu_s_inv=5.0),
     "Omicron": Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=4.94, p=0.351, phi=0.32),
@@ -90,7 +90,7 @@ asymptomatic_pathogens = ["SARS-CoV-2", "Influenza A"]
 pathogens_full_landscape = list(parameters.keys())
 
 best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi; high 1/gamma, 1/mu_s
-    "SARS-CoV-2": dict(R_0=2.40, gamma_inv=5.4, sigma_inv=0.52, mu_s_inv=10.0, mu_a_inv=4.63, p=0.230, phi=0.16),
+    "SARS-CoV-2": dict(R_0=2.40, gamma_inv=5.0, sigma_inv=0.52, mu_s_inv=10.0, mu_a_inv=4.63, p=0.230, phi=0.16),
     "Influenza A": dict(R_0=1.30, gamma_inv=1.89, mu_s_inv=4.69, mu_a_inv=2.06, p=0.32, phi=0.11),
     "Ebola": dict(R_0=1.74, gamma_inv=9.2, mu_s_inv=6.30),
     "Omicron": dict(R_0=3.5, gamma_inv=4.60, sigma_inv=0.001, mu_s_inv=6.18, mu_a_inv=3.06, p=0.230, phi=0.16),
@@ -99,7 +99,7 @@ best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi; high 1/gamma, 1/mu_s
     "Rhino": dict(R_0=2.3, gamma_inv=1.0, sigma_inv=0.5, mu_s_inv=14.0, mu_a_inv=8.0, p=0.1, phi=0.1),
 }
 worst_params_kwargs = { # low high 1/gamma, 1/mu_s; high R0, 1/sigma, 1/mu_a, p, phi
-    "SARS-CoV-2": dict(R_0=2.98, gamma_inv=3.54, sigma_inv=3.00, mu_s_inv=7.80, mu_a_inv=5.50, p=0.399, phi=0.64),
+    "SARS-CoV-2": dict(R_0=2.98, gamma_inv=2.5, sigma_inv=3.00, mu_s_inv=7.80, mu_a_inv=5.50, p=0.399, phi=0.64),
     "Influenza A": dict(R_0=1.70, gamma_inv=1.41, mu_s_inv=2.06, mu_a_inv=4.69, p=0.4, phi=1.54),
     "Ebola": dict(R_0=2.15, gamma_inv=7.70, mu_s_inv=3.70),
     "Omicron": dict(R_0=11.4, gamma_inv=2.51, sigma_inv=1.52, mu_s_inv=3.06, mu_a_inv=7.74, p=0.399, phi=0.64),
@@ -2053,20 +2053,15 @@ rule plot_infectiousness_distributions:
         plot="{outdir}/compartmental/infectiousness_distributions.png",
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        gamma_inv = 3.2
-        sigma_inv = 2.3
-        mu_a_inv = 5.0
-        mu_s_inv = 9.3
-        p = 0.351
-        phi = 0.32
+        ps = parameters["SARS-CoV-2"]
         nE, nP, nS, nA = 10,10,10,10
 
         def generation_time(nE, nP, nS, w_p=None, w_s=None):
             def _infected_subsystem(t, y):
                 E, Ip, Is = y[0:0+nE], y[nE:nE+nP], y[nE+nP:nE+nP+nS]
-                dE, E_out = linear_chain(X=E, inflow=0.0, rate=nE/gamma_inv)
-                dIp, Ip_out = linear_chain(X=Ip, inflow=(1.0-p)*E_out, rate=nP/sigma_inv)
-                dIs, Is_out = linear_chain(X=Is, inflow=Ip_out, rate=nS/mu_s_inv)
+                dE, E_out = linear_chain(X=E, inflow=0.0, rate=nE/ps.gamma_inv)
+                dIp, Ip_out = linear_chain(X=Ip, inflow=(1.0-ps.p)*E_out, rate=nP/ps.sigma_inv)
+                dIs, Is_out = linear_chain(X=Is, inflow=Ip_out, rate=nS/ps.mu_s_inv)
                 return np.concatenate([dE, dIp, dIs])
 
             sol = solve_ivp(_infected_subsystem, [0, tt[-1]], y0=np.concatenate([[1.0], np.zeros(nE+nP+nS-1)]), t_eval=tt, rtol=1e-10, atol=1e-13)
@@ -2092,7 +2087,7 @@ rule plot_infectiousness_distributions:
 
         shape = 8
         scale = 5.5/8.0
-        w_p, w_s = compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS)
+        w_p, w_s = compute_weights(ps.gamma_inv, ps.sigma_inv, ps.mu_s_inv, shape, scale, nP, nS)
         
         g_weighted, m_weighted = generation_time(nE, nP, nS, w_p, w_s)
         plt.plot(tt, g_weighted, lw=2.2, color=colors[0], label=f'SEIPAR-LCT weighted (mean {m_weighted:.1f})')
