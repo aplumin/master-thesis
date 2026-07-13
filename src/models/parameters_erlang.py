@@ -30,7 +30,7 @@ class ParamsErlang(NamedTuple):
         R_off (float): Lower threshold of the asymmetric warning trigger.
         eval_interval (float): Minimum time the warning state is kept before re-evaluation.
         T_lead (float): Lead time for which the estimated Rt trend is extrapolated.
-        w_p, w_s (jnp array): Infectiousness weights.
+        w_a, w_p, w_s (jnp array): Infectiousness weights.
         nE, nP, nS, nA (int): Number of compartments in the respective linear chains.
     """
     R_0: float
@@ -55,6 +55,7 @@ class ParamsErlang(NamedTuple):
     R_off: float
     eval_interval: float
     T_lead: float
+    w_a: jnp.ndarray
     w_p: jnp.ndarray
     w_s: jnp.ndarray
     nE: int
@@ -91,29 +92,28 @@ class ParamsErlang(NamedTuple):
             nS: int = 10,
             nA: int = 10,
         ) -> "ParamsErlang":
+        w_a = jnp.ones(nA)
         w_p, w_s = compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS)
-        r = _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
-        r_eps = _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
+        r = _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
+        r_eps = _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
             R_0=R_0, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, phi=phi,
             epsilon_s=epsilon_s, epsilon_w=epsilon_w, k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead, w_p=w_p, w_s=w_s, nE=nE, nP=nP, nS=nS, nA=nA,
+            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead, w_a=w_a, w_p=w_p, w_s=w_s, nE=nE, nP=nP, nS=nS, nA=nA,
         )
-
-
-def _mean_time(t0, mean, n):
-    return t0 + (jnp.arange(1, n+1) - 0.5) * (mean/n)
 
 def compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS):
     w_p = gamma.pdf(x=_mean_time(gamma_inv, sigma_inv, nP), a=shape, scale=scale)
     w_s = gamma.pdf(x=_mean_time(gamma_inv+sigma_inv, mu_s_inv, nS), a=shape, scale=scale)
     return w_p, w_s
 
-def _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_p, w_s, nP, nS, nA, epsilon_s=0.0):
-    Ra = p * phi * (mu_a_inv / nA)
+def _mean_time(t0, mean, n):
+    return t0 + (jnp.arange(1, n+1) - 0.5) * (mean/n)
+
+def _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0):
+    Ra = p * phi * jnp.sum(w_a) * (mu_a_inv / nA)
     Rp = (1.0 - p) * jnp.sum(w_p) * (sigma_inv / nP)
     Rs = (1.0 - p) * (1.0 - epsilon_s) * jnp.sum(w_s) * (mu_s_inv / nS)
-    norm = ((1.0-p)*sigma_inv/nP + (1.0-p)*(1.0-epsilon_s)*mu_s_inv/nS)
-    return Ra + Rp * norm + Rs * norm
+    return Ra + Rp + Rs

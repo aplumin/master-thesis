@@ -56,7 +56,7 @@ _THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
     "log_I_crit": (-4.0, -2.0),
 }
 
-def parameter_bounds(model: Callable, scenario: str = "start") -> dict[str, tuple[float, float]]:
+def _parameter_bounds(model: Callable, scenario: str = "start") -> dict[str, tuple[float, float]]:
     """Return parameter bound dictionary for sensitivity analysis."""
     MODEL_NAMES: dict[Callable, str] = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W",}
     name = MODEL_NAMES[model]
@@ -72,10 +72,13 @@ def _symmetric_log10_bounds(value: float, frac: float = 0.2, default: float = 1.
     v = value if (np.isfinite(value) and value > 0.0) else default
     return (np.log10(v * (1.0-frac)), np.log10(v * (1.0+frac)))
 
-def parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean_params: Params = None) -> dict[str, tuple[float, float]]:
+def _parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean_params: Params = None) -> dict[str, tuple[float, float]]:
     MODEL_NAMES: dict[Callable, str] = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W",}
     name = MODEL_NAMES[model]
-    ps = mean_params if mean_params is not None else Params.for_SEIPAR if name=="SEIPAR_W" else Params.for_SEIAR if name=="SEIAR_W" else Params.for_SEIR
+    if mean_params is not None:
+        ps = mean_params
+    else:
+        ps = {"SEIPAR_W": Params.for_SEIPAR, "SEIAR_W": Params.for_SEIAR, "SEIR_W": Params.for_SEIR}[name]()
     bounds: dict[str, tuple[float, float]] = dict({
         "R_0":       (ps.R_0*0.8, ps.R_0*1.2),
         "gamma_inv": (ps.gamma_inv*0.8, ps.gamma_inv*1.2),
@@ -115,9 +118,7 @@ def _construct_latin_hypercube(bounds: dict, n: int, seed: int | None = None) ->
             l_bounds = np.array([bounds[p][0] for p in names]),
             u_bounds = np.array([bounds[p][1] for p in names]),
         )
-    except Exception as e:
-        print(e)
-        print(bounds)
+    except Exception as e: raise ValueError(f"{e}\nbounds={bounds}")
     return latin_hypercube
 
 def _partial_rank_corr_coeff(latin_hypercube, y_output):
@@ -130,18 +131,14 @@ def _partial_rank_corr_coeff(latin_hypercube, y_output):
             for i in range(latin_hypercube.shape[1])])
     return prcc
 
-def calculate_prcc(X: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Wrapper to rank transform data and calculate partial rank correlation coefficients."""
-    return _partial_rank_corr_coeff(np.apply_along_axis(rankdata, 0, X), rankdata(y))
-
-def prcc_bootstrap(X: np.ndarray, y: np.ndarray, n_bootstrap: int = 100, seed: int | None = 0) -> np.ndarray:
+def _prcc_bootstrap(X: np.ndarray, y: np.ndarray, n_bootstrap: int = 100, seed: int | None = 0) -> np.ndarray:
     """Calculate PRCC confidence intervals using bootstrapping."""
     rng = np.random.default_rng(seed)
     N, d = X.shape
     out = np.empty((n_bootstrap, d))
     for b in range(n_bootstrap):
         idx = rng.integers(0, N, size=N)
-        out[b] = calculate_prcc(X[idx], y[idx])
+        out[b] = _partial_rank_corr_coeff(X, y)(X[idx], y[idx])
     return out
 
 
@@ -155,14 +152,14 @@ def saltelli_sample(bounds: dict, n_base: int, seed: int | None = None) -> np.nd
     """Generate a Saltelli sample sequence for Sobol analysis."""
     return sample(_salib_problem(bounds), N=n_base, calc_second_order=False, seed=seed)
 
-def sobol_indices(bounds: dict, Y: np.ndarray, seed: int | None = None) -> dict[str, np.ndarray]:
+def _sobol_indices(bounds: dict, Y: np.ndarray, seed: int | None = None) -> dict[str, np.ndarray]:
     """Compute first-order (S_1) and total-order (S_T) Sobol sensitivity indices."""
     Si = analyze(_salib_problem(bounds), np.asarray(Y), calc_second_order=False, seed=seed, print_to_console=False)
     return {k: np.asarray(Si[k]) for k in ("S1", "S1_conf", "ST", "ST_conf")}
 
 
 # WORKFLOW
-def evaluate_samples(model: Callable, base_params: Params, bounds: dict, samples: np.ndarray, t1: float, E0: float = 1e-6, outcome: str = "Rt", avg_frac: float = 0.1,) -> np.ndarray:
+def _evaluate_samples(model: Callable, base_params: Params, bounds: dict, samples: np.ndarray, t1: float, E0: float = 1e-6, outcome: str = "Rt", avg_frac: float = 0.1,) -> np.ndarray:
     def _evaluator(model, base_params, names, t1, E0, outcome, avg_frac):
         def _apply(row: jnp.ndarray) -> Params:
             kwargs: dict = {}
@@ -206,9 +203,9 @@ def run_sensitivity_analysis(
     around_mean: bool = False,
 ) -> SensitivityResults:
     if around_mean:
-        bounds = parameter_bounds_around_mean(model, scenario=scenario, mean_params=base_params)
+        bounds = _parameter_bounds_around_mean(model, scenario=scenario, mean_params=base_params)
     else:
-        bounds = parameter_bounds(model, scenario=scenario)
+        bounds = _parameter_bounds(model, scenario=scenario)
     if manual_bounds is not None:
         for k, v in manual_bounds.items():
             if k in bounds: 
@@ -217,8 +214,8 @@ def run_sensitivity_analysis(
 
     # prcc
     X = _construct_latin_hypercube(bounds, n_lhs, seed=seed)
-    y = evaluate_samples(model=model, base_params=bp, bounds=bounds, samples=X, t1=t1, E0=E0, outcome=outcome, avg_frac=avg_frac)
-    boot = prcc_bootstrap(X, y, n_bootstrap=n_bootstrap, seed=seed+1)
+    y = _evaluate_samples(model=model, base_params=bp, bounds=bounds, samples=X, t1=t1, E0=E0, outcome=outcome, avg_frac=avg_frac)
+    boot = _prcc_bootstrap(X, y, n_bootstrap=n_bootstrap, seed=seed+1)
     prcc_mean = boot.mean(axis=0)
     prcc_lower, prcc_upper = np.percentile(boot, ci, axis=0)
 
@@ -226,7 +223,7 @@ def run_sensitivity_analysis(
     names = list(bounds)
     if do_sobol:
         samples_sobol = saltelli_sample(bounds, n_base=n_sobol_base, seed=seed+2)
-        Si = sobol_indices(bounds, evaluate_samples(model=model, base_params=bp, bounds=bounds, samples=samples_sobol, t1=t1, E0=E0, outcome=outcome, avg_frac=avg_frac), seed=seed+3)
+        Si = _sobol_indices(bounds, _evaluate_samples(model=model, base_params=bp, bounds=bounds, samples=samples_sobol, t1=t1, E0=E0, outcome=outcome, avg_frac=avg_frac), seed=seed+3)
         S1, S1_conf, ST, ST_conf = Si["S1"], Si["S1_conf"], Si["ST"], Si["ST_conf"]
     else:
         d = len(names)

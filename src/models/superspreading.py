@@ -186,7 +186,8 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
             extinction_time_list = []
             ps = Params.for_SEIPAR(epsilon_s=float(eps_s), epsilon_w=float(ew))
             alpha = 0.01
-            Iest = np.ceil(np.log(alpha)/np.log(calculate_mt_branching_q_with_superspreading(k_ss, ps, ew, eps_s)))
+            q = calculate_mt_branching_q_with_superspreading(k_ss, ps, ew, eps_s)
+            Iest = np.ceil(np.log(alpha) / np.log(q)) if 0.0 < q < 1.0 else 1.0
             for _ in range(num_simulations):
                 tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_ss, a_ss=True, p_ss=True, s_ss=False)
                 if (scenario == 'establishment') & (np.max(yy[:,2] + yy[:,3] + yy[:,4]) < Iest): continue
@@ -196,7 +197,7 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
                 Itot_list.append(Itot)
                 peak_Is_list.append(peak_Is)
                 extinction_time_list.append(extinction_time)
-            Rt_grid[i,j] = np.mean(Rt_list)
+            Rt_grid[i,j] = np.mean(Rt_list) if Rt_list else np.nan
             Rt_var_grid[i,j] = np.var(Rt_list)
             time_to_below_grid[i,j] = np.mean(time_to_below_list)
             time_to_below_var_grid[i,j] = np.var(time_to_below_list)
@@ -204,9 +205,7 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
             Itot_var_grid[i,j] = np.var(Itot_list)
             peak_Is_grid[i,j] = np.mean(peak_Is_list)
             peak_Is_var_grid[i,j] = np.var(peak_Is_list)
-            percentile_95 = np.nan
-            try: percentile_95 = np.percentile(extinction_time_list, 95)
-            except: pass
+            percentile_95 = np.percentile(extinction_time_list, 95) if extinction_time_list else np.nan
             extinction_time_grid[i,j] = percentile_95
             extinction_time_var_grid[i,j] = np.var(extinction_time_list)
     

@@ -20,7 +20,7 @@ from matplotlib.colors import Normalize, LogNorm, CenteredNorm
 import seaborn as sns
 
 from models.parameters import Params, logistic_response_function
-from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
+from models.compartmental import linear_chain, simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
 from models.compartmental_piecewise import simulate_SEIPAR_W_piecewise, simulate_SEIAR_W_piecewise, simulate_SEIR_W_piecewise
 from models.metrics import (
     R0_decomposition, infectious_fractions, transmission_fractions, growth_rate, calculate_generation_time,
@@ -43,7 +43,6 @@ from models.plotting import (
     table_scenario_label, table_row_metrics, f_days, f_pct,
 )
 from models.parameters_erlang import compute_weights
-from models.compartmental_erlang import linear_chain
 
 
 ### PARAMETERS ###
@@ -54,7 +53,7 @@ parameters = {
     "Omicron": Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=4.94, p=0.351, phi=0.32),
     "Measles": Params.for_SEIPAR(R_0=15.0, gamma_inv=10.5, sigma_inv=3.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi=0.0),
     "Dengue": Params.for_SEIPAR(R_0=6.0, gamma_inv=5.0, sigma_inv=1.5, mu_s_inv=4.5, mu_a_inv=5.5, p=0.6, phi=0.5),
-    "Rhino": Params.for_SEIPAR(R_0=2.8, gamma_inv=0.75, sigma_inv=0.75, mu_s_inv=11.0, mu_a_inv=11.0, p=22.5, phi=0.1),
+    "Rhino": Params.for_SEIPAR(R_0=2.8, gamma_inv=0.75, sigma_inv=0.75, mu_s_inv=11.0, mu_a_inv=11.0, p=0.225, phi=0.1),
 }
 models = {
     "SARS-CoV-2": simulate_SEIPAR_W,
@@ -1647,14 +1646,15 @@ rule plot_alternative_warning_strategies_eps_w:
         nE = len(eps_ww)
         nM = len(METRIC_NAMES)
         base_params = parameters[pathogen].update(epsilon_s=eps_s, R_off=R_OFF, eval_interval=EVAL_INTERVAL)
-        baseline_metrics = strategy_metrics(model, base_params, t1, False, False, 1.0)
+        baseline_metrics = jnp.unstack(strategy_metrics(base_params.tau_W, base_params.tau_B, base_params.n_W, base_params.n_B, model, base_params, t1, False, False, 1.0))
         baseline = np.array([1.0, baseline_metrics[1], baseline_metrics[2], 1.0, t1, t1])
 
         data = {s: np.zeros((nM, nE)) for s in STRATEGIES}
         for s, (asym, disc, tl, ci) in STRATEGIES.items():
             for i, ew in enumerate(eps_ww):
                 ps = base_params.update(epsilon_w=float(ew), T_lead=tl)
-                data[s][:, i] = strategy_metrics(model, ps, t1, asym, disc, ci)
+                T_lead_on = tl > 1e-3
+                data[s][:, i] = jnp.unstack(strategy_metrics(ps.tau_W, ps.tau_B, ps.n_W, ps.n_B, model, ps, t1, asym, disc, ci))
 
         strat_colors = dict(zip(STRATEGIES, sns.color_palette("colorblind", len(STRATEGIES))))
         linestyles = dict(zip(STRATEGIES, ['-','--', '-.', ':']))
@@ -1721,7 +1721,6 @@ rule alternative_warning_strategies_table:
                 f.write(f"\\multicolumn{{9}}{{l}}{{\\textbf{{{table_scenario_label(scenario, eps_s, eps_w, bold=True)}}}}}\\\\\n")
                 for strategy, _, _, m in rows[scenario]:
                     tp, wt = f_days(m)
-                    # f.write(" & ".join([f"\\quad {strategy}", f"{m['Rt']}", f"{m['peak_Is']}", tp, wt, f"{m['itot']}", f"{m['prevented']}", f"{m['isolation_cost']}", f"{m['warning_cost']}"]) + " \\\\\n")
                     f.write(" & ".join([f"\\quad {strategy}", f"{m['Rt']:.2f}", f_pct(m["peak_Is"], 1), tp, wt, f_pct(m["itot"], 0), f_pct(m["prevented"], 0), f"{m['isolation_cost']:.1f}", f"{m['warning_cost']:.1f}",]) + " \\\\\n")
                 if i < len(scenarios)-1: f.write("\\midrule\n")
             f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Characteristics of epidemic scenarios under different warning strategies]{Characteristics of epidemic scenarios under different warning strategies}\\label{tab:alternative_strategies}\n\\end{table}\n")

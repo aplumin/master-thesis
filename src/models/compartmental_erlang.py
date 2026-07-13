@@ -9,21 +9,8 @@ from functools import partial
 
 from models.parameters_erlang import ParamsErlang
 from models.parameters import logistic_response_function
+from models.compartmental import linear_chain, chain_derivative
 
-
-def linear_chain(X, inflow, rate):
-    """
-    Linear compartment chain.
-    Returns a tuple (updated subcompartment densities (jnp array), density flowing out of the chain (float)).
-
-    Attributes:
-        X (jnp array): Current subcompartment densities.
-        inflow (float): Density flow into the chain.
-        rate (float): Transition rate between the subcompartments.
-    """
-    outflow = rate * X
-    dx = jnp.concatenate([jnp.array([inflow]), outflow[:-1]]) - outflow
-    return dx, outflow[-1]
 
 @partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'nE', 'nP', 'nS', 'nA'])
 def simulate_SEIPAR_W_Erlang(
@@ -47,7 +34,6 @@ def simulate_SEIPAR_W_Erlang(
         Ip = y[iIp:iIp + nP]
         Is = y[iIs:iIs + nS]
         W = y[iW:iW + n_W]
-        W_out = W[-1]
         B = y[iB:iB + n_B]
         B_out = B[-1]
 
@@ -66,19 +52,13 @@ def simulate_SEIPAR_W_Erlang(
         dIs, Is_out = linear_chain(Is, Ip_out, nS / params.mu_s_inv)
         dS = -lambda_S
         dR = Ia_out + Is_out
-        dFlow = jnp.array([dS, dE, dIa, dIp, dIs, dR])
+        dFlow = jnp.concatenate([jnp.atleast_1d(dS), dE, dIa, dIp, dIs, jnp.atleast_1d(dR)])
 
-        # reporting delay compartments W
-        reporting_delay_rate = n_W / params.tau_W
+        # reporting and behavioural delay chains
         Rt = params.R_0 * params.rho * B_out * S
-        W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
-        dW = reporting_delay_rate * (W_in - W)
-
-        # behavioural delay compartments B
-        behavioural_delay_rate = n_B / params.tau_B
-        Rt_reported = logistic_response_function(W_out, params, jnp.sum(Is))
-        B_in = jnp.concatenate([jnp.array([Rt_reported]), B[:-1]])
-        dB = behavioural_delay_rate * (B_in - B)
+        dW = chain_derivative(W, Rt, n_W / params.tau_W)
+        reported = logistic_response_function(W[-1], params, jnp.sum(Is))
+        dB = chain_derivative(B, reported, n_B / params.tau_B)
 
         return jnp.concatenate([dFlow, dW, dB])
 

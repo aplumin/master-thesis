@@ -12,6 +12,7 @@ from typing import Callable
 
 from models.parameters import Params
 
+
 def calculate_averaged_Rt(params: Params, tt, t1, dt, N_t, S, Is, rt_true, delta_dep):
     # t_0 = t_Icrit + tau_W+tau_B + 2*sigma
     crosses = Is >= params.I_crit
@@ -42,13 +43,17 @@ def calculate_averaged_Rt(params: Params, tt, t1, dt, N_t, S, Is, rt_true, delta
     Rt_final = jnp.where(has_period & (m >= 1), mean_floor, mean_Rt)
     return Rt_final
 
+def trajectory_indices(n_W, n_B):
+    return {"S": 0, "Is": -(n_W + n_B + 2), "R": -(n_W + n_B + 1), "W_out": -(n_B + 1), "B_out": -1}
+
 def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None):
     """Compute outcome metrics from model trajectories."""
     N_t = tt.shape[0]
     dt = (tt[-1] - tt[0]) / jnp.maximum(N_t - 1, 1)
-    S = yy[:,0] / population_size
-    Is = yy[:, -(params.n_W + params.n_B + 2)] / population_size
-    rt_true = params.R_0 * params.rho * yy[:,-1] * S
+    idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B)
+    S = yy[:, idx["S"]] / population_size
+    Is = yy[:, idx["Is"]] / population_size
+    rt_true = params.R_0 * params.rho * yy[:, idx["W_out"]] * S
 
     # final Rt
     Rt_final = calculate_averaged_Rt(params, tt, t1, dt, N_t, S, Is, rt_true, delta_dep)
@@ -241,8 +246,9 @@ def calculate_mt_branching_q(ps, ew, es):
         syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
         return ps.p / (1 + asyx * (1-q)) + (1-ps.p) / ((1 + presyx * (1-q)) * (1 + syx * (1-q))) - q
     ext_prob = 1.0
-    try: ext_prob = brentq(extinction_prob, 0.0, 1.0-1e-9)
-    except: pass
+    try: 
+        ext_prob = brentq(extinction_prob, 0.0, 1.0-1e-9)
+    except ValueError: pass
     return ext_prob
 
 def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
@@ -263,34 +269,37 @@ def calculate_generation_time(ps: Params):
     denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
     return ps.gamma_inv + nom / denom
 
-def strategy_metrics(model, params, t1, asymmetric, discrete_eval, check_interval):
+def strategy_metrics(tau_W, tau_B, n_W, n_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
+    params = base_params.update(tau_W=tau_W, tau_B=tau_B)
     ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
-    ts = np.asarray(ts)
-    ys = np.asarray(ys)
     S, B_out = ys[:, 0], ys[:, -1]
-    rt_true = float(params.R_0) * float(params.rho) * B_out * S
-    last_third = rt_true[ts >= 2.0 * t1 / 3.0]
-    amplitude = float(last_third.max() - last_third.min())
+    rt_true = params.R_0 * params.rho * B_out * S
+
+    mask = ts >= 2.0 * t1 / 3.0
+    amplitude = (jnp.max(jnp.where(mask, rt_true, -jnp.inf)) - jnp.min(jnp.where(mask, rt_true, jnp.inf)))
     if asymmetric or discrete_eval:
-        time_above = float(ms.mean() * t1)
+        time_above = ms.mean() * t1
     else:
-        W_out = ys[:, -(1+int(params.n_B))]
-        if params.T_lead > 0.0:
-            R_est = W_out + params.T_lead * (params.n_W / float(params.tau_W)) * (ys[:, -(1+int(params.n_B))-1] - W_out)
+        W_out = ys[:, -(1 + n_B)]
+        if T_lead_on:
+            R_est = W_out + base_params.T_lead * (n_W / params.tau_W) * (ys[:, -(1 + n_B) - 1] - W_out)
         else:
             R_est = W_out
-        time_above = float((R_est >= float(params.R_crit)).mean() * t1)
-    cost = np.trapezoid(1.0 - B_out, ts)
-    Itot = S[0] - S[-1]
-    Is = ys[:, -(params.n_W + params.n_B + 2)]
-    peak_Is = np.max(Is)
+        time_above = (R_est >= params.R_crit).mean() * t1
 
+    cost = jnp.trapezoid(1.0 - B_out, ts)
+    Itot = S[0] - S[-1]
+    Is = ys[:, -(n_W + n_B + 2)]
+    peak_Is = jnp.max(Is)
     N_t = ts.shape[0]
     dt = (ts[-1] - ts[0]) / jnp.maximum(N_t - 1, 1)
-    delta_dep = 0.05
-    Rt_final = calculate_averaged_Rt(params, ts, t1, dt, N_t, S, Is, rt_true, delta_dep)
+    Rt_final = calculate_averaged_Rt(params, ts, t1, dt, N_t, S, Is, rt_true, 0.05)
+    return jnp.stack([Rt_final, Itot, peak_Is, amplitude, time_above, cost])
 
-    return Rt_final, Itot, peak_Is, amplitude, time_above, cost
+@partial(jax.jit, static_argnames=['model', 't1', 'asymmetric', 'discrete_eval', 'check_interval', 'n_W', 'n_B', 'T_lead_on'])
+def strategy_metric_grid(model, base_params, taus_W, taus_B, t1, asymmetric, discrete_eval, check_interval, n_W=3, n_B=1, T_lead_on=False):
+    strategy_metrics_vmap = partial(strategy_metrics, n_W=n_W, n_B=n_B, model=model, base_params=base_params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval, T_lead_on=T_lead_on)
+    return jax.vmap(jax.vmap(strategy_metrics_vmap, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
 
 def strategy_grid(
     model, base_params, k, eps_w, eps_s, strategies,
@@ -298,11 +307,10 @@ def strategy_grid(
     R_off=0.8, eval_interval=14.0,
 ):
     base_params = base_params.update(epsilon_s=eps_s, epsilon_w=eps_w, k=k, R_off=R_off, eval_interval=eval_interval)
-    nW, nB = len(taus_W), len(taus_B)
-    data = {s: np.zeros((5, nW, nB)) for s in strategies}
+    taus_W, taus_B = jnp.asarray(taus_W), jnp.asarray(taus_B)
+    data = {}
     for s, (asym, disc, tl, ci) in strategies.items():
-        for i, tau_W in enumerate(taus_W):
-            for j, tau_B in enumerate(taus_B):
-                params_ij = base_params.update(tau_W=tau_W, tau_B=tau_B, T_lead=tl)
-                data[s][:, i, j] = strategy_metrics(model, params_ij, t1, asym, disc, ci)
-    return data, list(taus_W), list(taus_B)
+        bp = base_params.update(T_lead=tl)
+        grid = strategy_metric_grid(model, bp, taus_W, taus_B, t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, n_W=int(bp.n_W), n_B=int(bp.n_B), T_lead_on=(tl > 0.0))
+        data[s] = np.asarray(grid)
+    return data, list(np.asarray(taus_W)), list(np.asarray(taus_B))

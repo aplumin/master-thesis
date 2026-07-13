@@ -176,7 +176,7 @@ def plot_trajectory(
 
     # Rt
     rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-    ax_rt.plot(tt, rt_true, color='black', label='$\mathcal{R}_t$')
+    ax_rt.plot(tt, rt_true, color='black', label=r'$\mathcal{R}_t$')
     ax_rt.axhline(params.R_crit, color='grey', linestyle='--')
     s_contribution = (1-params.epsilon_s) * (1-params.p) * params.beta * params.mu_s_inv
     a_contribution = params.p * params.phi * params.beta * params.mu_a_inv
@@ -188,8 +188,8 @@ def plot_trajectory(
     params_baseline = params.update(epsilon_s=0.0, epsilon_w=0.0)
     _, yy0 = model(params=params_baseline, t1=t1)
     ax_rt.fill_between(tt, 0, params_baseline.R_0 * params_baseline.rho * yy0[:,-1] * yy0[:,0], color='grey', alpha=0.2)
-    if rt_a.any() > 0: ax_rt.fill_between(tt, 0, rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
-    if rt_p.any() > 0: ax_rt.fill_between(tt, rt_a, rt_a + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
+    if (rt_a > 0).any(): ax_rt.fill_between(tt, 0, rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
+    if (rt_p > 0).any(): ax_rt.fill_between(tt, rt_a, rt_a + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
     ax_rt.fill_between(tt, rt_a + rt_p, rt_a + rt_p + rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
     ax_rt.legend()
 
@@ -425,7 +425,7 @@ def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, e
     axes[0, 1].set_title('Reported Reproductive Number')
     axes[0, 1].legend(loc='upper left')
     axes[0, 1].grid(True, alpha=0.3)
-    axes[1, 1].set_title(f'Instantaneous Warning Response ($\epsilon_w={eps_w}$)')
+    axes[1, 1].set_title(rf'Instantaneous Warning Response ($\epsilon_w={eps_w}$)')
     axes[1, 1].set_ylim(-0.2, 1.2)
     # axes[1, 1].legend(loc='upper right')
     axes[1, 1].grid(True, alpha=0.3)

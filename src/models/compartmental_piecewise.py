@@ -1,3 +1,7 @@
+"""
+Piecewise SEIPAR model for alternative warning systems with hysteresis.
+"""
+
 import jax
 import jax.numpy as jnp
 from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, PIDController
@@ -19,7 +23,7 @@ def _published_response(W, dW, prevalence, params, m, floored):
     return 1.0 - params.epsilon_w * gate_W * gate_I
 
 def _solve_piecewise(
-    vector_field, # (t, y, (params, m, floored))
+    diffeq, # (t, y, (params, m, floored))
     y0, w_out_idx, params, t1, check_interval, asymmetric, discrete_eval, save_per_seg
     ):
     n_segments = int(round(t1 / check_interval))
@@ -31,7 +35,7 @@ def _solve_piecewise(
         t_end = t0 + check_interval
         ts_save = jnp.linspace(t0, t_end, save_per_seg + 1)[1:] # drop first to avoid duplicate
         sol = diffeqsolve(
-            terms=ODETerm(vector_field),
+            terms=ODETerm(diffeq),
             solver=Tsit5(),
             t0=t0, t1=t_end, dt0=dt0, y0=y_start,
             args=(params, m, floored),
@@ -40,7 +44,7 @@ def _solve_piecewise(
         )
         ys_seg = sol.ys
         y_end = ys_seg[-1]
-        dy_end = vector_field(t_end, y_end, (params, m, floored))
+        dy_end = diffeq(t_end, y_end, (params, m, floored))
         R_est = y_end[w_out_idx] + params.T_lead * dy_end[w_out_idx]
 
         # next warning state
