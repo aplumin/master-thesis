@@ -2061,20 +2061,19 @@ rule plot_infectiousness_distributions:
         phi = 0.32
         nE, nP, nS, nA = 10,10,10,10
 
-        def generation_time(nE, nP, nS, nA, w_p=None, w_s=None, w_a=None):
+        def generation_time(nE, nP, nS, w_p=None, w_s=None):
             def _infected_subsystem(t, y):
-                E, Ia, Ip, Is = y[0:0+nE], y[nE:nE+nA], y[nE+nA:nE+nA+nP], y[nE+nA+nP:nE+nA+nP+nS]
+                E, Ip, Is = y[0:0+nE], y[nE:nE+nP], y[nE+nP:nE+nP+nS]
                 dE, E_out = linear_chain(X=E, inflow=0.0, rate=nE/gamma_inv)
-                dIa, Ia_out = linear_chain(X=Ia, inflow=p*E_out, rate=nA/mu_a_inv)
                 dIp, Ip_out = linear_chain(X=Ip, inflow=(1.0-p)*E_out, rate=nP/sigma_inv)
                 dIs, Is_out = linear_chain(X=Is, inflow=Ip_out, rate=nS/mu_s_inv)
-                return np.concatenate([dE, dIa, dIp, dIs])
+                return np.concatenate([dE, dIp, dIs])
 
-            sol = solve_ivp(_infected_subsystem, [0, tt[-1]], y0=np.concatenate([[1.0], np.zeros(nE+nA+nP+nS-1)]), t_eval=tt, rtol=1e-10, atol=1e-13)
-            Ia, Ip, Is = sol.y[nE:nE+nA], sol.y[nE+nA:nE+nA+nP], sol.y[nE+nA+nP:nE+nA+nP+nS]
+            sol = solve_ivp(_infected_subsystem, [0, tt[-1]], y0=np.concatenate([[1.0], np.zeros(nE+nP+nS-1)]), t_eval=tt, rtol=1e-10, atol=1e-13)
+            Ip, Is = sol.y[nE:nE+nP], sol.y[nE+nP:nE+nP+nS]
 
-            if w_p is None: b = phi * Ia.sum(0) + Ip.sum(0) + Is.sum(0)
-            else: b = phi * (w_a[:, None] * Ia).sum(0) + (w_p[:, None] * Ip).sum(0) + (w_s[:, None] * Is).sum(0)
+            if w_p is None: b = Ip.sum(0) + Is.sum(0)
+            else: b = (w_p[:, None] * Ip).sum(0) + (w_s[:, None] * Is).sum(0)
             gt = b / np.trapezoid(b, tt)
             mean = np.trapezoid(tt*gt, tt)
             return gt, mean
@@ -2083,25 +2082,21 @@ rule plot_infectiousness_distributions:
         colors = sns.color_palette("colorblind", 4)
         plt.figure(figsize=(8, 4))
 
-        g_flat, m_flat = generation_time(1, 1, 1, 1)
+        g_flat, m_flat = generation_time(1, 1, 1)
         plt.plot(tt, g_flat, lw=2.2, color=colors[1], label=f'SEIPAR (mean {m_flat:.1f})')
         plt.fill_between(tt, g_flat, color=colors[1], alpha=0.2)
 
-        g_chain_flat, m_chain_flat = generation_time(nE, nP, nS, nA)
-        # g_chain_flat_p = g_chain_flat[np.where(tt<5.5)]
-        # print(np.sum(g_chain_flat_p)/np.sum(g_chain_flat))
+        g_chain_flat, m_chain_flat = generation_time(nE, nP, nS)
         plt.plot(tt, g_chain_flat, lw=2.2, color=colors[2], label=f'SEIPAR-LCT flat (mean {m_chain_flat:.1f})')
         plt.fill_between(tt, g_chain_flat, color=colors[2], alpha=0.15)
 
         shape = 8
         scale = 5.5/8.0
-        w_p, w_s, w_a = compute_weights(gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, phi, shape, scale, nE, nP, nS, nA)
+        w_p, w_s = compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS)
         
-        g_weighted, m_weighted = generation_time(nE, nP, nS, nA, w_p, w_s, w_a)
-        # g_chain_weighted_p = g_weighted[np.where(tt<5.5)]
-        # print(np.sum(g_chain_weighted_p)/np.sum(g_weighted))
-        plt.plot(tt, g_weighted, lw=2.2, color=colors[3], label=f'SEIPAR-LCT weighted (mean {m_weighted:.1f})')
-        plt.fill_between(tt, g_weighted, color=colors[3], alpha=0.2)
+        g_weighted, m_weighted = generation_time(nE, nP, nS, w_p, w_s)
+        plt.plot(tt, g_weighted, lw=2.2, color=colors[0], label=f'SEIPAR-LCT weighted (mean {m_weighted:.1f})')
+        plt.fill_between(tt, g_weighted, color=colors[0], alpha=0.2)
 
         # Empirical Erlang-8 approximation
         mean_generation_time = 5.5
