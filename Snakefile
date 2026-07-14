@@ -2054,6 +2054,9 @@ rule plot_infectiousness_distributions:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         ps = parameters["SARS-CoV-2"]
         nE, nP, nS, nA = 10,10,10,10
+        shape = 8
+        mean = 5.5
+        scale = mean/shape
 
         def generation_time(nE, nP, nS, w_p=None, w_s=None):
             def _infected_subsystem(t, y):
@@ -2076,26 +2079,23 @@ rule plot_infectiousness_distributions:
         colors = sns.color_palette("colorblind", 4)
         plt.figure(figsize=(8, 4))
 
-        g_flat, m_flat = generation_time(1, 1, 1)
+        # Model generation times
+        g_flat, m_flat = generation_time(1, 1, 1, np.full(nP, ps.mu_s_inv), np.full(nS, ps.sigma_inv))
         plt.plot(tt, g_flat, lw=2.2, color=colors[1], label=f'SEIPAR (mean {m_flat:.1f})')
         plt.fill_between(tt, g_flat, color=colors[1], alpha=0.2)
 
-        g_chain_flat, m_chain_flat = generation_time(nE, nP, nS)
-        plt.plot(tt, g_chain_flat, lw=2.2, color=colors[2], label=f'SEIPAR-LCT flat (mean {m_chain_flat:.1f})')
+        g_chain_flat, m_chain_flat = generation_time(nE, nP, nS, np.full(nP, ps.mu_s_inv), np.full(nS, ps.sigma_inv))
+        plt.plot(tt, g_chain_flat, lw=2.2, color=colors[2], label=f'SEIPAR-LCT (mean {m_chain_flat:.1f})')
         plt.fill_between(tt, g_chain_flat, color=colors[2], alpha=0.15)
 
-        shape = 8
-        scale = 5.5/8.0
         w_p, w_s = compute_weights(ps.gamma_inv, ps.sigma_inv, ps.mu_s_inv, shape, scale, nP, nS)
-        
         g_weighted, m_weighted = generation_time(nE, nP, nS, w_p, w_s)
         plt.plot(tt, g_weighted, lw=2.2, color=colors[0], label=f'SEIPAR-LCT weighted (mean {m_weighted:.1f})')
         plt.fill_between(tt, g_weighted, color=colors[0], alpha=0.2)
 
         # Empirical Erlang-8 approximation
-        mean_generation_time = 5.5
-        pdf = erlang.pdf(tt, shape, scale=mean_generation_time/shape)
-        plt.plot(tt, pdf, label=f'Erlang-{shape} (mean {mean_generation_time})', color='black')
+        pdf = erlang.pdf(tt, shape, scale=scale)
+        plt.plot(tt, pdf, label=f'Erlang-{shape} (mean {mean})', color='black')
         plt.fill_between(tt, pdf, alpha=0.2, color='black')
 
         # mean periods

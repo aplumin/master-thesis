@@ -188,9 +188,9 @@ def plot_trajectory(
     params_baseline = params.update(epsilon_s=0.0, epsilon_w=0.0)
     _, yy0 = model(params=params_baseline, t1=t1)
     ax_rt.fill_between(tt, 0, params_baseline.R_0 * params_baseline.rho * yy0[:,-1] * yy0[:,0], color='grey', alpha=0.2)
-    if (rt_a > 0).any(): ax_rt.fill_between(tt, 0, rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
-    if (rt_p > 0).any(): ax_rt.fill_between(tt, rt_a, rt_a + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
-    ax_rt.fill_between(tt, rt_a + rt_p, rt_a + rt_p + rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
+    ax_rt.fill_between(tt, 0, rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
+    if (rt_p > 0).any(): ax_rt.fill_between(tt, rt_s, rt_s + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
+    if (rt_a > 0).any(): ax_rt.fill_between(tt, rt_s + rt_p, rt_s + rt_p + rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
     ax_rt.legend()
 
     # infections vs transmissions
@@ -210,8 +210,8 @@ def plot_trajectory(
             x0, y0 = xb[col], 1.0 - yb[row+1]
             ax_trans.add_patch(mpl.patches.Rectangle((x0, y0), w, h, facecolor=type_color[type_order[row]], alpha=1-0.25*(2-col), edgecolor="white"))
             ax_trans.text(x0+w/2, y0+h/2, f"{100*h*w:.0f}%", ha="center", va="center", fontsize=10, zorder=3, color="white")
-            ax_trans.text(xb[col]+cols[col]/2, 1.04, type_R_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=11, fontweight="bold", color=type_color[j])
-            ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_I_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=11, fontweight="bold", color=type_color[i])
+            ax_trans.text(xb[col]+cols[col]/2, 1.04, type_I_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=11, fontweight="bold", color=type_color[j])
+            ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_R_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=11, fontweight="bold", color=type_color[i])
         ax_trans.set_xlim(-0.12, 1.0)
         ax_trans.set_ylim(0.0, 1.12)
         ax_trans.set_aspect("equal")
