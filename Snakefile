@@ -50,10 +50,6 @@ parameters = {
     "SARS-CoV-2": Params.for_SEIPAR(R_0=2.69, gamma_inv=3.0, sigma_inv=2.5, mu_s_inv=9.3, mu_a_inv=11.6, p=0.351, phi_a=0.26, phi_p=3.72),
     "Influenza A": Params.for_SEIPAR(R_0=1.46, gamma_inv=1.65, sigma_inv=2.0, mu_s_inv=3.38, mu_a_inv=5.38, p=0.36, phi_a=0.57, phi_p=0.18),
     "Ebola": Params.for_SEIR(R_0=1.95, gamma_inv=8.5, mu_s_inv=5.0),
-    "Omicron": Params.for_SEIPAR(R_0=7.38, gamma_inv=3.57, sigma_inv=0.52, mu_s_inv=4.94, mu_a_inv=4.94, p=0.351, phi_a=0.32),
-    "Measles": Params.for_SEIPAR(R_0=15.0, gamma_inv=10.5, sigma_inv=3.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0),
-    "Dengue": Params.for_SEIPAR(R_0=6.0, gamma_inv=5.0, sigma_inv=1.5, mu_s_inv=4.5, mu_a_inv=5.5, p=0.6, phi_a=0.5),
-    "Rhino": Params.for_SEIPAR(R_0=2.8, gamma_inv=0.75, sigma_inv=0.75, mu_s_inv=11.0, mu_a_inv=11.0, p=0.225, phi_a=0.1),
 }
 models = {
     "SARS-CoV-2": simulate_SEIPAR_W,
@@ -86,26 +82,26 @@ Rt_times = {
 trajectory_end_times = {"SARS-CoV-2": 530, "Influenza A": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
 pathogens = ["SARS-CoV-2", "Influenza A", "Ebola"]
 asymptomatic_pathogens = ["SARS-CoV-2", "Influenza A"]
-pathogens_full_landscape = list(parameters.keys())
 
 best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi_a, phi_p; high 1/gamma, 1/mu_s
     "SARS-CoV-2": dict(R_0=2.40, gamma_inv=4.5, sigma_inv=1.0, mu_s_inv=10.0, mu_a_inv=9.7, p=0.23, phi_a=0.12, phi_p=1.16),
     "Influenza A": dict(R_0=1.30, gamma_inv=1.89, sigma_inv=1.0, mu_s_inv=4.69, mu_a_inv=3.39, p=0.32, phi_a=0.11, phi_p=0.07),
-    "Ebola": dict(R_0=1.74, gamma_inv=9.2, mu_s_inv=6.30),
-    "Omicron": dict(R_0=3.5, gamma_inv=4.60, sigma_inv=0.001, mu_s_inv=6.18, mu_a_inv=3.06, p=0.230, phi_a=0.16),
-    "Measles": dict(R_0=12.0, gamma_inv=12.0, sigma_inv=2.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0),
-    "Dengue": dict(R_0=2.0, gamma_inv=8.0, sigma_inv=1.0, mu_s_inv=5.0, mu_a_inv=4.0, p=0.4, phi_a=0.1),
-    "Rhino": dict(R_0=2.3, gamma_inv=1.0, sigma_inv=0.5, mu_s_inv=14.0, mu_a_inv=8.0, p=0.1, phi_a=0.1),
+    "Ebola": dict(R_0=1.74, gamma_inv=9.2, mu_s_inv=6.30, phi_a=0.0, phi_p=0.0),
+    "Omicron": dict(R_0=3.5, gamma_inv=4.60, sigma_inv=0.001, mu_s_inv=6.18, mu_a_inv=3.64, p=0.230, phi_a=0.13, phi_p=1.19),
+    "Measles": dict(R_0=12.0, gamma_inv=12.0, sigma_inv=2.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0, phi_p=1.0),
+    "Dengue": dict(R_0=2.0, gamma_inv=8.0, sigma_inv=1.0, mu_s_inv=5.0, mu_a_inv=4.0, p=0.4, phi_a=0.1, phi_p=0.0),
+    "Rhino": dict(R_0=2.3, gamma_inv=1.0, sigma_inv=0.5, mu_s_inv=14.0, mu_a_inv=8.0, p=0.1, phi_a=0.1, phi_p=0.0),
 }
 worst_params_kwargs = { # low 1/gamma, 1/mu_s; high R0, 1/sigma, 1/mu_a, p, phi_a, phi_p
     "SARS-CoV-2": dict(R_0=2.98, gamma_inv=1.5, sigma_inv=4.0, mu_s_inv=7.80, mu_a_inv=13.5, p=0.399, phi_a=0.53, phi_p=11.97),
     "Influenza A": dict(R_0=1.70, gamma_inv=1.41, mu_s_inv=2.06, mu_a_inv=7.37, p=0.4, phi_a=1.54, phi_p=0.48),
-    "Ebola": dict(R_0=2.15, gamma_inv=7.70, mu_s_inv=3.70),
-    "Omicron": dict(R_0=11.4, gamma_inv=2.51, sigma_inv=1.52, mu_s_inv=3.06, mu_a_inv=7.74, p=0.399, phi_a=0.64),
-    "Measles": dict(R_0=18.0, gamma_inv=9.0, sigma_inv=4.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0),
-    "Dengue": dict(R_0=10.0, gamma_inv=3.0, sigma_inv=2.0, mu_s_inv=3.0, mu_a_inv=7.0, p=0.8, phi_a=1.0),
-    "Rhino": dict(R_0=3.0, gamma_inv=0.5, sigma_inv=1.0, mu_s_inv=8.0, mu_a_inv=14.0, p=0.35, phi_a=0.1),
+    "Ebola": dict(R_0=2.15, gamma_inv=7.70, mu_s_inv=3.70, phi_a=0.0, phi_p=0.0),
+    "Omicron": dict(R_0=11.4, gamma_inv=2.51, sigma_inv=1.87, mu_s_inv=3.06, mu_a_inv=7.74, p=0.399, phi_a=0.64, phi_p=76.0),
+    "Measles": dict(R_0=18.0, gamma_inv=9.0, sigma_inv=4.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0, phi_p=2.0),
+    "Dengue": dict(R_0=10.0, gamma_inv=3.0, sigma_inv=2.0, mu_s_inv=4.0, mu_a_inv=7.0, p=0.8, phi_a=1.0, phi_p=0.0),
+    "Rhino": dict(R_0=3.0, gamma_inv=0.5, sigma_inv=1.0, mu_s_inv=8.0, mu_a_inv=14.0, p=0.35, phi_a=0.1, phi_p=0.0),
 }
+pathogens_full_landscape = list(best_params_kwargs.keys())
 colors = {
     "SARS-CoV-2": "tab:blue", "Influenza A": "tab:orange", "Ebola": "tab:green",
     "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow",
@@ -596,10 +592,10 @@ rule plot_asymptomatic_landscape:
 
         # asymptomatic landscape
         for pathogen in pathogens_full_landscape:
-            mean_params = parameters[pathogen]
-            best_params = mean_params.update(**best_params_kwargs[pathogen])
-            worst_params = mean_params.update(**worst_params_kwargs[pathogen])
-            R0_s, theta_s = sample(best_params=best_params, worst_params=worst_params, n_samples=10000)
+            ps = Params.for_SEIPAR()
+            best_params = ps.update(**best_params_kwargs[pathogen])
+            worst_params = ps.update(**worst_params_kwargs[pathogen])
+            R0_s, theta_s = sample_asymptomatic_landscape(best_params=best_params, worst_params=worst_params, n_samples=10000)
             ax.scatter(theta_s, R0_s, s=4, alpha=0.1, color=colors[pathogen], edgecolors='none')
 
         # controllability boundaries

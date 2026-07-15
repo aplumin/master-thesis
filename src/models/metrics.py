@@ -318,18 +318,25 @@ def strategy_grid(
 
 def sample_asymptomatic_landscape(best_params, worst_params, n_samples, seed=0):
     rng = np.random.default_rng(seed)
+    def _bounds(name):
+        a = getattr(best_params, name)
+        b = getattr(worst_params, name)
+        return (min(a, b), max(a, b))
+    
     def _sample(name):
-        def _bounds(name):
-            a = getattr(best_params, name)
-            b = getattr(worst_params, name)
-            return (min(a, b), max(a, b))
         lo, hi = _bounds(name)
         if lo == hi: return np.full(n_samples, lo)
         return rng.normal((lo+hi)/2, (hi-lo)/(2*1.96), size=n_samples)
+
+    def _sample_log(name):
+        lo, hi = np.log(_bounds(name))
+        if lo == hi: 
+            return np.full(n_samples, np.exp(lo))
+        return np.exp(rng.normal((lo+hi)/2, (hi-lo)/(2*1.96), size=n_samples))
     
     p = _sample('p')
-    R_a = p * _sample('phi_a') * _sample('mu_a_inv')
-    R_p = (1.0 - p) * _sample('sigma_inv')
+    R_a = p * _sample_log('phi_a') * _sample('mu_a_inv')
+    R_p = (1.0 - p) * _sample_log('phi_p') * _sample('sigma_inv')
     R_s = (1.0 - p) * _sample('mu_s_inv')
     theta = (R_a + R_p) / (R_a + R_p + R_s)
     return np.asarray(_sample('R_0')), np.asarray(theta)
