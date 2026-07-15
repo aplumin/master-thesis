@@ -179,8 +179,8 @@ def plot_trajectory(
     ax_rt.plot(tt, rt_true, color='black', label=r'$\mathcal{R}_t$')
     ax_rt.axhline(params.R_crit, color='grey', linestyle='--')
     s_contribution = (1-params.epsilon_s) * (1-params.p) * params.beta * params.mu_s_inv
-    a_contribution = params.p * params.phi * params.beta * params.mu_a_inv
-    p_contribution = (1-params.p) * params.beta * params.sigma_inv
+    a_contribution = params.p * params.phi_a * params.beta * params.mu_a_inv
+    p_contribution = (1-params.p) * params.phi_p * params.beta * params.sigma_inv
     total_contributions = s_contribution + a_contribution + p_contribution
     rt_s = rt_true * s_contribution / total_contributions
     rt_a = rt_true * a_contribution / total_contributions
@@ -230,9 +230,9 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     params: Params = Params.for_SEIPAR(),
     total_infected: bool = False,
     ps = jnp.linspace(0.0, 0.999, 100),
-    phis = jnp.linspace(0.0, 0.999, 100),
+    phi_as = jnp.linspace(0.0, 0.999, 100),
     p_CI = (None, None),
-    phi_CI = (None, None),
+    phi_a_CI = (None, None),
     epsilon_s = [0.0, 0.4, 0.8],
     epsilon_w = [0.0, 0.4, 0.8],
     E0: float = 1e-6,
@@ -245,16 +245,16 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     if t1 is None: t1 = 600.0 if total_infected else 50.0
 
     # build dataframe
-    p_grid, phi_grid = jnp.meshgrid(ps, phis, indexing="ij")
+    p_grid, phi_a_grid = jnp.meshgrid(ps, phi_as, indexing="ij")
     df_list = []
     for eps_s in epsilon_s:
         for eps_w in epsilon_w:
             base_params = params.update(epsilon_s=float(eps_s), epsilon_w=float(eps_w))
             if total_infected:
-                Z = compute_asymptomatic_grid_Itot(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
+                Z = compute_asymptomatic_grid_Itot(model=model, base_params=base_params, p=ps, phi_a=phi_as, t1=t1, E0=E0)
             else:
-                Z = compute_asymptomatic_grid_Rt(model=model, base_params=base_params, p=ps, phi=phis, t1=t1, E0=E0)
-            df_list.append(pd.DataFrame({'p': np.array(p_grid.flatten()), 'phi': np.array(phi_grid.flatten()), 'Z': np.array(Z.flatten()), 'eps_s': eps_s, 'eps_w': eps_w}))
+                Z = compute_asymptomatic_grid_Rt(model=model, base_params=base_params, p=ps, phi_a=phi_as, t1=t1, E0=E0)
+            df_list.append(pd.DataFrame({'p': np.array(p_grid.flatten()), 'phi_a': np.array(phi_a_grid.flatten()), 'Z': np.array(Z.flatten()), 'eps_s': eps_s, 'eps_w': eps_w}))
     df = pd.concat(df_list, ignore_index=True)
 
     # color scaling
@@ -273,19 +273,19 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     # mapping function
     def _meshmap(data, **kwargs):
         ax = plt.gca()
-        Z_matrix = data.pivot(index='p', columns='phi', values='Z').values
-        mesh = ax.pcolormesh(p_grid, phi_grid, Z_matrix, linewidth=0, edgecolors='none', rasterized=True, **kwargs)
+        Z_matrix = data.pivot(index='p', columns='phi_a', values='Z').values
+        mesh = ax.pcolormesh(p_grid, phi_a_grid, Z_matrix, linewidth=0, edgecolors='none', rasterized=True, **kwargs)
         if not total_infected: # R=1 contour
-            ax.contour(p_grid, phi_grid, Z_matrix, levels=[1.0], colors='black', linewidths=1.5, linestyles='dashed')
+            ax.contour(p_grid, phi_a_grid, Z_matrix, levels=[1.0], colors='black', linewidths=1.5, linestyles='dashed')
         # mean and CI cross
         has_p_ci = p_CI[0] is not None and p_CI[1] is not None
-        has_phi_ci = phi_CI[0] is not None and phi_CI[1] is not None
-        if has_p_ci or has_phi_ci:
+        has_phi_a_ci = phi_a_CI[0] is not None and phi_a_CI[1] is not None
+        if has_p_ci or has_phi_a_ci:
             xerr = np.array([[params.p - p_CI[0]], [p_CI[1] - params.p]]) if has_p_ci else None
-            yerr = np.array([[params.phi - phi_CI[0]], [phi_CI[1] - params.phi]]) if has_phi_ci else None
-            ax.errorbar(params.p, params.phi, xerr=xerr, yerr=yerr, fmt='o', color='white', markeredgecolor='black', ecolor='white', elinewidth=1.5, capsize=3, markersize=5)
+            yerr = np.array([[params.phi_a - phi_a_CI[0]], [phi_a_CI[1] - params.phi_a]]) if has_phi_a_ci else None
+            ax.errorbar(params.p, params.phi_a, xerr=xerr, yerr=yerr, fmt='o', color='white', markeredgecolor='black', ecolor='white', elinewidth=1.5, capsize=3, markersize=5)
         else:
-            ax.plot(params.p, params.phi, marker='o', color='white', markeredgecolor='black', markersize=5)
+            ax.plot(params.p, params.phi_a, marker='o', color='white', markeredgecolor='black', markersize=5)
         ax.set_ylim([0.0,1.0])
         return mesh
     g.map_dataframe(_meshmap, **plot_kwargs)

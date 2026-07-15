@@ -65,7 +65,7 @@ def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E
         S, E, Ia, Ip, Is, R = y[:6]
         W = y[6:6+n_W]
         B = y[6+n_W:]
-        lambda_S = B[-1] * params.beta * (params.phi * Ia + Ip + (1.0 - params.epsilon_s) * Is) * S
+        lambda_S = B[-1] * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * S
         become_infectious = E / params.gamma_inv
         become_symptomatic = Ip / params.sigma_inv
         recover_asyx = Ia / params.mu_a_inv
@@ -90,7 +90,7 @@ def simulate_SEIAR_W(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0:
         S, E, Ia, Is, R = y[:5]
         W = y[5:5 + n_W]
         B = y[5 + n_W:]
-        lambda_S = B[-1] * params.beta * (params.phi * Ia + (1.0 - params.epsilon_s) * Is) * S
+        lambda_S = B[-1] * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * S
         become_infectious = E / params.gamma_inv
         recover_asyx = Ia / params.mu_a_inv
         recover_syx = Is / params.mu_s_inv

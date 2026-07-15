@@ -65,8 +65,8 @@ def simulate_SEIPAR_W_spatial(
         prevalence_asyx_B = jnp.where(N_B > 0.0, Ia_B / N_B, 0.0)
         prevalence_presyx_A = jnp.where(N_A > 0.0, Ip_A / N_A, 0.0)
         prevalence_presyx_B = jnp.where(N_B > 0.0, Ip_B / N_B, 0.0)
-        lambda_A = B_out_A * epi_params.beta * (epi_params.phi * prevalence_asyx_A + prevalence_presyx_A + (1.0 - epi_params.epsilon_s) * prevalence_syx_A) * S_A
-        lambda_B = B_out_B * epi_params.beta * (epi_params.phi * prevalence_asyx_B + prevalence_presyx_B + (1.0 - epi_params.epsilon_s) * prevalence_syx_B) * S_B
+        lambda_A = B_out_A * epi_params.beta * (epi_params.phi_a * prevalence_asyx_A + epi_params.phi_p * prevalence_presyx_A + (1.0 - epi_params.epsilon_s) * prevalence_syx_A) * S_A
+        lambda_B = B_out_B * epi_params.beta * (epi_params.phi_a * prevalence_asyx_B + epi_params.phi_p * prevalence_presyx_B + (1.0 - epi_params.epsilon_s) * prevalence_syx_B) * S_B
 
         become_infectious_A = E_A / epi_params.gamma_inv
         become_infectious_B = E_B / epi_params.gamma_inv
@@ -187,8 +187,8 @@ def simulate_SEIAR_W_spatial(
         prevalence_syx_B = jnp.where(N_B > 0.0, Is_B / N_B, 0.0)
         prevalence_asyx_A = jnp.where(N_A > 0.0, Ia_A / N_A, 0.0)
         prevalence_asyx_B = jnp.where(N_B > 0.0, Ia_B / N_B, 0.0)
-        lambda_A = B_out_A * epi_params.beta * (epi_params.phi * prevalence_asyx_A + (1.0 - epi_params.epsilon_s) * prevalence_syx_A) * S_A
-        lambda_B = B_out_B * epi_params.beta * (epi_params.phi * prevalence_asyx_B + (1.0 - epi_params.epsilon_s) * prevalence_syx_B) * S_B
+        lambda_A = B_out_A * epi_params.beta * (epi_params.phi_a * prevalence_asyx_A + (1.0 - epi_params.epsilon_s) * prevalence_syx_A) * S_A
+        lambda_B = B_out_B * epi_params.beta * (epi_params.phi_a * prevalence_asyx_B + (1.0 - epi_params.epsilon_s) * prevalence_syx_B) * S_B
 
         become_infectious_A = E_A / epi_params.gamma_inv
         become_infectious_B = E_B / epi_params.gamma_inv

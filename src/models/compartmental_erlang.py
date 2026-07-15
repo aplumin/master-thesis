@@ -39,8 +39,8 @@ def simulate_SEIPAR_W_Erlang(
 
         # weighted force of infection
         infectious = (
-            params.phi * jnp.dot(params.w_a, Ia) + 
-            jnp.dot(params.w_p, Ip) + 
+            params.phi_a * jnp.dot(params.w_a, Ia) + 
+            params.phi_p * jnp.dot(params.w_p, Ip) + 
             (1.0 - params.epsilon_s) * jnp.dot(params.w_s, Is)
         )
         lambda_S = B_out * params.beta * infectious * S

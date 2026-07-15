@@ -37,11 +37,12 @@ _PATHOGEN_BOUNDS: dict[str, tuple[float, float]] = {
 }
 _PRESYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
     "sigma_inv": (0.1, 10.0),
+    "phi_p":     (0.1, 10.0),
 }
 _ASYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
     "mu_a_inv": (0.1, 10.0),
     "p":        (0.0, 1.0),
-    "phi":      (0.0, 1.0),
+    "phi_a":    (0.0, 1.0),
 }
 _INTERVENTION_BOUNDS: dict[str, tuple[float, float]] = {
     "epsilon_s": (0.0, 1.0),
@@ -86,11 +87,12 @@ def _parameter_bounds_around_mean(model: Callable, scenario: str = "start", mean
     })
     if name == "SEIPAR_W": bounds |= {
         "sigma_inv": (ps.sigma_inv*0.8, ps.sigma_inv*1.2),
+        "phi_p":    (ps.phi_p*0.8, ps.phi_p*1.2),
     }
     if name in ("SEIPAR_W", "SEIAR_W"): bounds |= {
         "mu_a_inv": (ps.mu_a_inv*0.8, ps.mu_a_inv*1.2),
         "p":        (ps.p*0.8, ps.p*1.2),
-        "phi":      (ps.phi*0.8, ps.phi*1.2),
+        "phi_a":    (ps.phi_a*0.8, ps.phi_a*1.2),
     }
     bounds |= {
         "epsilon_s": (ps.epsilon_s*0.8, ps.epsilon_s*1.2),
@@ -239,3 +241,32 @@ def partial_rank_residuals(X: np.ndarray, y: np.ndarray, i: int) -> tuple[np.nda
     beta_x, *_ = np.linalg.lstsq(Z, X_rank[:, i], rcond=None)
     beta_y, *_ = np.linalg.lstsq(Z, y_rank, rcond=None)
     return X_rank[:, i] - Z @ beta_x, y_rank - Z @ beta_y
+
+def load_sensitivity_results(path: str) -> SensitivityResults:
+    d = np.load(path, allow_pickle=False)
+    names = [str(n) for n in d["param_names"]]
+    return SensitivityResults(param_names=names, bounds={n:(float(l),float(u)) for n,l,u in zip(names,d["lower_bounds"],d["upper_bounds"])}, samples=d["samples"], outputs=d["outputs"], prcc_mean=d["prcc_mean"], prcc_lower=d["prcc_lower"], prcc_upper=d["prcc_upper"], prcc_samples=d["prcc_samples"], sobol_S1=d["sobol_S1"], sobol_S1_conf=d["sobol_S1_conf"], sobol_ST=d["sobol_ST"], sobol_ST_conf=d["sobol_ST_conf"])
+
+def export_sensitivity_bounds(combinations, path, npzs):
+    col_mapping = {("SARS-CoV-2", "threshold"): "SARS-CoV-2", ("Influenza A", "threshold"): "H1N1", ("Ebola", "threshold"): "Ebola"}
+    param_defs = {
+        "R_0": ("$\\mathcal{R}_0$", "basic reproductive number"), "gamma_inv": ("$1/\\gamma$", "latent period"), "mu_s_inv": ("$1/\\mu_s$", "symptomatic period"), 
+        "sigma_inv": ("$1/\\sigma$", "presymptomatic period"), "mu_a_inv": ("$1/\\mu_a$", "asymptomatic period"), "p": ("$p$", "proportion asymptomatic"), 
+        "phi_a": ("$\\varphi_a$", "relative asympt. infectiousness"), "phi_p": ("$\\varphi_p$", "relative presympt. infectiousness"), 
+        "epsilon_s": ("$\\varepsilon_s$", "isolation efficacy"), "epsilon_w": ("$\\varepsilon_w$", "warning response efficacy"), "tau_W": ("$\\tau_W$", "reporting delay"), "tau_B": ("$\\tau_B$", "behavioural delay"), 
+        "log_k": ("$\\log_{10} k$", "warning gate sharpness"), "R_crit": ("$\\mathcal{R}_{\\text{crit}}$", "warning threshold"), 
+        "log_k_I": ("$\\log_{10} k_I$", "prevalence gate sharpness (*)"), "log_I_crit": ("$\\log_{10} I_{\\text{crit}}$", "prevalence threshold (*)"), 
+    }
+    bounds_data = {}
+    for combination, fpath in zip(combinations, npzs): bounds_data[combination] = load_sensitivity_results(fpath).bounds
+    with open(path, 'w') as f:
+        f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{llccc}\n\\toprule\n")
+        header = ["Parameter", ""] + [col_mapping[c] for c in combinations]
+        f.write(" & ".join(header) + " \\\\\n\\midrule\n")
+        for p_key, (symbol, desc) in param_defs.items():
+            row = [desc, symbol]
+            for combination in combinations: 
+                if p_key in bounds_data[combination]: row.append(f"$[{bounds_data[combination][p_key][0]:g}, {bounds_data[combination][p_key][1]:g}]$")
+                else: row.append("---")
+            f.write(" & ".join(row) + " \\\\\n")
+        f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Parameter ranges used for sensitivity analysis]{Parameter ranges used for Latin hypercube sampling in the global sensitivity analysis. Parameters marked with an asterisk (*) are only included when the symptomatic threshold $I_\\text{crit}=10^{-4}$ is active.}\n\\label{tab:prcc-bounds}\n\\end{table}\n")

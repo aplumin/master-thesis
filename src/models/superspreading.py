@@ -24,7 +24,8 @@ def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, k_ss: float, a_
     # precompute everything for efficiency
     inv_N = 1.0 / float(N)
     beta = params.beta
-    phi = params.phi
+    phi_a = params.phi_a
+    phi_p = params.phi_p
     eps_s_comp = 1.0 - params.epsilon_s
     eps_w = params.epsilon_w
     I_crit = params.I_crit
@@ -86,8 +87,8 @@ def gillespie_SEIPAR_W_superspreading(params, N: int, t1: float, k_ss: float, a_
 
         # propensities
         base_infection_rate = B_out * beta * (S * inv_N)
-        a[0] = base_infection_rate * phi * Ia    
-        a[1] = base_infection_rate * Ip          
+        a[0] = base_infection_rate * phi_a * Ia    
+        a[1] = base_infection_rate * phi_p * Ip          
         a[2] = base_infection_rate * eps_s_comp * Is 
         a[3] = E * rate_E_Ia                     
         a[4] = E * rate_E_Ip                     

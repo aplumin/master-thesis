@@ -64,7 +64,7 @@ def gillespie_SEIPAR_W(params, N: int, t1: float):
         f_W = 1.0 - params.epsilon_w * gate_W * gate_I
 
         # propensities
-        a[0] = B_out * params.beta * (params.phi*Ia + Ip + (1.0-params.epsilon_s)*Is) * (S/N)
+        a[0] = B_out * params.beta * (params.phi_a*Ia + params.phi_p*Ip + (1.0-params.epsilon_s)*Is) * (S/N)
         a[1] = params.p * E / params.gamma_inv
         a[2] = (1.0 - params.p) * E / params.gamma_inv
         a[3] = Ip / params.sigma_inv
@@ -192,7 +192,7 @@ def gillespie_SEIAR_W(params, N: int, t1: float):
         f_W = 1.0 - params.epsilon_w * gate_W * gate_I
 
         # propensities
-        a[0] = B_out * params.beta * (params.phi*Ia + (1.0-params.epsilon_s)*Is) * (S/N)
+        a[0] = B_out * params.beta * (params.phi_a*Ia + (1.0-params.epsilon_s)*Is) * (S/N)
         a[1] = params.p * E / params.gamma_inv
         a[2] = (1.0 - params.p) * E / params.gamma_inv
         a[3] = Ia / params.mu_a_inv

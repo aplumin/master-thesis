@@ -18,7 +18,8 @@ class Params(NamedTuple):
         mu_a_inv (float): Asymptomatic period (inverse of recovery rate).
         mu_s_inv (float): Symptomatic period (inverse of recovery rate).
         p (float): Proportion asymptomatic.
-        phi (float): Relative infectiousness.
+        phi_a (float): Relative infectiousness of asymptomatics.
+        phi_p (float): Relative infectiousness of presymptomatics.
         epsilon_s (float): Isolation efficacy.
         epsilon_w (float): Contact rate reduction efficacy after warning response.
         k (float): Sharpness of warning response.
@@ -41,7 +42,8 @@ class Params(NamedTuple):
     mu_a_inv: float
     mu_s_inv: float
     p: float
-    phi: float
+    phi_a: float
+    phi_p: float
     epsilon_s: float
     epsilon_w: float
     k: float
@@ -60,10 +62,11 @@ class Params(NamedTuple):
     @classmethod
     def for_SEIPAR(cls, 
             R_0: float = 2.69,
-            phi: float = 0.32,
-            gamma_inv: float = 3.2,
-            sigma_inv: float = 2.3,
-            mu_a_inv: float = 5.0,
+            phi_a: float = 0.26,
+            phi_p: float = 3.72,
+            gamma_inv: float = 3.0,
+            sigma_inv: float = 2.5,
+            mu_a_inv: float = 11.6,
             mu_s_inv: float =  9.3,
             p: float = 0.351,
             epsilon_s: float = 0.0,
@@ -84,12 +87,12 @@ class Params(NamedTuple):
         Parameters for the full model with presymptomatic and asymptomatic transmission.
         Uses SARS-CoV-2 parameters by default.
         """
-        r = _calculate_r(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, mu_s_inv=mu_s_inv)
-        r_eps = _calculate_r_eps(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
+        r = _calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, mu_s_inv=mu_s_inv)
+        r_eps = _calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
-            R_0=R_0, phi=phi, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, 
+            R_0=R_0, phi_a=phi_a, phi_p=phi_p, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
             n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
@@ -98,7 +101,7 @@ class Params(NamedTuple):
     @classmethod
     def for_SEIAR(cls,
             R_0: float = 1.46,
-            phi: float = 0.57,
+            phi_a: float = 0.57,
             gamma_inv: float = 1.65,
             mu_a_inv: float = 3.38,
             mu_s_inv: float = 3.38,
@@ -119,14 +122,14 @@ class Params(NamedTuple):
         ) -> "Params":
         """
         Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
-        Uses Influenza A parameters by default.
+        Uses Influenza A like parameters without presymptomatic transmission by default.
         """
-        r = _calculate_r(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=0.0, mu_s_inv=mu_s_inv)
-        r_eps = _calculate_r_eps(p=p, phi=phi, mu_a_inv=mu_a_inv, sigma_inv=0.0, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
+        r = _calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, mu_s_inv=mu_s_inv)
+        r_eps = _calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
-            R_0=R_0, phi=phi, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
+            R_0=R_0, phi_a=phi_a, phi_p=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
             n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
@@ -158,7 +161,7 @@ class Params(NamedTuple):
         beta = R_0 / mu_s_inv
         rho = 1 - epsilon_s
         return cls(
-            R_0=R_0, phi=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
+            R_0=R_0, phi_a=0.0, phi_p=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=0.0, mu_s_inv=mu_s_inv, p=0.0, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
             n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
@@ -166,11 +169,11 @@ class Params(NamedTuple):
 
     def update(self, **kwargs) -> "Params":
         """Update any parameter(s)."""
-        base_params = {"R_0", "p", "phi", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s",}
+        base_params = {"R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s"}
         if base_params & kwargs.keys():
             v = {f: kwargs.get(f, getattr(self, f)) for f in base_params}
-            r = _calculate_r(p=v["p"], phi=v["phi"], mu_a_inv=v["mu_a_inv"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"])
-            r_eps = _calculate_r_eps(p=v["p"], phi=v["phi"], mu_a_inv=v["mu_a_inv"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"], epsilon_s=v["epsilon_s"])
+            r = _calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"])
+            r_eps = _calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"], epsilon_s=v["epsilon_s"])
             kwargs.setdefault("beta", jnp.where(r > 0, v["R_0"]/r, 0.0))
             kwargs.setdefault("rho",  jnp.where(r > 0, r_eps/r, 1.0))
             kwargs["R_0"] = jnp.where(r > 0, v["R_0"], 0.0)
@@ -187,8 +190,5 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
     )
     return 1.0 - params.epsilon_w * gate_W * gate_I
 
-def _calculate_r_eps(p, phi, mu_a_inv, sigma_inv, epsilon_s, mu_s_inv):
-    return p * phi * mu_a_inv + (1-p) * (sigma_inv + (1-epsilon_s) * mu_s_inv)
-
-def _calculate_r(p, phi, mu_a_inv, sigma_inv, mu_s_inv):
-    return p * phi * mu_a_inv + (1-p) * (sigma_inv + mu_s_inv)
+def _calculate_r(p, phi_a, phi_p, mu_a_inv, sigma_inv, mu_s_inv, epsilon_s=0.0):
+    return p * phi_a * mu_a_inv + (1-p) * (phi_p * sigma_inv + (1.0 - epsilon_s) * mu_s_inv)

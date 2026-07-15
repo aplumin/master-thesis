@@ -1,6 +1,7 @@
 # Project-specific
 results/
 scripts/
+data/
 *.png
 
 # Byte-compiled / optimized / DLL files

@@ -100,28 +100,28 @@ def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1:
     return I_tot_grid / I_tot(0.0, 0.0)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
-def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float, phi: float, t1: float = 50.0, E0: float = 1e-6):
+def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 50.0, E0: float = 1e-6):
     """
     Compute a 2D grid of the reproductive number after interventions.
-    Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
+    Asymptomatic proportion p on the x axis and relative infectiousness phi_a on the y axis.
     """
-    def final_R(p, phi):
-        params = base_params.update(p=p, phi=phi)
+    def final_R(p, phi_a):
+        params = base_params.update(p=p, phi_a=phi_a)
         tt, yy, *_ = model(params=params, t1=t1, E0=E0)
         Rt,_,_,_,_,_,_,_ = outcome_metrics(tt, yy, params, t1, delta_dep=0.05)
         return Rt
-    return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(p, phi)
+    return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(p, phi_a)
 
 @partial(jax.jit, static_argnames=['model', 't1'])
-def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: float, phi: float, t1: float = 600.0, E0: float = 1e-6):
+def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 600.0, E0: float = 1e-6):
     """
     Compute a 2D grid of proportion infected relative to a no intervention baseline.
-    Asymptomatic proportion p on the x axis and relative infectiousness phi on the y axis.
+    Asymptomatic proportion p on the x axis and relative infectiousness phi_a on the y axis.
     """
-    def I_tot(p, phi):
-        _, yy, *_ = model(params=base_params.update(p=p, phi=phi), t1=t1, E0=E0)
+    def I_tot(p, phi_a):
+        _, yy, *_ = model(params=base_params.update(p=p, phi_a=phi_a), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(p, phi)
+    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(p, phi_a)
     return I_tot_grid # return absolute fraction infected
 
 @partial(jax.jit, static_argnames=['model', 't1'])
@@ -176,8 +176,8 @@ def compute_amplitude_duration_piecewise(model, base_params, sweep_values, sweep
 
 def R0_decomposition(params: Params) -> dict[str, float]:
     """Decomposition of R0 into asymptomatic, presymptomatic and symptomatic contributions."""
-    R_a = float(params.beta * params.p * params.phi * params.mu_a_inv)
-    R_p = float(params.beta * (1.0 - params.p) * params.sigma_inv)
+    R_a = float(params.beta * params.p * params.phi_a * params.mu_a_inv)
+    R_p = float(params.beta * (1.0 - params.p) * params.phi_p * params.sigma_inv)
     R_s = float(params.beta * (1.0 - params.p) * params.mu_s_inv)
     return {"a": R_a, "p": R_p, "s": R_s}
 
@@ -193,25 +193,26 @@ def _infection_jacobian(params: Params) -> tuple[np.ndarray, list[str]]:
     gamma = 1.0 / float(params.gamma_inv)
     mu_s = 1.0 / float(params.mu_s_inv)
     p = float(params.p)
-    phi = float(params.phi)
+    phi_a = float(params.phi_a)
+    phi_p = float(params.phi_p)
     has_presymptomatic = float(params.sigma_inv) > 0.0
     has_asymptomatic = float(params.mu_a_inv) > 0.0
     if has_presymptomatic and has_asymptomatic: # SEIPAR
         sigma = 1.0 / float(params.sigma_inv)
         mu_a = 1.0 / float(params.mu_a_inv)
         J = np.array([
-            [-gamma,        beta * phi, beta,   beta ],
-            [p * gamma,     -mu_a,      0.0,    0.0  ],
-            [(1-p) * gamma, 0.0,        -sigma, 0.0  ],
-            [0.0,           0.0,        sigma,  -mu_s],
+            [-gamma,        beta * phi_a, beta * phi_p, beta ],
+            [p * gamma,     -mu_a,        0.0,          0.0  ],
+            [(1-p) * gamma, 0.0,          -sigma,       0.0  ],
+            [0.0,           0.0,          sigma,        -mu_s],
         ])
         labels = ["a", "p", "s"]
     elif has_asymptomatic: # SEIAR
         mu_a = 1.0 / float(params.mu_a_inv)
         J = np.array([
-            [-gamma,          beta * phi, beta ],
-            [p * gamma,       -mu_a,      0.0  ],
-            [(1 - p) * gamma, 0.0,        -mu_s],
+            [-gamma,          beta * phi_a, beta ],
+            [p * gamma,       -mu_a,        0.0  ],
+            [(1 - p) * gamma, 0.0,          -mu_s],
         ])
         labels = ["a", "s"]
     else: # SEIR
@@ -241,8 +242,8 @@ def infectious_fractions(params: Params) -> dict[str, float]:
 
 def calculate_mt_branching_q(ps, ew, es):
     def extinction_prob(q):
-        asyx = ps.phi * ps.beta * ps.mu_a_inv * (1-ew/2)
-        presyx = ps.beta * ps.sigma_inv * (1-ew/2)
+        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * (1-ew/2)
+        presyx = ps.phi_p * ps.beta * ps.sigma_inv * (1-ew/2)
         syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
         return ps.p / (1 + asyx * (1-q)) + (1-ps.p) / ((1 + presyx * (1-q)) * (1 + syx * (1-q))) - q
     ext_prob = 1.0
@@ -255,8 +256,8 @@ def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
     def g_r(q,r):
         return 1-(1+(1-q)/r)**(-r)
     def extinction_prob(q):
-        asyx = ps.phi * ps.beta * ps.mu_a_inv * (1-ew/2)
-        presyx = ps.beta * ps.sigma_inv * (1-ew/2)
+        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * (1-ew/2)
+        presyx = ps.phi_p * ps.beta * ps.sigma_inv * (1-ew/2)
         syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
         return ps.p / (1 + asyx * g_r(q,k)) + (1-ps.p) / ((1 + presyx * g_r(q,k)) * (1 + syx * g_r(q,k))) - q
     ext_prob = 1.0
@@ -265,8 +266,8 @@ def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
     return ext_prob
 
 def calculate_generation_time(ps: Params):
-    nom = ps.p * ps.phi * ps.mu_a_inv**2 +(1-ps.p)*(ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
-    denom = ps.p * ps.phi * ps.mu_a_inv + (1-ps.p)*(ps.sigma_inv + ps.mu_s_inv)
+    nom = ps.p * ps.phi_a * ps.mu_a_inv**2 +(1-ps.p)*(ps.phi_p * ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
+    denom = ps.p * ps.phi_a * ps.mu_a_inv + (1-ps.p)*(ps.phi_p * ps.sigma_inv + ps.mu_s_inv)
     return ps.gamma_inv + nom / denom
 
 def strategy_metrics(tau_W, tau_B, n_W, n_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
@@ -314,3 +315,24 @@ def strategy_grid(
         grid = strategy_metric_grid(model, bp, taus_W, taus_B, t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, n_W=int(bp.n_W), n_B=int(bp.n_B), T_lead_on=(tl > 0.0))
         data[s] = np.asarray(grid)
     return data, list(np.asarray(taus_W)), list(np.asarray(taus_B))
+
+def sample_asymptomatic_landscape(best_params, worst_params, n_samples, seed=0):
+    rng = np.random.default_rng(seed)
+    def _sample(name):
+        def _bounds(name):
+            a = getattr(best_params, name)
+            b = getattr(worst_params, name)
+            return (min(a, b), max(a, b))
+        lo, hi = _bounds(name)
+        if lo == hi: return np.full(n_samples, lo)
+        return rng.normal((lo+hi)/2, (hi-lo)/(2*1.96), size=n_samples)
+    
+    p = _sample('p')
+    R_a = p * _sample('phi_a') * _sample('mu_a_inv')
+    R_p = (1.0 - p) * _sample('sigma_inv')
+    R_s = (1.0 - p) * _sample('mu_s_inv')
+    theta = (R_a + R_p) / (R_a + R_p + R_s)
+    return np.asarray(_sample('R_0')), np.asarray(theta)
+
+def R_boundary(theta, eps_s, eps_w):
+    return 1.0 / ((1.0 - eps_w / 2.0) * (1.0 - eps_s * (1.0 - theta)))

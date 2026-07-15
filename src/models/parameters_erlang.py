@@ -15,7 +15,8 @@ class ParamsErlang(NamedTuple):
         mu_a_inv (float): Asymptomatic period (inverse of recovery rate).
         mu_s_inv (float): Symptomatic period (inverse of recovery rate).
         p (float): Proportion asymptomatic.
-        phi (float): Relative infectiousness.
+        phi_a (float): Relative infectiousness of asymptomatics.
+        phi_p (float): Relative infectiousness of presymptomatics.
         epsilon_s (float): Isolation efficacy.
         epsilon_w (float): Contact rate reduction efficacy after warning response.
         k (float): Sharpness of warning response.
@@ -30,8 +31,9 @@ class ParamsErlang(NamedTuple):
         R_off (float): Lower threshold of the asymmetric warning trigger.
         eval_interval (float): Minimum time the warning state is kept before re-evaluation.
         T_lead (float): Lead time for which the estimated Rt trend is extrapolated.
-        w_a, w_p, w_s (jnp array): Infectiousness weights.
+        w_p, w_s (jnp array): Infectiousness weights.
         nE, nP, nS, nA (int): Number of compartments in the respective linear chains.
+        weighted (bool): Whether the subcompartments are weighted individually (default False).
     """
     R_0: float
     beta: float
@@ -40,7 +42,8 @@ class ParamsErlang(NamedTuple):
     mu_a_inv: float
     mu_s_inv: float
     p: float
-    phi: float
+    phi_a: float
+    phi_p: float
     epsilon_s: float
     epsilon_w: float
     k: float
@@ -55,22 +58,23 @@ class ParamsErlang(NamedTuple):
     R_off: float
     eval_interval: float
     T_lead: float
-    w_a: jnp.ndarray
     w_p: jnp.ndarray
     w_s: jnp.ndarray
     nE: int
     nP: int
     nS: int
     nA: int
+    weighted: bool
 
     @classmethod
     def for_SEIPAR(cls,
             R_0: float = 2.69,
-            phi: float = 0.32,
-            gamma_inv: float = 3.2,
-            sigma_inv: float = 2.3,
-            mu_a_inv: float = 5.0,
-            mu_s_inv: float = 9.3,
+            phi_a: float = 0.26,
+            phi_p: float = 3.72,
+            gamma_inv: float = 3.0,
+            sigma_inv: float = 2.5,
+            mu_a_inv: float = 11.6,
+            mu_s_inv: float =  9.3,
             p: float = 0.351,
             epsilon_s: float = 0.0,
             epsilon_w: float = 0.0,
@@ -78,7 +82,7 @@ class ParamsErlang(NamedTuple):
             R_crit: float = 1.0,
             tau_W: float = 14.0,
             tau_B: float = 7.0,
-            I_crit: float = 0.0,
+            I_crit: float = 0.0, 
             k_I: float = 1e6,
             n_W: int = 3,
             n_B: int = 1,
@@ -91,17 +95,17 @@ class ParamsErlang(NamedTuple):
             nP: int = 10,
             nS: int = 10,
             nA: int = 10,
+            weighted: bool = False,
         ) -> "ParamsErlang":
-        w_a = jnp.ones(nA)
-        w_p, w_s = compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS)
-        r = _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
-        r_eps = _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
+        w_p, w_s = compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS) if weighted else jnp.ones(nP), jnp.ones(nS)
+        r = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
+        r_eps = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
-            R_0=R_0, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, phi=phi,
+            R_0=R_0, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, phi_a=phi_a,
             epsilon_s=epsilon_s, epsilon_w=epsilon_w, k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead, w_a=w_a, w_p=w_p, w_s=w_s, nE=nE, nP=nP, nS=nS, nA=nA,
+            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead, w_p=w_p, w_s=w_s, nE=nE, nP=nP, nS=nS, nA=nA,
         )
 
 def compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS):
@@ -112,8 +116,8 @@ def compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS):
 def _mean_time(t0, mean, n):
     return t0 + (jnp.arange(1, n+1) - 0.5) * (mean/n)
 
-def _r_weighted(p, phi, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0):
-    Ra = p * phi * jnp.sum(w_a) * (mu_a_inv / nA)
-    Rp = (1.0 - p) * jnp.sum(w_p) * (sigma_inv / nP)
-    Rs = (1.0 - p) * (1.0 - epsilon_s) * jnp.sum(w_s) * (mu_s_inv / nS)
-    return Ra + Rp + Rs
+def _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_p, w_s, nP, nS, nA, epsilon_s=0.0):
+    ra = p * phi_a * jnp.sum(jnp.ones(nA)) * (mu_a_inv / nA)
+    rp = (1.0 - p) * phi_p * jnp.sum(w_p) * (sigma_inv / nP)
+    rs = (1.0 - p) * (1.0 - epsilon_s) * jnp.sum(w_s) * (mu_s_inv / nS)
+    return ra + rp + rs
