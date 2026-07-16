@@ -122,7 +122,7 @@ class Params(NamedTuple):
         ) -> "Params":
         """
         Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
-        Uses Influenza A like parameters without presymptomatic transmission by default.
+        Uses H1N1-like parameters without presymptomatic transmission by default.
         """
         r = _calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, mu_s_inv=mu_s_inv)
         r_eps = _calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)

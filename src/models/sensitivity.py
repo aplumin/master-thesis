@@ -140,7 +140,7 @@ def _prcc_bootstrap(X: np.ndarray, y: np.ndarray, n_bootstrap: int = 100, seed: 
     out = np.empty((n_bootstrap, d))
     for b in range(n_bootstrap):
         idx = rng.integers(0, N, size=N)
-        out[b] = _partial_rank_corr_coeff(X, y)(X[idx], y[idx])
+        out[b] = _partial_rank_corr_coeff(X[idx], y[idx])
     return out
 
 
@@ -248,7 +248,7 @@ def load_sensitivity_results(path: str) -> SensitivityResults:
     return SensitivityResults(param_names=names, bounds={n:(float(l),float(u)) for n,l,u in zip(names,d["lower_bounds"],d["upper_bounds"])}, samples=d["samples"], outputs=d["outputs"], prcc_mean=d["prcc_mean"], prcc_lower=d["prcc_lower"], prcc_upper=d["prcc_upper"], prcc_samples=d["prcc_samples"], sobol_S1=d["sobol_S1"], sobol_S1_conf=d["sobol_S1_conf"], sobol_ST=d["sobol_ST"], sobol_ST_conf=d["sobol_ST_conf"])
 
 def export_sensitivity_bounds(combinations, path, npzs):
-    col_mapping = {("SARS-CoV-2", "threshold"): "SARS-CoV-2", ("Influenza A", "threshold"): "H1N1", ("Ebola", "threshold"): "Ebola"}
+    col_mapping = {("SARS-CoV-2", "threshold"): "SARS-CoV-2", ("H1N1", "threshold"): "H1N1", ("Ebola", "threshold"): "Ebola"}
     param_defs = {
         "R_0": ("$\\mathcal{R}_0$", "basic reproductive number"), "gamma_inv": ("$1/\\gamma$", "latent period"), "mu_s_inv": ("$1/\\mu_s$", "symptomatic period"), 
         "sigma_inv": ("$1/\\sigma$", "presymptomatic period"), "mu_a_inv": ("$1/\\mu_a$", "asymptomatic period"), "p": ("$p$", "proportion asymptomatic"), 

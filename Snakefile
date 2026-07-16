@@ -3,7 +3,7 @@ jax.config.update('jax_enable_x64', True)
 
 import jax.numpy as jnp
 import numpy as np
-from scipy.stats import qmc, gamma, erlang
+from scipy.stats import qmc, gamma, erlang, norm, truncnorm, triang, lognorm
 from scipy.optimize import brentq
 from scipy.integrate import solve_ivp
 
@@ -48,12 +48,12 @@ from models.parameters_erlang import compute_weights
 ### PARAMETERS ###
 parameters = {
     "SARS-CoV-2": Params.for_SEIPAR(R_0=2.69, gamma_inv=3.0, sigma_inv=2.5, mu_s_inv=9.3, mu_a_inv=11.6, p=0.351, phi_a=0.26, phi_p=3.72),
-    "Influenza A": Params.for_SEIPAR(R_0=1.46, gamma_inv=1.65, sigma_inv=2.0, mu_s_inv=3.38, mu_a_inv=5.38, p=0.36, phi_a=0.57, phi_p=0.18),
+    "H1N1": Params.for_SEIPAR(R_0=1.46, gamma_inv=1.65, sigma_inv=2.0, mu_s_inv=3.38, mu_a_inv=5.38, p=0.36, phi_a=0.57, phi_p=0.18),
     "Ebola": Params.for_SEIR(R_0=1.95, gamma_inv=8.5, mu_s_inv=5.0),
 }
 models = {
     "SARS-CoV-2": simulate_SEIPAR_W,
-    "Influenza A": simulate_SEIPAR_W,
+    "H1N1": simulate_SEIPAR_W,
     "Ebola": simulate_SEIR_W,
     "Omicron": simulate_SEIPAR_W,
     "Measles": simulate_SEIPAR_W,
@@ -62,30 +62,30 @@ models = {
 }
 models_piecewise = {
     "SARS-CoV-2": simulate_SEIPAR_W_piecewise,
-    "Influenza A": simulate_SEIPAR_W_piecewise,
+    "H1N1": simulate_SEIPAR_W_piecewise,
     "Ebola": simulate_SEIR_W_piecewise,
 }
 spatial_models = {
     "SARS-CoV-2": simulate_SEIPAR_W_spatial,
-    "Influenza A": simulate_SEIPAR_W_spatial,
+    "H1N1": simulate_SEIPAR_W_spatial,
     "Ebola": simulate_SEIR_W_spatial,
 }
 Rt_times = {
     "SARS-CoV-2": 50.0,
-    "Influenza A": 100.0,
+    "H1N1": 100.0,
     "Ebola": 100.0,
     "Omicron": 50.0,
     "Measles": 50.0,
     "Dengue": 50.0,
     "Rhino": 50.0,
 }
-trajectory_end_times = {"SARS-CoV-2": 530, "Influenza A": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
-pathogens = ["SARS-CoV-2", "Influenza A", "Ebola"]
-asymptomatic_pathogens = ["SARS-CoV-2", "Influenza A"]
+trajectory_end_times = {"SARS-CoV-2": 530, "H1N1": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
+pathogens = ["SARS-CoV-2", "H1N1", "Ebola"]
+asymptomatic_pathogens = ["SARS-CoV-2", "H1N1"]
 
 best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi_a, phi_p; high 1/gamma, 1/mu_s
     "SARS-CoV-2": dict(R_0=2.40, gamma_inv=4.5, sigma_inv=1.0, mu_s_inv=10.0, mu_a_inv=9.7, p=0.23, phi_a=0.12, phi_p=1.16),
-    "Influenza A": dict(R_0=1.30, gamma_inv=1.89, sigma_inv=1.0, mu_s_inv=4.69, mu_a_inv=3.39, p=0.32, phi_a=0.11, phi_p=0.07),
+    "H1N1": dict(R_0=1.30, gamma_inv=1.89, sigma_inv=1.0, mu_s_inv=4.69, mu_a_inv=3.39, p=0.32, phi_a=0.11, phi_p=0.07),
     "Ebola": dict(R_0=1.74, gamma_inv=9.2, mu_s_inv=6.30, phi_a=0.0, phi_p=0.0),
     "Omicron": dict(R_0=3.5, gamma_inv=4.60, sigma_inv=0.001, mu_s_inv=6.18, mu_a_inv=3.64, p=0.230, phi_a=0.13, phi_p=1.19),
     "Measles": dict(R_0=12.0, gamma_inv=12.0, sigma_inv=2.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0, phi_p=1.0),
@@ -94,7 +94,7 @@ best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi_a, phi_p; high 1/gamma,
 }
 worst_params_kwargs = { # low 1/gamma, 1/mu_s; high R0, 1/sigma, 1/mu_a, p, phi_a, phi_p
     "SARS-CoV-2": dict(R_0=2.98, gamma_inv=1.5, sigma_inv=4.0, mu_s_inv=7.80, mu_a_inv=13.5, p=0.399, phi_a=0.53, phi_p=11.97),
-    "Influenza A": dict(R_0=1.70, gamma_inv=1.41, mu_s_inv=2.06, mu_a_inv=7.37, p=0.4, phi_a=1.54, phi_p=0.48),
+    "H1N1": dict(R_0=1.70, gamma_inv=1.41, sigma_inv=4.0, mu_s_inv=2.06, mu_a_inv=7.37, p=0.4, phi_a=1.54, phi_p=0.48),
     "Ebola": dict(R_0=2.15, gamma_inv=7.70, mu_s_inv=3.70, phi_a=0.0, phi_p=0.0),
     "Omicron": dict(R_0=11.4, gamma_inv=2.51, sigma_inv=1.87, mu_s_inv=3.06, mu_a_inv=7.74, p=0.399, phi_a=0.64, phi_p=76.0),
     "Measles": dict(R_0=18.0, gamma_inv=9.0, sigma_inv=4.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0, phi_p=2.0),
@@ -103,11 +103,11 @@ worst_params_kwargs = { # low 1/gamma, 1/mu_s; high R0, 1/sigma, 1/mu_a, p, phi_
 }
 pathogens_full_landscape = list(best_params_kwargs.keys())
 colors = {
-    "SARS-CoV-2": "tab:blue", "Influenza A": "tab:orange", "Ebola": "tab:green",
+    "SARS-CoV-2": "tab:blue", "H1N1": "tab:orange", "Ebola": "tab:green",
     "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow",
 }
-p_CI = {"SARS-CoV-2": (0.23, 0.399), "Influenza A": (0.32, 0.40)}
-phi_a_CI = {"SARS-CoV-2": (0.12, 0.53), "Influenza A": (0.11, 1.54)}
+p_CI = {"SARS-CoV-2": (0.23, 0.399), "H1N1": (0.32, 0.40)}
+phi_a_CI = {"SARS-CoV-2": (0.12, 0.53), "H1N1": (0.11, 1.54)}
 k_sc2 = 0.4
 
 prcc_scenarios = ['start', 'threshold']
@@ -139,10 +139,10 @@ STRATEGIES = {
     "interval": (False, True, 0.0, 1.0), "asymmetric": (True, False, 0.0, 0.1),
 }
 METRIC_NAMES = ["$\\mathcal{R}_t$", "total number of infections", "symptomatic peak", "steady-state $\\mathcal{R}_t$ amplitude", "time above $\\mathcal{R}_{crit}$", "total contact reduction cost"]
-METRIC_BOUNDS = [(0.0, 1.25), (0.0, 300.0), (0.0, 175.0), (0.0, 0.0005), (0.0, 0.000025)]
+METRIC_BOUNDS = [(0.0, 3.0), (0.0, 1.25), (0.0, 300.0), (0.0, 175.0), (0.0, 0.0005), (0.0, 0.000025)]
 INTERVENTION_SCENARIOS = {
     "SARS-CoV-2": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
-    "Influenza A": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
+    "H1N1": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
     "Ebola": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
 }
 
@@ -252,11 +252,13 @@ rule plot_nonlinear_response_analysis:
 ###############################################
 rule plot_trajectory:
     output:
-        plot="{outdir}/compartmental/trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
+        plot="{outdir}/compartmental/trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png",
+        plot_no_decomp="{outdir}/compartmental/no_decomp_trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         ps = parameters[wildcards.pathogen].update(epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w))
         plot_trajectory(t1=trajectory_end_times[wildcards.pathogen], model=models[wildcards.pathogen], params=ps, path=output.plot, title=f"{wildcards.pathogen} ($\\varepsilon_s={wildcards.epsilon_s}, \\varepsilon_w={wildcards.epsilon_w}$)", image_resolution=image_resolution, plot_total_I=True)
+        plot_trajectory(no_decomp=True, t1=trajectory_end_times[wildcards.pathogen], model=models[wildcards.pathogen], params=ps, path=output.plot_no_decomp, title=f"{wildcards.pathogen} ($\\varepsilon_s={wildcards.epsilon_s}, \\varepsilon_w={wildcards.epsilon_w}$)", image_resolution=image_resolution, plot_total_I=True)
 
 rule delayed_ww_intervention:
     output:
@@ -425,7 +427,7 @@ rule plot_controllability_boundaries:
             Rp = (1.0 - P) * base.sigma_inv
             Rs = (1.0 - P) * base.mu_s_inv
             mesh = ax.pcolormesh(np.array(ps), np.array(phis), (Ra + Rp) / (Ra + Rp + Rs), cmap='Greys', vmin=0.0, vmax=1.0, shading='auto', rasterized=True)
-            if pathogen == "Influenza A": fig.colorbar(mesh)
+            if pathogen == "H1N1": fig.colorbar(mesh)
 
             # Rt contours
             for eps_s in eps_s_levels:
@@ -468,9 +470,62 @@ rule plot_controllability_boundaries:
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
 
-def _empirical_bounds(pathogen: str) -> dict[str, tuple[float, float]]:
-    best, worst = best_params_kwargs[pathogen], worst_params_kwargs[pathogen]
-    return {k: (min(best[k], worst[k]), max(best[k], worst[k])) for k in best}
+_fixed_zero_bounds = {"point": 0.0, "low": 0.0, "high": 0.0, "type": "fixed"}
+empirical_bounds = {
+    "SARS-CoV-2": {
+        "R_0": {"point": 2.69, "low": 2.40, "high": 2.98, "type": "CI"},
+        "gamma_inv": {"point": 3.0, "low": 1.5, "high": 4.5, "type": "range"},
+        "sigma_inv": {"point": 2.5, "low": 1.0, "high": 4.0, "type": "range"},
+        "mu_s_inv": {"point": 9.3, "low": 7.8, "high": 10.0, "type": "CI"},
+        "mu_a_inv": {"point": 11.6, "low": 9.7, "high": 13.5, "type": "CI"},
+        "p": {"point": 0.351, "low": 0.230, "high": 0.399, "type": "CI"},
+        "phi_a": {"point": 0.26, "low": 0.12, "high": 0.53, "type": "lognormal"},
+        "phi_p": {"point": 3.72, "low": 1.16, "high": 11.97, "type": "lognormal"},
+    },
+    "H1N1": {
+        "R_0": {"point": 1.46, "low": 1.30, "high": 1.70, "type": "IQR"},
+        "gamma_inv": {"point": 1.65, "low": 1.41, "high": 1.89, "type": "CI"},
+        "sigma_inv": {"point": 2.0, "low": 1.0, "high": 4.0, "type": "range"},
+        "mu_s_inv": {"point": 3.38, "low": 2.06, "high": 4.69, "type": "CI"},
+        "mu_a_inv": {"point": 5.38, "low": 3.39, "high": 7.37, "type": "CI"},
+        "p": {"point": 0.36, "low": 0.32, "high": 0.40, "type": "CI"},
+        "phi_a": {"point": 0.57, "low": 0.11, "high": 1.54, "type": "lognormal"},
+        "phi_p": {"point": 0.18, "low": 0.07, "high": 0.48, "type": "lognormal"},
+    },
+    "Ebola": {
+        "R_0": {"point": 1.95, "low": 1.74, "high": 2.15, "type": "CI"},
+        "gamma_inv": {"point": 8.5, "low": 7.7, "high": 9.2, "type": "CI"},
+        "mu_s_inv": {"point": 5.0, "low": 3.7, "high": 6.3, "type": "CI"},
+        "sigma_inv": _fixed_zero_bounds, "mu_a_inv": _fixed_zero_bounds,
+        "p": _fixed_zero_bounds, "phi_a": _fixed_zero_bounds, "phi_p": _fixed_zero_bounds,
+    }
+}
+
+def _lhs_map(lhs_samples: np.ndarray, pathogen_bounds: dict) -> np.ndarray:
+    mapped_samples = np.zeros_like(lhs_samples)
+    for i, (_, bounds) in enumerate(pathogen_bounds.items()):
+        p_type = bounds["type"]
+        point = bounds["point"]
+        low = bounds["low"]
+        high = bounds["high"]
+        if p_type == "fixed" or low == high:
+            mapped_samples[:, i] = point
+            continue
+        elif p_type == "CI":
+            sd = (high - low) / 3.92
+            mapped_samples[:, i] = norm(loc=point, scale=sd).ppf(lhs_samples[:, i])
+        elif p_type == "lognormal":
+            log_sd = (np.log(high) - np.log(low)) / 3.92
+            mapped_samples[:, i] = lognorm(s=log_sd, scale=point).ppf(lhs_samples[:, i])
+        elif p_type == "IQR":
+            sd = (high - low) / 1.349
+            mapped_samples[:, i] = truncnorm((max(0, point - 4*sd) - point) / sd, (point + 4*sd - point) / sd, loc=point, scale=sd).ppf(lhs_samples[:, i])
+        elif p_type == "range":
+            scale = high - low
+            mapped_samples[:, i] = triang(c=(point - low) / scale, loc=low, scale=scale).ppf(lhs_samples[:, i])
+        else:
+            raise ValueError
+    return mapped_samples
 
 def _transmission_decomposition(ps: Params) -> dict[str, float]:
     R = R0_decomposition(ps)
@@ -492,18 +547,17 @@ rule transmission_decomposition:
         ci=(2.5, 97.5)
         seed=0
         
+        # MC over empirical bounds
         rows = []
         for pathogen in pathogens:
-            ps = parameters[pathogen]
-
-            # MC over empirical bounds
-            bounds = _empirical_bounds(pathogen)
+            ps = parameters[pathogen]    
+            bounds = empirical_bounds[pathogen]
             names = list(bounds)
-            X = qmc.scale(qmc.LatinHypercube(d=len(names), seed=seed).random(n=n_samples), np.array([bounds[k][0] for k in names]), np.array([bounds[k][1] for k in names]))
-            samples = [_transmission_decomposition(ps.update(**dict(zip(names, row)))) for row in X]
-
+            X = qmc.LatinHypercube(d=len(names), seed=seed).random(n=n_samples)
+            samples = [_transmission_decomposition(ps.update(**dict(zip(names, row)))) for row in _lhs_map(X, bounds)]
+            decomposition = _transmission_decomposition(ps)
             def _summarise(key, scale):
-                point_val = _transmission_decomposition(ps)[key] * scale
+                point_val = decomposition[key] * scale
                 draws = np.array([s[key] for s in samples]) * scale
                 lo_ci, hi_ci = np.percentile(draws, ci)
                 return point_val, float(draws.mean()), float(lo_ci), float(hi_ci)
@@ -631,10 +685,12 @@ rule compute_prcc:
         os.makedirs(os.path.dirname(output.npz), exist_ok=True)
         p = wildcards.pathogen
         t1 = 1000.0
-        best = best_params_kwargs[p]; worst = worst_params_kwargs[p]
+        best = best_params_kwargs[p]
+        worst = worst_params_kwargs[p]
         specific_bounds = {}
         for k in best.keys():
-            l_val = min(best[k], worst[k]); u_val = max(best[k], worst[k])
+            l_val = min(best[k], worst[k])
+            u_val = max(best[k], worst[k])
             if l_val == u_val: u_val += 1e-5
             specific_bounds[k] = (l_val, u_val)
         around_mean = wildcards.bounds=="symmetric"
@@ -1572,7 +1628,7 @@ rule plot_alternative_warning_strategies_eps_w:
         model = models_piecewise[pathogen]
         t1 = 10000.0
         eps_ww = np.linspace(0.0, 1.0, 100)
-        eps_s = 0.5 if pathogen=="SARS-CoV-2" else 0.0
+        eps_s = 0.8 if pathogen=="SARS-CoV-2" else 0.0
         nE = len(eps_ww)
         nM = len(METRIC_NAMES)
         base_params = parameters[pathogen].update(epsilon_s=eps_s, R_off=R_OFF, eval_interval=EVAL_INTERVAL)
@@ -1632,7 +1688,7 @@ rule alternative_warning_strategies_table:
         model = models_piecewise[pathogen]
         warning_scenarios = {
             "SARS-CoV-2": [("baseline", 0.00, 0.00), ("uncontrolled", 0.50, 0.40), ("barely controlled", 0.50, 0.80), ("controlled", 0.50, 1.00)],
-            "Influenza A": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
+            "H1N1": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
             "Ebola": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
         }
         scenarios = warning_scenarios[pathogen]

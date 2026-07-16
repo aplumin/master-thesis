@@ -123,6 +123,7 @@ def plot_trajectory(
     plot_total_I: bool = False,
     plot_R: bool = True,
     semilogy: bool = False,
+    no_decomp: bool = False,
 ) -> None:
     """
     Simulate and plot trajectories.
@@ -137,7 +138,10 @@ def plot_trajectory(
     Is = I_compartments[-1]
     
     # plot
-    fig, (ax_main, ax_rt, ax_trans) = plt.subplots(nrows=3, ncols=1, figsize=(6, 14), gridspec_kw={'height_ratios': [6,2,6]})
+    if no_decomp:
+        fig, (ax_main, ax_rt) = plt.subplots(nrows=2, ncols=1, figsize=(6, 8), gridspec_kw={'height_ratios': [6,2]})
+    else:
+        fig, (ax_main, ax_rt, ax_trans) = plt.subplots(nrows=3, ncols=1, figsize=(6, 14), gridspec_kw={'height_ratios': [6,2,6]})
 
     # trajectories
     if plot_S: ax_main.plot(tt, compartments[0], label='$S$', color='green')
@@ -148,31 +152,22 @@ def plot_trajectory(
     if plot_total_I: ax_main.plot(tt, total_I, label='$I_{total}$', color='red', linestyle='--')
     if plot_R: ax_main.plot(tt, compartments[R_idx], label='$R$', color='black')
 
+    # final size
+    if not no_decomp:
+        def calculate_final_size(R0):
+            def final_size_equation(Z): 
+                return 1-Z-np.exp(-R0*Z)
+            return fsolve(final_size_equation, x0=0.5)[0]
+        final_size = calculate_final_size(params.R_0)
+        ax_main.axhline(final_size, label=r'$I_\text{tot}=$'+f'{final_size:.2f}', color='grey', linestyle='--')
+    
+    # trajectory styling
     plt.suptitle(title, fontsize=20)
     ax_rt.set_xlabel("Time (days)", fontsize=16)
     ax_main.set_ylabel("Population", fontsize=16)
     if semilogy: ax_main.set_yscale('log')
-
-    # Is peak size, time to peak, and total wave time
-    idx_peak = np.argmax(Is)
-    peak_Is = Is[idx_peak]
-    t_peak = tt[idx_peak]
-    # first time Is crossed threshold
-    indices_above = np.where(Is > params.I_crit)[0]
-    t1_crit = tt[indices_above[0]] if indices_above.size > 0 else tt[-1]
-    # first time after Is is below threshold
-    t2_crit = tt[indices_above[-1] + 1] if indices_above.size > 0 else tt[-1]
-    time_to_peak = t_peak - t1_crit
-    total_time = t2_crit - t1_crit
-
-    # final size
-    def calculate_final_size(R0):
-        def final_size_equation(Z): 
-            return 1-Z-np.exp(-R0*Z)
-        return fsolve(final_size_equation, x0=0.5)[0]
-    final_size = calculate_final_size(params.R_0)
-    ax_main.axhline(final_size, label=r'$I_\text{tot}=$'+f'{final_size:.2f}', color='grey', linestyle='--')
     ax_main.legend(loc='upper right')
+    ax_main.set_xlim(0,t1)
 
     # Rt
     rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
@@ -192,35 +187,50 @@ def plot_trajectory(
     if (rt_p > 0).any(): ax_rt.fill_between(tt, rt_s, rt_s + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
     if (rt_a > 0).any(): ax_rt.fill_between(tt, rt_s + rt_p, rt_s + rt_p + rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
     ax_rt.legend()
+    ax_rt.set_xlim(0,t1)
 
     # infections vs transmissions
-    type_order  = ["a", "p", "s"]
-    type_color  = {"a": "purple", "p": "skyblue", "s": "blue"}
-    type_I_tex  = {"a": r"$I_a$", "p": r"$I_p$", "s": r"$I_s$"}
-    type_R_tex  = {"a": r"$\mathcal{R}_a$", "p": r"$\mathcal{R}_p$", "s": r"$\mathcal{R}_s$"}
+    if not no_decomp:
+        type_order  = ["a", "p", "s"]
+        type_color  = {"a": "purple", "p": "skyblue", "s": "blue"}
+        type_I_tex  = {"a": r"$I_a$", "p": r"$I_p$", "s": r"$I_s$"}
+        type_R_tex  = {"a": r"$\mathcal{R}_a$", "p": r"$\mathcal{R}_p$", "s": r"$\mathcal{R}_s$"}
 
-    cols = [infectious_fractions(params)[j] for j in type_order]
-    rows = [transmission_fractions(params)[i] for i in type_order]
-    xb = np.concatenate([[0.0], np.cumsum(cols)])
-    yb = np.concatenate([[0.0], np.cumsum(rows)])
-    for row, i in enumerate(type_order):
-        for col, j in enumerate(type_order):
-            w, h = cols[col], rows[row]
-            if w <= 0 or h <= 0: continue
-            x0, y0 = xb[col], 1.0 - yb[row+1]
-            ax_trans.add_patch(mpl.patches.Rectangle((x0, y0), w, h, facecolor=type_color[type_order[row]], alpha=1-0.25*(2-col), edgecolor="white"))
-            ax_trans.text(x0+w/2, y0+h/2, f"{100*h*w:.0f}%", ha="center", va="center", fontsize=10, zorder=3, color="white")
-            ax_trans.text(xb[col]+cols[col]/2, 1.04, type_I_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=11, fontweight="bold", color=type_color[j])
-            ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_R_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=11, fontweight="bold", color=type_color[i])
-        ax_trans.set_xlim(-0.12, 1.0)
-        ax_trans.set_ylim(0.0, 1.12)
-        ax_trans.set_aspect("equal")
-        ax_trans.axis("off")
+        cols = [infectious_fractions(params)[j] for j in type_order]
+        rows = [transmission_fractions(params)[i] for i in type_order]
+        xb = np.concatenate([[0.0], np.cumsum(cols)])
+        yb = np.concatenate([[0.0], np.cumsum(rows)])
+        for row, i in enumerate(type_order):
+            for col, j in enumerate(type_order):
+                w, h = cols[col], rows[row]
+                if w <= 0 or h <= 0: continue
+                x0, y0 = xb[col], 1.0 - yb[row+1]
+                ax_trans.add_patch(mpl.patches.Rectangle((x0, y0), w, h, facecolor=type_color[type_order[row]], alpha=1-0.25*(2-col), edgecolor="white"))
+                ax_trans.text(x0+w/2, y0+h/2, f"{100*h*w:.0f}%", ha="center", va="center", fontsize=10, zorder=3, color="white")
+                ax_trans.text(xb[col]+cols[col]/2, 1.04, type_I_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=11, fontweight="bold", color=type_color[j])
+                ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_R_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=11, fontweight="bold", color=type_color[i])
+            ax_trans.set_xlim(-0.12, 1.0)
+            ax_trans.set_ylim(0.0, 1.12)
+            ax_trans.set_aspect("equal")
+            ax_trans.axis("off")
 
     # save and close
     plt.tight_layout()
     fig.savefig(path, dpi=image_resolution)
     plt.close(fig)
+
+    ### metrics ##
+    # Is peak size, time to peak, and total wave time
+    idx_peak = np.argmax(Is)
+    peak_Is = Is[idx_peak]
+    t_peak = tt[idx_peak]
+    # first time Is crossed threshold
+    indices_above = np.where(Is > params.I_crit)[0]
+    t1_crit = tt[indices_above[0]] if indices_above.size > 0 else tt[-1]
+    # first time after Is is below threshold
+    t2_crit = tt[indices_above[-1] + 1] if indices_above.size > 0 else tt[-1]
+    time_to_peak = t_peak - t1_crit
+    total_time = t2_crit - t1_crit
     return peak_Is, time_to_peak, total_time
 
 
