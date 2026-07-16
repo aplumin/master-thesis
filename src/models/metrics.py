@@ -53,7 +53,7 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warni
     idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B)
     S = yy[:, idx["S"]] / population_size
     Is = yy[:, idx["Is"]] / population_size
-    rt_true = params.R_0 * params.rho * yy[:, idx["W_out"]] * S
+    rt_true = params.R_0 * params.rho * yy[:, idx["B_out"]] * S
 
     # final Rt
     Rt_final = calculate_averaged_Rt(params, tt, t1, dt, N_t, S, Is, rt_true, delta_dep)
