@@ -166,7 +166,7 @@ def plot_trajectory(
     ax_rt.set_xlabel("Time (days)", fontsize=16)
     ax_main.set_ylabel("Population", fontsize=16)
     if semilogy: ax_main.set_yscale('log')
-    ax_main.legend(loc='upper right')
+    ax_main.legend(loc='upper right', ncol=2, fontsize=12)
     ax_main.set_xlim(0,t1)
 
     # Rt
@@ -186,7 +186,7 @@ def plot_trajectory(
     ax_rt.fill_between(tt, 0, rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
     if (rt_p > 0).any(): ax_rt.fill_between(tt, rt_s, rt_s + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
     if (rt_a > 0).any(): ax_rt.fill_between(tt, rt_s + rt_p, rt_s + rt_p + rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
-    ax_rt.legend()
+    ax_rt.legend(loc='upper right', fontsize=12)
     ax_rt.set_xlim(0,t1)
 
     # infections vs transmissions
@@ -206,9 +206,9 @@ def plot_trajectory(
                 if w <= 0 or h <= 0: continue
                 x0, y0 = xb[col], 1.0 - yb[row+1]
                 ax_trans.add_patch(mpl.patches.Rectangle((x0, y0), w, h, facecolor=type_color[type_order[row]], alpha=1-0.25*(2-col), edgecolor="white"))
-                ax_trans.text(x0+w/2, y0+h/2, f"{100*h*w:.0f}%", ha="center", va="center", fontsize=10, zorder=3, color="white")
-                ax_trans.text(xb[col]+cols[col]/2, 1.04, type_I_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=11, fontweight="bold", color=type_color[j])
-                ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_R_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=11, fontweight="bold", color=type_color[i])
+                ax_trans.text(x0+w/2, y0+h/2, f"{100*h*w:.0f}%", ha="center", va="center", fontsize=14, zorder=3, color="white")
+                ax_trans.text(xb[col]+cols[col]/2, 1.04, type_I_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=14, fontweight="bold", color=type_color[j])
+                ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_R_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=14, fontweight="bold", color=type_color[i])
             ax_trans.set_xlim(-0.12, 1.0)
             ax_trans.set_ylim(0.0, 1.12)
             ax_trans.set_aspect("equal")

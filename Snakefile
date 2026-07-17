@@ -46,42 +46,21 @@ from models.parameters_erlang import compute_weights
 
 
 ### PARAMETERS ###
+pathogens = ["SARS-CoV-2", "H1N1", "Ebola"]
+asymptomatic_pathogens = ["SARS-CoV-2", "H1N1"]
 parameters = {
     "SARS-CoV-2": Params.for_SEIPAR(R_0=2.69, gamma_inv=3.0, sigma_inv=2.5, mu_s_inv=9.3, mu_a_inv=11.6, p=0.351, phi_a=0.26, phi_p=3.72),
     "H1N1": Params.for_SEIPAR(R_0=1.46, gamma_inv=1.65, sigma_inv=2.0, mu_s_inv=3.38, mu_a_inv=5.38, p=0.36, phi_a=0.57, phi_p=0.18),
     "Ebola": Params.for_SEIR(R_0=1.95, gamma_inv=8.5, mu_s_inv=5.0),
 }
 models = {
-    "SARS-CoV-2": simulate_SEIPAR_W,
-    "H1N1": simulate_SEIPAR_W,
-    "Ebola": simulate_SEIR_W,
-    "Omicron": simulate_SEIPAR_W,
-    "Measles": simulate_SEIPAR_W,
-    "Dengue": simulate_SEIPAR_W,
-    "Rhino": simulate_SEIPAR_W,
+    "SARS-CoV-2": simulate_SEIPAR_W, "H1N1": simulate_SEIPAR_W, "Ebola": simulate_SEIR_W, 
+    "Omicron": simulate_SEIPAR_W, "Measles": simulate_SEIPAR_W, "Dengue": simulate_SEIPAR_W, "Rhino": simulate_SEIPAR_W,
 }
-models_piecewise = {
-    "SARS-CoV-2": simulate_SEIPAR_W_piecewise,
-    "H1N1": simulate_SEIPAR_W_piecewise,
-    "Ebola": simulate_SEIR_W_piecewise,
-}
-spatial_models = {
-    "SARS-CoV-2": simulate_SEIPAR_W_spatial,
-    "H1N1": simulate_SEIPAR_W_spatial,
-    "Ebola": simulate_SEIR_W_spatial,
-}
-Rt_times = {
-    "SARS-CoV-2": 50.0,
-    "H1N1": 100.0,
-    "Ebola": 100.0,
-    "Omicron": 50.0,
-    "Measles": 50.0,
-    "Dengue": 50.0,
-    "Rhino": 50.0,
-}
+models_piecewise = {"SARS-CoV-2": simulate_SEIPAR_W_piecewise, "H1N1": simulate_SEIPAR_W_piecewise, "Ebola": simulate_SEIR_W_piecewise}
+spatial_models = {"SARS-CoV-2": simulate_SEIPAR_W_spatial, "H1N1": simulate_SEIPAR_W_spatial, "Ebola": simulate_SEIR_W_spatial}
+Rt_times = {"SARS-CoV-2": 50.0, "H1N1": 100.0, "Ebola": 100.0, "Omicron": 50.0, "Measles": 50.0, "Dengue": 50.0, "Rhino": 50.0}
 trajectory_end_times = {"SARS-CoV-2": 530, "H1N1": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
-pathogens = ["SARS-CoV-2", "H1N1", "Ebola"]
-asymptomatic_pathogens = ["SARS-CoV-2", "H1N1"]
 
 best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi_a, phi_p; high 1/gamma, 1/mu_s
     "SARS-CoV-2": dict(R_0=2.40, gamma_inv=4.5, sigma_inv=1.0, mu_s_inv=10.0, mu_a_inv=9.7, p=0.23, phi_a=0.12, phi_p=1.16),
@@ -376,9 +355,9 @@ rule plot_combined_contour_grid_R1_Itot:
         
         eps_ww = jnp.linspace(0.0, 0.999, 100)
         eps_ss = jnp.linspace(0.0, 0.999, 100)
-        t1 = 1000.0
-        R_crits = [0.9, 1.0, 1.1, 1.2]
-        linestyles = ['--', '-', '-.', ':']
+        t1 = 10_000.0
+        R_crits = [0.9, 1.0, 1.1]
+        linestyles = ['--', '-', ':']
 
         fig, (ax_R, ax_I) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharey=True)
         for pathogen in pathogens:
@@ -399,7 +378,7 @@ rule plot_combined_contour_grid_R1_Itot:
         ax_I.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=12)
         ax_R.grid(True, alpha=0.3); ax_I.grid(True, alpha=0.3)
         ax_R.set_aspect('equal'); ax_I.set_aspect('equal')
-        ax_I.legend(handles=[Line2D([0],[0],color=colors[p],lw=3,label=p) for p in pathogens] + [Line2D([0],[0],color='gray',lw=2,linestyle=linestyles[i],label=f'$R_{{crit}}={r}$') for i, r in enumerate(R_crits)], loc='upper right', fontsize=11)
+        ax_R.legend(handles=[Line2D([0],[0],color=colors[p],lw=3,label=p) for p in pathogens] + [Line2D([0],[0],color='gray',lw=2,linestyle=linestyles[i],label=f'$R_{{crit}}={r}$') for i, r in enumerate(R_crits)], loc='upper left', fontsize=11)
         plt.tight_layout()
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
@@ -411,15 +390,15 @@ rule plot_controllability_boundaries:
 
         ps = jnp.linspace(0.0, 0.999, 100)
         phis = jnp.linspace(0.0, 0.999, 100)
-        eps_s_levels = [0.0, 0.2, 0.4, 0.6, 0.8]
-        eps_w_levels = [0.0, 0.2, 0.4, 0.6, 0.8]
+        eps_s_levels = [0.0, 0.25, 0.5, 0.75, 1.0]
+        eps_w_levels = [0.0, 0.25, 0.5, 0.75, 1.0]
 
         fig, axs = plt.subplots(1, 2, figsize=(11, 5), sharey=True) #, gridspec_kw={'width_ratios': [5,5,1]})
         for ax, pathogen in zip(axs, asymptomatic_pathogens):
             base = parameters[pathogen]
             model = models[pathogen]
             t1 = 10000 #Rt_times[pathogen]
-            shade_map = {0.0: 'red', 0.2: 'orange', 0.4: 'yellow', 0.6:'lime', 0.8: 'green'}
+            shade_map = {0.0: 'red', 0.25: 'orange', 0.5: 'yellow', 0.75:'lime', 1.0: 'green'}
 
             # nonsymptomatic fraction heatmap
             P, PHI = np.meshgrid(np.array(ps), np.array(phis), indexing='xy')
@@ -434,7 +413,7 @@ rule plot_controllability_boundaries:
                 for eps_w in eps_w_levels:
                     params_int = base.update(epsilon_s=eps_s, epsilon_w=eps_w)
                     Rt = np.array(compute_asymptomatic_grid_Rt(model=model, base_params=params_int, p=ps, phi_a=phis, t1=t1, E0=E0))
-                    ax.contour(np.array(ps), np.array(phis), Rt, levels=[1.0], colors=[shade_map[eps_s]], linestyles='dotted' if eps_w<0.1 else [(0, (1, 1))] if eps_w<0.3 else 'dashed' if eps_w<0.5 else [(0, (5, 1))] if eps_w<0.7 else '-', linewidths=2.0)
+                    ax.contour(np.array(ps), np.array(phis), Rt, levels=[1.0], colors=[shade_map[eps_s]], linestyles='dotted' if eps_w<0.1 else [(0, (1, 1))] if eps_w<0.3 else 'dashed' if eps_w<0.6 else [(0, (5, 1))] if eps_w<0.8 else '-', linewidths=2.0)
 
             # literature estimates
             p_lower, p_upper = p_CI.get(pathogen, (None, None))
@@ -452,18 +431,19 @@ rule plot_controllability_boundaries:
         # legend
         legend_handles = [
             # Line2D([0],[0], color='red', lw=2, label=r'$\varepsilon_s = 0.0$'),
+            Patch(facecolor='red', label=r'$\varepsilon_s = 0.0$'),
             Patch(facecolor='orange', label=r'$\varepsilon_s = 0.2$'),
             Patch(facecolor='yellow', label=r'$\varepsilon_s = 0.4$'),
             Patch(facecolor='lime', label=r'$\varepsilon_s = 0.6$'),
             Patch(facecolor='green', label=r'$\varepsilon_s = 0.8$'),
             Line2D([0],[0], color='gray', lw=2, ls='dotted', label=r'$\varepsilon_w = 0.0$'),
-            Line2D([0],[0], color='gray', lw=2, ls=(0, (1, 1)), label=r'$\varepsilon_w = 0.2$'),
-            Line2D([0],[0], color='gray', lw=2, ls='dashed', label=r'$\varepsilon_w = 0.4$'),
-            Line2D([0],[0], color='gray', lw=2, ls=(0, (5, 1)), label=r'$\varepsilon_w = 0.6$'),
-            Line2D([0],[0], color='gray', lw=2, ls='-', label=r'$\varepsilon_w = 0.8$'),
+            Line2D([0],[0], color='gray', lw=2, ls=(0, (1, 1)), label=r'$\varepsilon_w = 0.25$'),
+            Line2D([0],[0], color='gray', lw=2, ls='dashed', label=r'$\varepsilon_w = 0.5$'),
+            Line2D([0],[0], color='gray', lw=2, ls=(0, (5, 1)), label=r'$\varepsilon_w = 0.75$'),
+            Line2D([0],[0], color='gray', lw=2, ls='-', label=r'$\varepsilon_w = 1.0$'),
             Line2D([0],[0], marker='o', color='white', markeredgecolor='black', linestyle='None', markersize=6, label=r'literature estimates'),
         ]
-        fig.legend(handles=legend_handles, loc='lower center', ncol=3, bbox_to_anchor=(0.5, -0.25), frameon=False, fontsize=10)
+        fig.legend(handles=legend_handles, loc='lower center', ncol=4, bbox_to_anchor=(0.5, -0.15), frameon=False, fontsize=10)
 
         # fig.suptitle(r'Controllability boundary ($\mathcal{R}_t=1$) for varying asymptomaticity', fontsize=13, y=1.02)
         plt.tight_layout()
@@ -587,14 +567,14 @@ rule baseline_intervention_table:
                 m = (base if (eps_s == 0.0 and eps_w == 0.0) else table_row_metrics(parameters[pathogen], models[pathogen], eps_s, eps_w, t1, itot_baseline=base["itot"]))
                 rows[pathogen].append((name, eps_s, eps_w, m))
         with open(output.tex, "w") as f:
-            f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{lcccccccc}\n\\toprule\n\\textbf{scenario} & $\\mathcal{R}_t$ & \\textbf{peak sympt.} & \\textbf{time to peak} & \\textbf{total wave time} & \\textbf{attack rate} & \\textbf{infections prevented} & \\textbf{isolation cost} & \\textbf{warning cost}\\\\\n\\midrule\n")
+            f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{lcccccccc}\n\\toprule\n\\textbf{scenario} & $\\mathcal{R}_t$ & \\textbf{peak sympt.} & \\textbf{time to peak} & \\textbf{wave time} & \\textbf{attack rate} & \\textbf{inf. prevented} & \\textbf{isol. cost} & \\textbf{warn cost}\\\\\n\\midrule\n")
             for i, pathogen in enumerate(pathogens):
                 f.write(f"\\multicolumn{{9}}{{l}}{{\\textbf{{{pathogen}}}}}\\\\\n")
                 for name, eps_s, eps_w, m in rows[pathogen]:
                     tp, wt = f_days(m)
                     f.write(" & ".join([f"\\quad {table_scenario_label(name, eps_s, eps_w)}", f"{m['Rt']:.2f}", f_pct(m["peak_Is"], 1), tp, wt, f_pct(m["itot"], 0), f_pct(m["prevented"], 0), f"{m['isolation_cost']:.1f}", f"{m['warning_cost']:.1f}",]) + " \\\\\n")
                 if i < len(pathogens)-1: f.write("\\midrule\n")
-            f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Baseline and intervention characteristics of epidemic scenarios]{Baseline and intervention characteristics of epidemic scenarios. $\\mathcal{R}_t$ is the effective reproductive number after interventions. Peak symptomatic is the maximum $I_s$ fraction; time to peak and total wave time are measured in days from when $I_s$ crosses $I_\\text{crit}=10^{-4}$ until the peak and until it drops back below. The rows without a peak and wave have an initial $\\mathcal{R}_t(t=0)=\\mathcal{R}_\\varepsilon$ below one and thus cause no outbreak. Infections prevented is measured relative to the no-intervention baseline. The cost is the total contact-reduction in person$\\times$days, $\\int\\varepsilon_s I_s\\mathrm{d}t$ for the isolation cost and $\int(1-B_\\text{out})\\mathrm{d}t$ for the warning cost. \\textsuperscript{$\dagger$}rounded.}\\label{tab:baseline_intervention}\n\\end{table}\n")
+            f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Baseline and intervention characteristics of epidemic scenarios]{Baseline and intervention characteristics of epidemic scenarios.}\\label{tab:baseline_intervention}\n\\end{table}\n")
 
 
 ###############################################
@@ -617,10 +597,11 @@ rule plot_asymptomatic_grid_Itot_final:
 
 rule plot_asymptomatic_generation_time:
     output:
-        plot="{outdir}/compartmental/asymptomatic_generation_time.png"
+        plot="{outdir}/compartmental/asymptomatic_generation_time_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        ps = parameters["SARS-CoV-2"]
+        pathogen = wildcards.pathogen
+        ps = parameters[pathogen]
         P = jnp.linspace(0.0, 0.999, 100)
         PHI_A = jnp.linspace(0.0, 0.999, 100)
 
@@ -631,10 +612,14 @@ rule plot_asymptomatic_generation_time:
         generation_times = jax.vmap(jax.vmap(get_generation_time, in_axes=(None, 0)), in_axes=(0, None))(P, PHI_A)
 
         fig, ax = plot_heatmap(
-            X=P, Y=PHI_A, Z=generation_times, cmap='magma', contour_levels=[11,12,13,14,15],
-            title='Asymptomatic transmission and generation intervals',
+            X=P, Y=PHI_A, Z=generation_times, cmap='magma', cbar_label='generation time', contour_levels=[11,12,13,14,15],
+            title='Asymptomatic transmission and generation time',
             xlabel=r'Proportion asymptomatic, $p$', ylabel=r'Relative infectiousness, $\varphi_a$',
         )
+        xerr = np.array([[ps.p - p_CI[pathogen][0]], [p_CI[pathogen][1] - ps.p]])
+        yerr = np.array([[ps.phi_a - phi_a_CI[pathogen][0]], [phi_a_CI[pathogen][1] - ps.phi_a]])
+        ax.errorbar(ps.p, ps.phi_a, xerr=xerr, yerr=yerr, fmt='o', color='white', markeredgecolor='black', ecolor='white', elinewidth=1.5, capsize=3, markersize=5)
+        ax.set_ylim([0.0,1.0])
         fig.savefig(output.plot, dpi=image_resolution); plt.close(fig)
 
 rule plot_asymptomatic_landscape:
@@ -856,7 +841,7 @@ rule plot_combined_sensitivity_grid:
                 ax.bar(x + 1.5*w, params_aligned(results_start, 'sobol_ST'), yerr=params_aligned(results_start, 'sobol_ST_conf', is_err=True), width=w, color=color, alpha=0.35, **edge_kw, error_kw=err_kw)
                 ax.bar(x + 2.5*w, params_aligned(results_threshold, 'sobol_ST'), yerr=params_aligned(results_threshold, 'sobol_ST_conf', is_err=True), width=w, color=color, alpha=0.35, hatch='////', **edge_kw, error_kw=err_kw)
                 ax.set_xticks(x)
-                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=14)
+                ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=16)
                 ax.set_ylim(0.0, 1.05)
                 ax.grid(axis='y', alpha=0.3)
                 if c == 0: ax.set_ylabel(f'{pathogen}', fontsize=20)
@@ -869,7 +854,7 @@ rule plot_combined_sensitivity_grid:
                 Patch(facecolor='gray', alpha=0.7, hatch='////', label=r'$S_1$ ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3),
                 Patch(facecolor='gray', alpha=0.35, label=r'$S_T$ ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
                 Patch(facecolor='gray', alpha=0.35, hatch='////', label=r'$S_T$ ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3)], 
-            loc='lower center', ncol=6, bbox_to_anchor=(0.5, -0.03), fontsize=14, frameon=True)
+            loc='lower center', ncol=6, bbox_to_anchor=(0.5, -0.03), fontsize=16, frameon=True)
         plt.tight_layout()
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
@@ -1687,7 +1672,7 @@ rule alternative_warning_strategies_table:
         ps = parameters[pathogen].update(R_off=R_OFF, eval_interval=EVAL_INTERVAL)
         model = models_piecewise[pathogen]
         warning_scenarios = {
-            "SARS-CoV-2": [("baseline", 0.00, 0.00), ("uncontrolled", 0.50, 0.40), ("barely controlled", 0.50, 0.80), ("controlled", 0.50, 1.00)],
+            "SARS-CoV-2": [("baseline", 0.00, 0.00), ("uncontrolled", 0.80, 0.40), ("barely controlled", 0.80, 0.80), ("controlled", 0.80, 1.00)],
             "H1N1": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
             "Ebola": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
         }
@@ -1702,7 +1687,7 @@ rule alternative_warning_strategies_table:
                 m = (base if (eps_s == 0.0 and eps_w == 0.0) else table_row_metrics(strategy_params, model, eps_s, eps_w, t1, itot_baseline=base["itot"], strategy=strategy))
                 rows[scenario].append((strategy, eps_s, eps_w, m))
         with open(output.tex, "w") as f:
-            f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{lcccccccc}\n\\toprule\n\\textbf{scenario} & $\\mathcal{R}_t$ & \\textbf{peak sympt.} & \\textbf{time to peak} & \\textbf{total wave time} & \\textbf{attack rate} & \\textbf{infections prevented} & \\textbf{isolation cost} & \\textbf{warning cost}\\\\\n\\midrule\n")
+            f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{lcccccccc}\n\\toprule\n\\textbf{scenario} & $\\mathcal{R}_t$ & \\textbf{peak sympt.} & \\textbf{time to peak} & \\textbf{wave time} & \\textbf{attack rate} & \\textbf{inf. prevented} & \\textbf{isol. cost} & \\textbf{warn cost}\\\\\n\\midrule\n")
             for i, (scenario, eps_s, eps_w) in enumerate(scenarios):
                 f.write(f"\\multicolumn{{9}}{{l}}{{\\textbf{{{table_scenario_label(scenario, eps_s, eps_w, bold=True)}}}}}\\\\\n")
                 for strategy, _, _, m in rows[scenario]:
@@ -2061,7 +2046,7 @@ rule plot_infectiousness_distributions:
             mean = np.trapezoid(tt*gt, tt)
             return gt, mean
 
-        tt = np.linspace(0, 1000, 100_000)
+        tt = np.linspace(0, 1000, 1_000_000)
         colors = sns.color_palette("colorblind", 4)
         plt.figure(figsize=(8, 4))
 
@@ -2165,7 +2150,7 @@ rule all:
         expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=outdir),
         expand(rules.export_param_bounds.output.tex, outdir=outdir, bounds=["empirical", "symmetric"]),
         expand(rules.plot_controllability_boundaries.output.plot, outdir=outdir),
-        expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=outdir),
+        expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
         expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=outdir),
         expand(rules.plot_asymptomatic_landscape.output.plot, outdir=outdir),
         expand(rules.calculate_generation_times.output.txt, outdir=outdir),
