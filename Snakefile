@@ -23,10 +23,8 @@ from models.parameters import Params, logistic_response_function
 from models.compartmental import linear_chain, simulate_SEIPAR_W, simulate_SEIR_W
 from models.compartmental_piecewise import simulate_SEIPAR_W_piecewise, simulate_SEIR_W_piecewise
 from models.metrics import (
-    R0_decomposition, infectious_fractions, transmission_fractions, growth_rate, calculate_generation_time,
-    compute_R_grid, compute_asymptomatic_grid_Rt, outcome_metrics, compute_metrics, compute_delay_metrics_grid,
-    calculate_mt_branching_q, calculate_mt_branching_q_with_superspreading,
-    strategy_metrics, strategy_grid, sample_asymptomatic_landscape, R_boundary,
+    outcome_metrics, compute_metrics, compute_R_grid, compute_asymptomatic_grid_Rt, compute_delay_metrics_grid,
+    calculate_mt_branching_q, calculate_mt_branching_q_with_superspreading, strategy_metrics, strategy_grid, R_boundary,
 )
 from models.spatial import simulate_SEIPAR_W_spatial, simulate_SEIR_W_spatial, SpatialParams, run_spatial, unpack_spatial
 from models.sensitivity import (
@@ -43,57 +41,90 @@ from models.plotting import (
     table_scenario_label, table_row_metrics, f_days, f_pct,
 )
 from models.parameters_erlang import compute_weights
-
+from models.uncertainty import (
+    Priors, Marginal, sample_derived, epi_quantities, corner_kwargs,
+    params_from_priors, as_uniform, get_model_prior_list, get_epi_characteristics_dict,
+)
 
 ### PARAMETERS ###
 pathogens = ["SARS-CoV-2", "H1N1", "Ebola"]
 asymptomatic_pathogens = ["SARS-CoV-2", "H1N1"]
-parameters = {
-    "SARS-CoV-2": Params.for_SEIPAR(R_0=2.69, gamma_inv=3.0, sigma_inv=2.5, mu_s_inv=9.3, mu_a_inv=11.6, p=0.351, phi_a=0.26, phi_p=3.72),
-    "H1N1": Params.for_SEIPAR(R_0=1.46, gamma_inv=1.65, sigma_inv=2.0, mu_s_inv=3.38, mu_a_inv=5.38, p=0.36, phi_a=0.57, phi_p=0.18),
-    "Ebola": Params.for_SEIR(R_0=1.95, gamma_inv=8.5, mu_s_inv=5.0),
+pathogens_full_landscape = ["SARS-CoV-2", "H1N1", "Ebola", "Omicron", "Measles", "Dengue", "Rhino"]
+_zero = Marginal(0.0, 0.0, "uniform", mean=0.0)
+
+priors = {
+    "SARS-CoV-2": Priors(marginals=dict(
+        R_0=Marginal(2.40, 2.98, "lognormal", mean=2.69),
+        gamma_inv=Marginal(1.5, 4.5, "lognormal", mean=3.0),
+        sigma_inv=Marginal(1.0, 4.0, "lognormal", mean=2.5),
+        mu_s_inv=Marginal(7.8, 10.0, "lognormal", mean=9.3),
+        p=Marginal(0.23, 0.399, "beta", mean=0.351),
+        RR_p=Marginal(0.37, 2.71, "lognormal", mean=1.00),
+        RR_a=Marginal(0.16, 0.64, "lognormal", mean=0.32),
+    ), presymptomatic=True, asymptomatic=True),
+    "H1N1": Priors(marginals=dict(
+        R_0=Marginal(1.30, 1.70, "lognormal", mean=1.46),
+        gamma_inv=Marginal(1.41, 1.89, "lognormal", mean=1.65),
+        sigma_inv=Marginal(1.0, 4.0, "lognormal", mean=2.0),
+        mu_s_inv=Marginal(2.06, 4.69, "lognormal", mean=3.38),
+        p=Marginal(0.32, 0.40, "beta", mean=0.36),
+        RR_p=Marginal(0.04, 0.13, "lognormal", mean=0.08),
+        RR_a=Marginal(0.11, 1.54, "lognormal", mean=0.57),
+    ), presymptomatic=True, asymptomatic=True),
+    "Ebola": Priors(marginals=dict(
+        R_0=Marginal(1.74, 2.15, "lognormal", mean=1.95),
+        gamma_inv=Marginal(7.7, 9.2, "lognormal", mean=8.5),
+        mu_s_inv=Marginal(3.7, 6.3, "lognormal", mean=5.0),
+        sigma_inv=_zero, p=_zero, RR_p=_zero, RR_a=_zero,
+    ), presymptomatic=False, asymptomatic=False),
+    "Omicron": Priors(marginals=dict(
+        R_0=Marginal(3.5, 11.4, "uniform", mean=7.45), gamma_inv=Marginal(2.51, 4.6, "uniform", mean=3.555),
+        sigma_inv=Marginal(0.0, 1.87, "uniform", mean=0.935), mu_s_inv=Marginal(3.06, 6.18, "uniform", mean=4.62),
+        p=Marginal(0.23, 0.399, "uniform", mean=0.3145),
+        RR_p=Marginal(0.24, 15.38, "uniform", mean=7.81), RR_a=Marginal(0.15, 0.78, "uniform", mean=0.47),
+    ), presymptomatic=True, asymptomatic=True),
+    "Measles": Priors(marginals=dict(
+        R_0=Marginal(12.0, 18.0, "uniform", mean=15.0), gamma_inv=Marginal(9.0, 12.0, "uniform", mean=10.5),
+        sigma_inv=Marginal(2.0, 4.0, "uniform", mean=3.0), mu_s_inv=Marginal(4.0, 4.0, "uniform", mean=4.0),
+        RR_p=Marginal(0.75, 1.5, "uniform", mean=1.125), RR_a=_zero, p=_zero,
+    ), presymptomatic=True, asymptomatic=False),
+    "Dengue": Priors(marginals=dict(
+        R_0=Marginal(2.0, 10.0, "uniform", mean=6.0), gamma_inv=Marginal(3.0, 8.0, "uniform", mean=5.5),
+        sigma_inv=Marginal(1.0, 2.0, "uniform", mean=1.5), mu_s_inv=Marginal(4.0, 5.0, "uniform", mean=4.5),
+        p=Marginal(0.4, 0.8, "uniform", mean=0.6), RR_p=_zero, RR_a=Marginal(0.12, 1.22, "uniform", mean=0.67),
+    ), presymptomatic=False, asymptomatic=True),
+    "Rhino": Priors(marginals=dict(
+        R_0=Marginal(2.3, 3.0, "uniform", mean=2.65), gamma_inv=Marginal(0.5, 1.0, "uniform", mean=0.75),
+        sigma_inv=Marginal(0.5, 1.0, "uniform", mean=0.75), mu_s_inv=Marginal(8.0, 14.0, "uniform", mean=11.0),
+        p=Marginal(0.1, 0.35, "uniform", mean=0.225), RR_p=_zero, RR_a=Marginal(0.1, 0.1, "uniform", mean=0.1),
+    ), presymptomatic=False, asymptomatic=True),
 }
-models = {
-    "SARS-CoV-2": simulate_SEIPAR_W, "H1N1": simulate_SEIPAR_W, "Ebola": simulate_SEIR_W, 
-    "Omicron": simulate_SEIPAR_W, "Measles": simulate_SEIPAR_W, "Dengue": simulate_SEIPAR_W, "Rhino": simulate_SEIPAR_W,
+p_CI = {p: (priors[p].marginals["p"].lo, priors[p].marginals["p"].hi) for p in asymptomatic_pathogens}
+phi_a_CI = {
+    p: (priors[p].marginals["RR_a"].lo * priors[p].marginals["mu_s_inv"].mean / np.mean(sample_derived(priors[p])["mu_a_inv"]),
+        priors[p].marginals["RR_a"].hi * priors[p].marginals["mu_s_inv"].mean / np.mean(sample_derived(priors[p])["mu_a_inv"]))
+    for p in asymptomatic_pathogens
 }
-models_piecewise = {"SARS-CoV-2": simulate_SEIPAR_W_piecewise, "H1N1": simulate_SEIPAR_W_piecewise, "Ebola": simulate_SEIR_W_piecewise}
-spatial_models = {"SARS-CoV-2": simulate_SEIPAR_W_spatial, "H1N1": simulate_SEIPAR_W_spatial, "Ebola": simulate_SEIR_W_spatial}
+k_sc2 = 0.4
+EPSILON_S = 0.5
+
+parameters = {p: params_from_priors(priors[p]) for p in pathogens}
+sensitivity_ranges = {p: as_uniform(priors[p]) for p in pathogens}
+best_params_kwargs = {p: corner_kwargs(priors[p], "best") for p in pathogens}
+worst_params_kwargs = {p: corner_kwargs(priors[p], "worst") for p in pathogens}
 Rt_times = {"SARS-CoV-2": 50.0, "H1N1": 100.0, "Ebola": 100.0, "Omicron": 50.0, "Measles": 50.0, "Dengue": 50.0, "Rhino": 50.0}
 trajectory_end_times = {"SARS-CoV-2": 530, "H1N1": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
-
-best_params_kwargs = { # low R0, 1/sigma, 1/mu_a, p, phi_a, phi_p; high 1/gamma, 1/mu_s
-    "SARS-CoV-2": dict(R_0=2.40, gamma_inv=4.5, sigma_inv=1.0, mu_s_inv=10.0, mu_a_inv=9.7, p=0.23, phi_a=0.12, phi_p=1.16),
-    "H1N1": dict(R_0=1.30, gamma_inv=1.89, sigma_inv=1.0, mu_s_inv=4.69, mu_a_inv=3.39, p=0.32, phi_a=0.11, phi_p=0.07),
-    "Ebola": dict(R_0=1.74, gamma_inv=9.2, mu_s_inv=6.30, phi_a=0.0, phi_p=0.0),
-    "Omicron": dict(R_0=3.5, gamma_inv=4.60, sigma_inv=0.001, mu_s_inv=6.18, mu_a_inv=3.64, p=0.230, phi_a=0.13, phi_p=1.19),
-    "Measles": dict(R_0=12.0, gamma_inv=12.0, sigma_inv=2.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0, phi_p=1.0),
-    "Dengue": dict(R_0=2.0, gamma_inv=8.0, sigma_inv=1.0, mu_s_inv=5.0, mu_a_inv=4.0, p=0.4, phi_a=0.1, phi_p=0.0),
-    "Rhino": dict(R_0=2.3, gamma_inv=1.0, sigma_inv=0.5, mu_s_inv=14.0, mu_a_inv=8.0, p=0.1, phi_a=0.1, phi_p=0.0),
-}
-worst_params_kwargs = { # low 1/gamma, 1/mu_s; high R0, 1/sigma, 1/mu_a, p, phi_a, phi_p
-    "SARS-CoV-2": dict(R_0=2.98, gamma_inv=1.5, sigma_inv=4.0, mu_s_inv=7.80, mu_a_inv=13.5, p=0.399, phi_a=0.53, phi_p=11.97),
-    "H1N1": dict(R_0=1.70, gamma_inv=1.41, sigma_inv=4.0, mu_s_inv=2.06, mu_a_inv=7.37, p=0.4, phi_a=1.54, phi_p=0.48),
-    "Ebola": dict(R_0=2.15, gamma_inv=7.70, mu_s_inv=3.70, phi_a=0.0, phi_p=0.0),
-    "Omicron": dict(R_0=11.4, gamma_inv=2.51, sigma_inv=1.87, mu_s_inv=3.06, mu_a_inv=7.74, p=0.399, phi_a=0.64, phi_p=76.0),
-    "Measles": dict(R_0=18.0, gamma_inv=9.0, sigma_inv=4.0, mu_s_inv=4.0, mu_a_inv=4.0, p=0.0, phi_a=0.0, phi_p=2.0),
-    "Dengue": dict(R_0=10.0, gamma_inv=3.0, sigma_inv=2.0, mu_s_inv=4.0, mu_a_inv=7.0, p=0.8, phi_a=1.0, phi_p=0.0),
-    "Rhino": dict(R_0=3.0, gamma_inv=0.5, sigma_inv=1.0, mu_s_inv=8.0, mu_a_inv=14.0, p=0.35, phi_a=0.1, phi_p=0.0),
-}
-pathogens_full_landscape = list(best_params_kwargs.keys())
-colors = {
-    "SARS-CoV-2": "tab:blue", "H1N1": "tab:orange", "Ebola": "tab:green",
-    "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow",
-}
-p_CI = {"SARS-CoV-2": (0.23, 0.399), "H1N1": (0.32, 0.40)}
-phi_a_CI = {"SARS-CoV-2": (0.12, 0.53), "H1N1": (0.11, 1.54)}
-k_sc2 = 0.4
+colors = {"SARS-CoV-2": "tab:blue", "H1N1": "tab:orange", "Ebola": "tab:green",
+    "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow"}
+models = {"SARS-CoV-2": simulate_SEIPAR_W, "H1N1": simulate_SEIPAR_W, "Ebola": simulate_SEIR_W, 
+    "Omicron": simulate_SEIPAR_W, "Measles": simulate_SEIPAR_W, "Dengue": simulate_SEIPAR_W, "Rhino": simulate_SEIPAR_W}
+models_piecewise = {"SARS-CoV-2": simulate_SEIPAR_W_piecewise, "H1N1": simulate_SEIPAR_W_piecewise, "Ebola": simulate_SEIR_W_piecewise}
+spatial_models = {"SARS-CoV-2": simulate_SEIPAR_W_spatial, "H1N1": simulate_SEIPAR_W_spatial, "Ebola": simulate_SEIR_W_spatial}
 
 prcc_scenarios = ['start', 'threshold']
 prcc_outcomes  = ['Rt', 'Itot']
 prcc_scenario_titles = {'start': r'$I_{\text{crit}}=0$', 'threshold': r'$I_{\text{crit}}=10^{-4}$'}
 prcc_outcome_titles = {'Rt': r'$\mathcal{R}_t$', 'Itot': r'$I_\text{tot}$'}
-
 PARAM_LABELS: dict[str, str] = {
     "R_0": r"$\mathcal{R}_0$", "phi_a": r"$\varphi_a$", "phi_p": r"$\varphi_p$", "p": r"$p$", 
     "gamma_inv": r"$1/\gamma$", "sigma_inv": r"$1/\sigma$", "mu_a_inv": r"$1/\mu_a$", "mu_s_inv": r"$1/\mu_s$", 
@@ -113,10 +144,8 @@ outdir = "results"
 R_OFF = 0.8
 EVAL_INTERVAL = 14.0
 T_LEAD = 7.0
-STRATEGIES = {
-    "baseline": (False, False, 0.0, 1.0), "lead": (False, False, T_LEAD, 1.0),
-    "interval": (False, True, 0.0, 1.0), "asymmetric": (True, False, 0.0, 0.1),
-}
+STRATEGIES = {"baseline": (False, False, 0.0, 1.0), "lead": (False, False, T_LEAD, 1.0),
+    "interval": (False, True, 0.0, 1.0), "asymmetric": (True, False, 0.0, 0.1)}
 METRIC_NAMES = ["$\\mathcal{R}_t$", "total number of infections", "symptomatic peak", "steady-state $\\mathcal{R}_t$ amplitude", "time above $\\mathcal{R}_{crit}$", "total contact reduction cost"]
 METRIC_BOUNDS = [(0.0, 3.0), (0.0, 1.25), (0.0, 300.0), (0.0, 175.0), (0.0, 0.0005), (0.0, 0.000025)]
 INTERVENTION_SCENARIOS = {
@@ -137,28 +166,6 @@ rule baseline_trajectories:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         peak_Is, time_to_peak, total_time = plot_trajectory(model = models[wildcards.pathogen], params = parameters[wildcards.pathogen].update(I_crit=1e-4), path = output.plot, title = f"{wildcards.pathogen}", image_resolution = image_resolution, plot_total_I = True, t1 = 500.0)
 
-rule calculate_generation_times:
-    output:
-        txt="{outdir}/compartmental/generation_times.txt"
-    run:
-        os.makedirs(os.path.dirname(output.txt), exist_ok=True)
-        with open(output.txt, 'w') as f:
-            for pathogen in pathogens:
-                f.write(f"{pathogen}: {calculate_generation_time(parameters[pathogen])}\n")
-
-rule calculate_growth_rates:
-    output:
-        txt="{outdir}/compartmental/growth_rates.txt"
-    run:
-        os.makedirs(os.path.dirname(output.txt), exist_ok=True)
-        with open(output.txt, 'w') as f:
-            for pathogen in pathogens:
-                ps = parameters[pathogen]
-                f.write(f"{pathogen}: {(ps.R_0-1)/calculate_generation_time(ps)}\n")
-
-###############################################
-# RESPONSE FUNCTION
-###############################################
 
 rule plot_response_function:
     output:
@@ -450,109 +457,31 @@ rule plot_controllability_boundaries:
         fig.savefig(output.plot, dpi=image_resolution, bbox_inches='tight'); plt.close(fig)
 
 
-_fixed_zero_bounds = {"point": 0.0, "low": 0.0, "high": 0.0, "type": "fixed"}
-empirical_bounds = {
-    "SARS-CoV-2": {
-        "R_0": {"point": 2.69, "low": 2.40, "high": 2.98, "type": "CI"},
-        "gamma_inv": {"point": 3.0, "low": 1.5, "high": 4.5, "type": "range"},
-        "sigma_inv": {"point": 2.5, "low": 1.0, "high": 4.0, "type": "range"},
-        "mu_s_inv": {"point": 9.3, "low": 7.8, "high": 10.0, "type": "CI"},
-        "mu_a_inv": {"point": 11.6, "low": 9.7, "high": 13.5, "type": "CI"},
-        "p": {"point": 0.351, "low": 0.230, "high": 0.399, "type": "CI"},
-        "phi_a": {"point": 0.26, "low": 0.12, "high": 0.53, "type": "lognormal"},
-        "phi_p": {"point": 3.72, "low": 1.16, "high": 11.97, "type": "lognormal"},
-    },
-    "H1N1": {
-        "R_0": {"point": 1.46, "low": 1.30, "high": 1.70, "type": "IQR"},
-        "gamma_inv": {"point": 1.65, "low": 1.41, "high": 1.89, "type": "CI"},
-        "sigma_inv": {"point": 2.0, "low": 1.0, "high": 4.0, "type": "range"},
-        "mu_s_inv": {"point": 3.38, "low": 2.06, "high": 4.69, "type": "CI"},
-        "mu_a_inv": {"point": 5.38, "low": 3.39, "high": 7.37, "type": "CI"},
-        "p": {"point": 0.36, "low": 0.32, "high": 0.40, "type": "CI"},
-        "phi_a": {"point": 0.57, "low": 0.11, "high": 1.54, "type": "lognormal"},
-        "phi_p": {"point": 0.18, "low": 0.07, "high": 0.48, "type": "lognormal"},
-    },
-    "Ebola": {
-        "R_0": {"point": 1.95, "low": 1.74, "high": 2.15, "type": "CI"},
-        "gamma_inv": {"point": 8.5, "low": 7.7, "high": 9.2, "type": "CI"},
-        "mu_s_inv": {"point": 5.0, "low": 3.7, "high": 6.3, "type": "CI"},
-        "sigma_inv": _fixed_zero_bounds, "mu_a_inv": _fixed_zero_bounds,
-        "p": _fixed_zero_bounds, "phi_a": _fixed_zero_bounds, "phi_p": _fixed_zero_bounds,
-    }
-}
-
-def _lhs_map(lhs_samples: np.ndarray, pathogen_bounds: dict) -> np.ndarray:
-    mapped_samples = np.zeros_like(lhs_samples)
-    for i, (_, bounds) in enumerate(pathogen_bounds.items()):
-        p_type = bounds["type"]
-        point = bounds["point"]
-        low = bounds["low"]
-        high = bounds["high"]
-        if p_type == "fixed" or low == high:
-            mapped_samples[:, i] = point
-            continue
-        elif p_type == "CI":
-            sd = (high - low) / 3.92
-            mapped_samples[:, i] = norm(loc=point, scale=sd).ppf(lhs_samples[:, i])
-        elif p_type == "lognormal":
-            log_sd = (np.log(high) - np.log(low)) / 3.92
-            mapped_samples[:, i] = lognorm(s=log_sd, scale=point).ppf(lhs_samples[:, i])
-        elif p_type == "IQR":
-            sd = (high - low) / 1.349
-            mapped_samples[:, i] = truncnorm((max(0, point - 4*sd) - point) / sd, (point + 4*sd - point) / sd, loc=point, scale=sd).ppf(lhs_samples[:, i])
-        elif p_type == "range":
-            scale = high - low
-            mapped_samples[:, i] = triang(c=(point - low) / scale, loc=low, scale=scale).ppf(lhs_samples[:, i])
-        else:
-            raise ValueError
-    return mapped_samples
-
-def _transmission_decomposition(ps: Params) -> dict[str, float]:
-    R = R0_decomposition(ps)
-    t = transmission_fractions(ps)
-    f = infectious_fractions(ps)
-    decomposition = {"growth_rate": growth_rate(ps)}
-    for k in ("a", "p", "s"):
-        decomposition[f"R_{k}"] = R[k]
-        decomposition[f"trans_{k}"] = t[k]
-        decomposition[f"inf_{k}"] = f[k]
-    return decomposition
-
-rule transmission_decomposition:
+rule derived_epi_characteristics:
     output:
-        csv="{outdir}/compartmental/transmission_decomposition.csv",
+        csv="{outdir}/compartmental/derived_epi_characteristics.csv",
     run:
         os.makedirs(os.path.dirname(output.csv), exist_ok=True)
         n_samples=5000
         ci=(2.5, 97.5)
         seed=0
-        
-        # MC over empirical bounds
         rows = []
         for pathogen in pathogens:
-            ps = parameters[pathogen]    
-            bounds = empirical_bounds[pathogen]
-            names = list(bounds)
-            X = qmc.LatinHypercube(d=len(names), seed=seed).random(n=n_samples)
-            samples = [_transmission_decomposition(ps.update(**dict(zip(names, row)))) for row in _lhs_map(X, bounds)]
-            decomposition = _transmission_decomposition(ps)
-            def _summarise(key, scale):
-                point_val = decomposition[key] * scale
-                draws = np.array([s[key] for s in samples]) * scale
-                lo_ci, hi_ci = np.percentile(draws, ci)
-                return point_val, float(draws.mean()), float(lo_ci), float(hi_ci)
-            pv, mn, l, h = _summarise("growth_rate", 1.0)
-            rows.append((pathogen, "growth_rate", "-", pv, mn, l, h))
-            for qname, (prefix, scale) in {"R": ("R_", 1.0), "transmission_pct":("trans_", 100.0), "infectious_pct": ("inf_", 100.0)}.items():
-                for t in ["a", "p", "s"]:
-                    pv, mn, l, h = _summarise(f"{prefix}{t}", scale)
-                    rows.append((pathogen, qname, t, pv, mn, l, h))
+            base = parameters[pathogen]
+            fields = get_model_prior_list(priors[pathogen])
+            s = sample_derived(priors[pathogen], n=n_samples, seed=seed)
+            point = get_epi_characteristics_dict(base)
+            draws = [get_epi_characteristics_dict(base.update(**{field: float(s[field][i]) for field in fields})) for i in range(n_samples)]
+            for p in point:
+                arr = np.array([d[p] for d in draws])
+                lo_ci, hi_ci = np.percentile(arr, ci)
+                rows.append((pathogen, p, point[p], float(np.median(arr)), float(lo_ci), float(hi_ci)))
 
         with open(output.csv, "w") as f:
-            f.write("pathogen,quantity,type,point,mean,ci_lo,ci_hi\n")
-            for pathogen, q, t, pv, mn, l, h in rows: f.write(f"{pathogen},{q},{t},{pv},{mn},{l},{h}\n")
+            f.write("pathogen,quantity,point,median,ci_lo,ci_hi\n")
+            for pathogen, quantity, pt, med, lo_ci, hi_ci in rows:
+                f.write(f"{pathogen},{quantity},{pt},{med},{lo_ci},{hi_ci}\n")
 
-### characteristics table ###
 rule baseline_intervention_table:
     output:
         tex="{outdir}/compartmental/baseline_intervention_table.tex",
@@ -631,10 +560,8 @@ rule plot_asymptomatic_landscape:
 
         # asymptomatic landscape
         for pathogen in pathogens_full_landscape:
-            ps = Params.for_SEIPAR()
-            best_params = ps.update(**best_params_kwargs[pathogen])
-            worst_params = ps.update(**worst_params_kwargs[pathogen])
-            R0_s, theta_s = sample_asymptomatic_landscape(best_params=best_params, worst_params=worst_params, n_samples=10000)
+            s = sample_derived(priors[pathogen], n=10000, seed=0)
+            R0_s, theta_s = s["R_0"], epi_quantities(s)["theta"]
             ax.scatter(theta_s, R0_s, s=4, alpha=0.1, color=colors[pathogen], edgecolors='none')
 
         # controllability boundaries
@@ -668,21 +595,12 @@ rule compute_prcc:
         npz="{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz"
     run:
         os.makedirs(os.path.dirname(output.npz), exist_ok=True)
-        p = wildcards.pathogen
         t1 = 1000.0
-        best = best_params_kwargs[p]
-        worst = worst_params_kwargs[p]
-        specific_bounds = {}
-        for k in best.keys():
-            l_val = min(best[k], worst[k])
-            u_val = max(best[k], worst[k])
-            if l_val == u_val: u_val += 1e-5
-            specific_bounds[k] = (l_val, u_val)
         around_mean = wildcards.bounds=="symmetric"
         results = run_sensitivity_analysis(
             model=models[wildcards.pathogen], scenario=wildcards.scenario, outcome=wildcards.outcome,
-            base_params=parameters[wildcards.pathogen].update(epsilon_s=0.4, epsilon_w=0.8),
-            manual_bounds=None if around_mean else specific_bounds,
+            base_params=parameters[wildcards.pathogen].update(epsilon_s=0.8, epsilon_w=0.8),
+            priors=None if around_mean else sensitivity_ranges[wildcards.pathogen],
             t1=t1, E0=E0, n_lhs=5000, n_bootstrap=100, n_sobol_base=1024, avg_frac=0.1, around_mean=around_mean,
         )
         np.savez_compressed(output.npz, param_names=np.array(results.param_names), lower_bounds=np.array([results.bounds[k][0] for k in results.param_names]), upper_bounds=np.array([results.bounds[k][1] for k in results.param_names]), samples=results.samples, outputs=results.outputs, prcc_mean=results.prcc_mean, prcc_lower=results.prcc_lower, prcc_upper=results.prcc_upper, prcc_samples=results.prcc_samples, sobol_S1=results.sobol_S1, sobol_S1_conf=results.sobol_S1_conf, sobol_ST=results.sobol_ST, sobol_ST_conf=results.sobol_ST_conf)
@@ -884,7 +802,7 @@ rule plot_true_vs_reported_Rt_scenarios:
         k = 10.0
         t1 = 300.0
 
-        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
+        epsilon_s = EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0
         base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
         model = models[wildcards.pathogen]
 
@@ -951,7 +869,7 @@ rule plot_true_vs_reported_Rt_heatmaps:
         taus_W = jnp.linspace(1.0, 31.0, num=100)
         taus_B = jnp.linspace(1.0, 31.0, num=100)
         k = float(wildcards.k)
-        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
+        epsilon_s = EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0
         base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
 
         Rt_final, time_to_below, Itot, peak_Is, amplitudes, time_above, crossings = compute_delay_metrics_grid(model=models[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
@@ -1063,7 +981,7 @@ rule plot_period_and_damping_scatter:
         eps_w = 0.8
         k = float(wildcards.k)
         t1 = 300.0
-        epsilon_s = 0.5 if wildcards.pathogen == "SARS-CoV-2" else 0.0
+        epsilon_s = EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0
         base_params = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=eps_w, k=k)
         model = models[wildcards.pathogen]
         n_W = base_params.n_W
@@ -1805,7 +1723,6 @@ rule plot_true_vs_reported_Rt_scenarios_piecewise:
         t1 = 300.0
         tau_W = 14.0
         tau_B = 7.0
-        epsilon_s = 0.5
         eps_w_values = [0.0, 0.4, 0.8, 1.0]
 
         asymmetric = wildcards.scenario=="asymmetric"
@@ -1819,7 +1736,7 @@ rule plot_true_vs_reported_Rt_scenarios_piecewise:
         fig, axs = plt.subplots(nrows=1, ncols=len(eps_w_values), figsize=(16,4), sharex=True, sharey=True)
 
         for j, eps_w in enumerate(eps_w_values):
-            ps = parameters[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=eps_w, k=k, R_off=0.8, eval_interval=28.0, T_lead=T_lead)
+            ps = parameters[wildcards.pathogen].update(epsilon_s=EPSILON_S, epsilon_w=eps_w, k=k, R_off=0.8, eval_interval=28.0, T_lead=T_lead)
             tt, yy, mm = model(params=ps, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval)
             rt_true = ps.R_0 * ps.rho * yy[:, -1] * yy[:, 0]
             rt_reported = yy[:, -(ps.n_B + 1)]
@@ -1835,7 +1752,7 @@ rule plot_true_vs_reported_Rt_scenarios_piecewise:
             ax.plot(tt, rt_reported, color='red')
             ax.axhline(ps.R_crit, color='grey', linestyle='--')
             ax.text(0.97, 0.95, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
-        fig.suptitle(f'{wildcards.pathogen}: $k={k:g}$, {wildcards.scenario} ($\\tau_W={ps.tau_W:g}$, $\\tau_B={ps.tau_B:g}$, $\\varepsilon_s={epsilon_s:g}$)', fontsize=15, y=1.03,)
+        fig.suptitle(f'{wildcards.pathogen}: $k={k:g}$, {wildcards.scenario} ($\\tau_W={ps.tau_W:g}$, $\\tau_B={ps.tau_B:g}$, $\\varepsilon_s={EPSILON_S:g}$)', fontsize=15, y=1.03,)
         fig.legend(
             [Line2D([0], [0], color='black', lw=2), Line2D([0], [0], color='red', lw=2)],
             ['True $R_t$', 'Reported $R_t$'],
@@ -2095,7 +2012,7 @@ rule all:
         expand(rules.plot_infectiousness_distributions.output, outdir=outdir),
         expand(rules.plot_oscillations.output, outdir=outdir),
         expand(rules.alternative_warning_strategies_table.output, outdir=outdir, pathogen=pathogens),
-        expand(rules.transmission_decomposition.output, outdir=outdir),
+        expand(rules.derived_epi_characteristics.output, outdir=outdir),
         expand(rules.baseline_intervention_table.output, outdir=outdir),
         expand(rules.plot_Rt_divergence_heatmap.output, outdir=outdir, pathogen=pathogens),
         expand(rules.plot_Rt_spatial.output, outdir=outdir),
@@ -2153,8 +2070,6 @@ rule all:
         expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=outdir, pathogen=asymptomatic_pathogens),
         expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=outdir),
         expand(rules.plot_asymptomatic_landscape.output.plot, outdir=outdir),
-        expand(rules.calculate_generation_times.output.txt, outdir=outdir),
-        expand(rules.calculate_growth_rates.output.txt, outdir=outdir),
         expand(rules.plot_gain_margins.output.plot, outdir=outdir),
         expand(rules.plot_delay_margins.output.plot, outdir=outdir),
         expand(rules.plot_period_and_damping_scatter.output, outdir=outdir, pathogen=pathogens, k=[10, 30]),

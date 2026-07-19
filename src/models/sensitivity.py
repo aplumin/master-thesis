@@ -14,6 +14,7 @@ from SALib.analyze.sobol import analyze
 from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
 from models.metrics import outcome_metrics
+from models.uncertainty import Priors, sample_derived
 
 
 class SensitivityResults(NamedTuple):
@@ -30,40 +31,31 @@ class SensitivityResults(NamedTuple):
     sobol_ST: np.ndarray      # (d,)
     sobol_ST_conf: np.ndarray # (d,)
 
-_PATHOGEN_BOUNDS: dict[str, tuple[float, float]] = {
-    "R_0":       (1.0, 5.0),
-    "gamma_inv": (0.1, 10.0),
-    "mu_s_inv":  (0.1, 10.0),
-}
-_PRESYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
-    "sigma_inv": (0.1, 10.0),
-    "phi_p":     (0.1, 10.0),
-}
-_ASYMPTOMATIC_BOUNDS: dict[str, tuple[float, float]] = {
-    "mu_a_inv": (0.1, 10.0),
-    "p":        (0.0, 1.0),
-    "phi_a":    (0.0, 1.0),
-}
-_INTERVENTION_BOUNDS: dict[str, tuple[float, float]] = {
-    "epsilon_s": (0.0, 1.0),
-    "epsilon_w": (0.0, 1.0),
-    "tau_W":     (1.0, 30.0),
-    "tau_B":     (1.0, 30.0),
-    "log_k":     (0.0, 3.0),
-    "R_crit":    (0.8, 1.5),
-}
-_THRESHOLD_BOUNDS: dict[str, tuple[float, float]] = {
-    "log_k_I":    (1.0, 4.0),
-    "log_I_crit": (-4.0, -2.0),
-}
+_INTERVENTION_BOUNDS = {"epsilon_s": (0.0, 1.0), "epsilon_w": (0.0, 1.0), "tau_W": (1.0, 30.0), "tau_B": (1.0, 30.0), "log_k": (0.0, 3.0), "R_crit": (0.8, 1.5)}
+_THRESHOLD_BOUNDS = {"log_k_I": (1.0, 4.0), "log_I_crit": (-4.0, -2.0)}
 
-def _parameter_bounds(model: Callable, scenario: str = "start") -> dict[str, tuple[float, float]]:
-    """Return parameter bound dictionary for sensitivity analysis."""
-    MODEL_NAMES: dict[Callable, str] = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W",}
-    name = MODEL_NAMES[model]
-    bounds: dict[str, tuple[float, float]] = dict(_PATHOGEN_BOUNDS)
-    if name == "SEIPAR_W": bounds |= _PRESYMPTOMATIC_BOUNDS
-    if name in ("SEIPAR_W", "SEIAR_W"): bounds |= _ASYMPTOMATIC_BOUNDS
+def _parameter_bounds_from_priors(
+    model: Callable,
+    priors: Priors,
+    scenario: str = "start",
+    quantiles: tuple[float, float] = (0.025, 0.975),
+    n: int = 20000,
+    seed: int = 0,
+) -> dict[str, tuple[float, float]]:
+    """Return parameter bound dictionary from Priors for sensitivity analysis."""
+    name = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W"}[model]
+    sample = sample_derived(priors, n=n, seed=seed)
+    
+    def _marginal(key):
+        return (float(priors.marginals[key].lo), float(priors.marginals[key].hi))
+    
+    def _derived(key):
+        lo, hi = np.quantile(sample[key], quantiles)
+        return (float(lo), float(hi))
+
+    bounds: dict[str, tuple[float, float]] = {"R_0": _marginal("R_0"), "gamma_inv": _marginal("gamma_inv"), "mu_s_inv": _marginal("mu_s_inv")}
+    if name == "SEIPAR_W": bounds |= {"sigma_inv": _marginal("sigma_inv"), "phi_p": _derived("phi_p")}
+    if name in ("SEIPAR_W", "SEIAR_W"): bounds |= {"mu_a_inv": _derived("mu_a_inv"), "p": _marginal("p"), "phi_a": _derived("phi_a")}
     bounds |= _INTERVENTION_BOUNDS
     if scenario == "threshold": bounds |= _THRESHOLD_BOUNDS
     elif scenario != "start": raise ValueError(f"unknown scenario: {scenario!r}; expected 'start' or 'threshold'")
@@ -203,11 +195,12 @@ def run_sensitivity_analysis(
     do_sobol: bool = True,
     manual_bounds: dict[str, tuple[float, float]] | None = None,
     around_mean: bool = False,
+    priors: Priors | None = None,
 ) -> SensitivityResults:
     if around_mean:
         bounds = _parameter_bounds_around_mean(model, scenario=scenario, mean_params=base_params)
     else:
-        bounds = _parameter_bounds(model, scenario=scenario)
+        bounds = _parameter_bounds_from_priors(model, priors, scenario=scenario, seed=seed)
     if manual_bounds is not None:
         for k, v in manual_bounds.items():
             if k in bounds: 

@@ -265,11 +265,6 @@ def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
     except ValueError: pass
     return ext_prob
 
-def calculate_generation_time(ps: Params):
-    nom = ps.p * ps.phi_a * ps.mu_a_inv**2 +(1-ps.p)*(ps.phi_p * ps.sigma_inv**2 + ps.mu_s_inv**2 + ps.sigma_inv*ps.mu_s_inv)
-    denom = ps.p * ps.phi_a * ps.mu_a_inv + (1-ps.p)*(ps.phi_p * ps.sigma_inv + ps.mu_s_inv)
-    return ps.gamma_inv + nom / denom
-
 def strategy_metrics(tau_W, tau_B, n_W, n_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
     params = base_params.update(tau_W=tau_W, tau_B=tau_B)
     ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
@@ -315,31 +310,6 @@ def strategy_grid(
         grid = strategy_metric_grid(model, bp, taus_W, taus_B, t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, n_W=int(bp.n_W), n_B=int(bp.n_B), T_lead_on=(tl > 0.0))
         data[s] = np.asarray(grid)
     return data, list(np.asarray(taus_W)), list(np.asarray(taus_B))
-
-def sample_asymptomatic_landscape(best_params, worst_params, n_samples, seed=0):
-    rng = np.random.default_rng(seed)
-    def _bounds(name):
-        a = getattr(best_params, name)
-        b = getattr(worst_params, name)
-        return (min(a, b), max(a, b))
-    
-    def _sample(name):
-        lo, hi = _bounds(name)
-        if lo == hi: return np.full(n_samples, lo)
-        return rng.normal((lo+hi)/2, (hi-lo)/(2*1.96), size=n_samples)
-
-    def _sample_log(name):
-        lo, hi = np.log(_bounds(name))
-        if lo == hi: 
-            return np.full(n_samples, np.exp(lo))
-        return np.exp(rng.normal((lo+hi)/2, (hi-lo)/(2*1.96), size=n_samples))
-    
-    p = _sample('p')
-    R_a = p * _sample_log('phi_a') * _sample('mu_a_inv')
-    R_p = (1.0 - p) * _sample_log('phi_p') * _sample('sigma_inv')
-    R_s = (1.0 - p) * _sample('mu_s_inv')
-    theta = (R_a + R_p) / (R_a + R_p + R_s)
-    return np.asarray(_sample('R_0')), np.asarray(theta)
 
 def R_boundary(theta, eps_s, eps_w):
     return 1.0 / ((1.0 - eps_w / 2.0) * (1.0 - eps_s * (1.0 - theta)))
