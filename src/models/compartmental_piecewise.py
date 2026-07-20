@@ -1,5 +1,5 @@
 """
-Piecewise SEIPAR model for alternative warning systems with hysteresis.
+Piecewise compartmental models for alternative warning systems with hysteresis.
 """
 
 import jax
@@ -8,6 +8,7 @@ from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, PIDController
 from functools import partial
 
 from models.parameters import Params
+from models.compartmental import chain_derivative, RTOL, ATOL, MAX_STEPS
 
 
 def _published_response(W, dW, prevalence, params, m, floored):
@@ -21,6 +22,55 @@ def _published_response(W, dW, prevalence, params, m, floored):
         1.0,
     )
     return 1.0 - params.epsilon_w * gate_W * gate_I
+
+
+def _SEIPAR(y, params, B_out):
+    S, E, Ia, Ip, Is, R = y[:6]
+    lambda_S = B_out * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * S
+    become_infectious = E / params.gamma_inv
+    become_symptomatic = Ip / params.sigma_inv
+    recover_asyx = Ia / params.mu_a_inv
+    recover_syx = Is / params.mu_s_inv
+    dFlow = jnp.stack([
+        -lambda_S,
+        lambda_S - become_infectious,
+        params.p * become_infectious - recover_asyx,
+        (1.0 - params.p) * become_infectious - become_symptomatic,
+        become_symptomatic - recover_syx,
+        recover_asyx + recover_syx,
+    ])
+    return dFlow, S, Is
+
+def _SEIAR(y, params, B_out):
+    S, E, Ia, Is, R = y[:5]
+    lambda_S = B_out * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * S
+    become_infectious = E / params.gamma_inv
+    recover_asyx = Ia / params.mu_a_inv
+    recover_syx = Is / params.mu_s_inv
+    dFlow = jnp.stack([
+        -lambda_S,
+        lambda_S - become_infectious,
+        params.p * become_infectious - recover_asyx,
+        (1.0 - params.p) * become_infectious - recover_syx,
+        recover_asyx + recover_syx,
+    ])
+    return dFlow, S, Is
+
+def _SEIR(y, params, B_out):
+    S, E, II, R = y[:4]
+    lambda_S = B_out * params.beta * (1.0 - params.epsilon_s) * II * S
+    become_infectious = E / params.gamma_inv
+    recover = II / params.mu_s_inv
+    dFlow = jnp.stack([
+        -lambda_S,
+        lambda_S - become_infectious,
+        become_infectious - recover,
+        recover,
+    ])
+    return dFlow, S, II
+
+_MODELS = {"SEIPAR": (_SEIPAR, 6), "SEIAR": (_SEIAR, 5), "SEIR": (_SEIR, 4)}
+
 
 def _solve_piecewise(
     diffeq, # (t, y, (params, m, floored))
@@ -38,9 +88,8 @@ def _solve_piecewise(
             terms=ODETerm(diffeq),
             solver=Tsit5(),
             t0=t0, t1=t_end, dt0=dt0, y0=y_start,
-            args=(params, m, floored),
-            saveat=SaveAt(ts=ts_save),
-            stepsize_controller=PIDController(rtol=1e-7, atol=1e-9), max_steps=50_000,
+            args=(params, m, floored), saveat=SaveAt(ts=ts_save),
+            stepsize_controller=PIDController(rtol=RTOL, atol=ATOL), max_steps=MAX_STEPS,
         )
         ys_seg = sol.ys
         y_end = ys_seg[-1]
@@ -49,7 +98,7 @@ def _solve_piecewise(
 
         # next warning state
         if asymmetric: # R_off if warning is on, R_crit if it is off
-            m_next = jnp.where(m > 0.5, R_est >= R_off, R_est > R_crit).astype(jnp.float32)
+            m_next = jnp.where(m > 0.5, R_est >= R_off, R_est > R_crit).astype(jnp.float64)
         else:
             m_next = m
 
@@ -57,7 +106,7 @@ def _solve_piecewise(
         if discrete_eval:
             t2 = t + check_interval
             reevaluate = t2 >= eval_interval - 1e-9
-            floored_next = jnp.where(reevaluate, (R_est > R_crit).astype(jnp.float32), floored)
+            floored_next = jnp.where(reevaluate, (R_est > R_crit).astype(jnp.float64), floored)
             t_next = jnp.where(reevaluate, 0.0, t2)
         else:
             floored_next = floored
@@ -66,141 +115,58 @@ def _solve_piecewise(
         warning_state = jnp.full((save_per_seg,), jnp.maximum(m, floored))
         return (y_end, m_next, floored_next, t_next), (sol.ts, ys_seg, warning_state)
 
-    init = (y0, jnp.asarray(0.0, jnp.float32), jnp.asarray(0.0, jnp.float32), jnp.asarray(0.0, jnp.float32))
+    zero = jnp.asarray(0.0, jnp.float64)
+    init = (y0, zero, zero, zero)
     _, (ts_c, ys_c, ms_c) = jax.lax.scan(init=init, xs=jnp.arange(n_segments), f=_step)
-    ts = jnp.concatenate([jnp.array([0.0]), ts_c.reshape(-1)])
+    ts = jnp.concatenate([jnp.zeros(1), ts_c.reshape(-1)])
     ys = jnp.concatenate([y0[None, :], ys_c.reshape(-1, y0.shape[0])], axis=0)
-    ms = jnp.concatenate([jnp.array([0.0], jnp.float32), ms_c.reshape(-1)])
+    ms = jnp.concatenate([jnp.zeros(1, jnp.float64), ms_c.reshape(-1)])
     return ts, ys, ms
 
 
-@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'asymmetric', 'discrete_eval', 'check_interval', 'save_per_seg'])
-def simulate_SEIPAR_W_piecewise(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, 
-        asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1
-    ):
-    def _SEIPAR_W(t, y, args):
+def _simulate_piecewise(model_name, params, t1, E0, asymmetric, discrete_eval, check_interval, save_per_seg):
+    flow_fn, n_flow = _MODELS[model_name]
+    n_W, n_B = params.n_W, params.n_B
+
+    def _rhs(t, y, args):
         params, m, floored = args
-        S, E, Ia, Ip, Is, R = y[:6]
-        W = y[6:6+n_W]
-        B = y[6+n_W:]
+        W = y[n_flow:n_flow + n_W]
+        B = y[n_flow + n_W:]
         B_out = B[-1]
 
-        lambda_S = B_out * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * S
-        become_infectious = E / params.gamma_inv
-        become_symptomatic = Ip / params.sigma_inv
-        recover_asyx = Ia / params.mu_a_inv
-        recover_syx = Is / params.mu_s_inv
+        dFlow, S, prevalence = flow_fn(y, params, B_out)
 
-        dS = -lambda_S
-        dE = lambda_S - become_infectious
-        dIa = params.p * become_infectious - recover_asyx
-        dIp = (1.0 - params.p) * become_infectious - become_symptomatic
-        dIs = become_symptomatic - recover_syx
-        dR = recover_asyx + recover_syx
-        dFlow = jnp.array([dS, dE, dIa, dIp, dIs, dR])
-
-        reporting_delay_rate = n_W / params.tau_W
         Rt = params.R_0 * params.rho * B_out * S
-        W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
-        dW = reporting_delay_rate * (W_in - W)
-
-        behavioural_delay_rate = n_B / params.tau_B
-        response = _published_response(W, dW, Is, params, m, floored)
-        B_in = jnp.concatenate([jnp.array([response]), B[:-1]])
-        dB = behavioural_delay_rate * (B_in - B)
+        dW = chain_derivative(W, Rt, n_W / params.tau_W)
+        response = _published_response(W, dW, prevalence, params, m, floored)
+        dB = chain_derivative(B, response, n_B / params.tau_B)
 
         return jnp.concatenate([dFlow, dW, dB])
 
+    y0 = jnp.concatenate([
+        jnp.stack([1.0 - E0, E0]), jnp.zeros(n_flow - 2),
+        jnp.zeros(n_W), jnp.ones(n_B),
+    ])
     return _solve_piecewise(
-        _SEIPAR_W,
-        y0=jnp.concatenate([jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0, 0.0]), jnp.zeros(n_W), jnp.ones(n_B)]),
-        w_out_idx=6 + n_W - 1,
+        _rhs, y0=y0, w_out_idx=n_flow + n_W - 1,
         params=params, t1=t1, check_interval=check_interval,
         asymmetric=asymmetric, discrete_eval=discrete_eval, save_per_seg=save_per_seg,
     )
 
 
-@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'asymmetric', 'discrete_eval', 'check_interval', 'save_per_seg'])
-def simulate_SEIAR_W_piecewise(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, 
-        asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1
-    ):
-    def _SEIAR_W(t, y, args):
-        params, m, floored = args
-        S, E, Ia, Is, R = y[:5]
-        W = y[5:5+n_W]
-        B = y[5+n_W:]
-        B_out = B[-1]
+_PIECEWISE_STATIC = ['t1', 'asymmetric', 'discrete_eval', 'check_interval', 'save_per_seg']
 
-        lambda_S = B_out * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * S
-        become_infectious = E / params.gamma_inv
-        recover_asyx = Ia / params.mu_a_inv
-        recover_syx = Is / params.mu_s_inv
+@partial(jax.jit, static_argnames=_PIECEWISE_STATIC)
+def simulate_SEIPAR_W_piecewise(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6,
+        asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1):
+    return _simulate_piecewise("SEIPAR", params, t1, E0, asymmetric, discrete_eval, check_interval, save_per_seg)
 
-        dS = -lambda_S
-        dE = lambda_S - become_infectious
-        dIa = params.p * become_infectious - recover_asyx
-        dIs = (1.0 - params.p) * become_infectious - recover_syx
-        dR = recover_asyx + recover_syx
-        dFlow = jnp.array([dS, dE, dIa, dIs, dR])
+@partial(jax.jit, static_argnames=_PIECEWISE_STATIC)
+def simulate_SEIAR_W_piecewise(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0: float = 1e-6,
+        asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1):
+    return _simulate_piecewise("SEIAR", params, t1, E0, asymmetric, discrete_eval, check_interval, save_per_seg)
 
-        reporting_delay_rate = n_W / params.tau_W
-        Rt = params.R_0 * params.rho * B_out * S
-        W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
-        dW = reporting_delay_rate * (W_in - W)
-
-        behavioural_delay_rate = n_B / params.tau_B
-        response = _published_response(W, dW, Is, params, m, floored)
-        B_in = jnp.concatenate([jnp.array([response]), B[:-1]])
-        dB = behavioural_delay_rate * (B_in - B)
-
-        return jnp.concatenate([dFlow, dW, dB])
-
-    return _solve_piecewise(
-        _SEIAR_W,
-        y0=jnp.concatenate([jnp.array([1.0 - E0, E0, 0.0, 0.0, 0.0]), jnp.zeros(n_W), jnp.ones(n_B)]),
-        w_out_idx=5 + n_W - 1,
-        params=params, t1=t1, check_interval=check_interval,
-        asymmetric=asymmetric, discrete_eval=discrete_eval, save_per_seg=save_per_seg,
-    )
-
-
-@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'asymmetric', 'discrete_eval', 'check_interval', 'save_per_seg'])
-def simulate_SEIR_W_piecewise(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6, n_W: int = 3, n_B: int = 1, 
-        asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1
-    ):
-    def _SEIR_W(t, y, args):
-        params, m, floored = args
-        S, E, II, R = y[:4]
-        W = y[4:4+n_W]
-        B = y[4+n_W:]
-        B_out = B[-1]
-
-        lambda_S = B_out * params.beta * (1.0 - params.epsilon_s) * II * S
-        become_infectious = E / params.gamma_inv
-        recover = II / params.mu_s_inv
-
-        dS = -lambda_S
-        dE = lambda_S - become_infectious
-        dI = become_infectious - recover
-        dR = recover
-        dFlow = jnp.array([dS, dE, dI, dR])
-
-        reporting_delay_rate = n_W / params.tau_W
-        Rt = params.R_0 * params.rho * B_out * S
-        W_in = jnp.concatenate([jnp.array([Rt]), W[:-1]])
-        dW = reporting_delay_rate * (W_in - W)
-
-        behavioural_delay_rate = n_B / params.tau_B
-        response = _published_response(W, dW, II, params, m, floored)
-        B_in = jnp.concatenate([jnp.array([response]), B[:-1]])
-        dB = behavioural_delay_rate * (B_in - B)
-
-        return jnp.concatenate([dFlow, dW, dB])
-
-    return _solve_piecewise(
-        _SEIR_W,
-        y0=jnp.concatenate([jnp.array([1.0 - E0, E0, 0.0, 0.0]), jnp.zeros(n_W), jnp.ones(n_B)]),
-        w_out_idx=4 + n_W - 1,
-        params=params, t1=t1, check_interval=check_interval,
-        asymmetric=asymmetric, discrete_eval=discrete_eval, save_per_seg=save_per_seg,
-    )
+@partial(jax.jit, static_argnames=_PIECEWISE_STATIC)
+def simulate_SEIR_W_piecewise(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6,
+        asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1):
+    return _simulate_piecewise("SEIR", params, t1, E0, asymmetric, discrete_eval, check_interval, save_per_seg)

@@ -8,6 +8,7 @@ from math import comb
 from scipy.optimize import brentq
 from scipy.ndimage import gaussian_filter1d
 from functools import partial
+import models
 
 def arg_L(omega, tau_W, tau_B, n_W=3, n_B=1):
     return -n_W*np.arctan(omega*tau_W/n_W) - n_B*np.arctan(omega*tau_B/n_B)
@@ -27,7 +28,7 @@ def dominant_pole(tau_W, tau_B, eps_w, k, n_W=3, n_B=1):
     if complex_roots.size == 0: return np.nan
     return complex_roots[np.argmax(complex_roots.real)]
 
-@partial(jax.jit, static_argnames=['model', 't1'])
+@partial(jax.jit, static_argnames=['model'])
 def compute_rt_grid(model, base_params, taus_W, taus_B, t1=300.0):
     """True Rt in (tau_W, tau_B)."""
     def _rt(tau_W, tau_B):
@@ -83,19 +84,22 @@ def period_and_damping(t, x, t0=50.0, t1=250.0, smoothing_days=20.0, peak_thresh
                     return period, alpha
     return period, alpha
 
-def gain_margin(eps_w, tau_W, tau_B, n_W=3.0, n_B=1.0, k=10.0):
-    def _omega_PC(tau_W, tau_B):
-        return brentq(lambda w: np.pi + arg_L(omega=w,tau_W=tau_W,tau_B=tau_B,n_W=n_W,n_B=n_B), 1e-10, 1000.0)
-    omega_PC = _omega_PC(tau_W, tau_B)
+def _root(fn, lo=1e-10, hi=1000.0):
+    try: return brentq(fn, lo, hi)
+    except ValueError: return None
+
+def gain_margin(eps_w, tau_W, tau_B, n_W=3, n_B=1, k=10.0):
+    omega_PC = _root(lambda w: np.pi + arg_L(omega=w, tau_W=tau_W, tau_B=tau_B, n_W=n_W, n_B=n_B))
     if omega_PC is None: return np.inf
     return (2*(2-eps_w))/(eps_w*k) * (1+(omega_PC*tau_W/n_W)**2)**(n_W/2) * (1+(omega_PC*tau_B/n_B)**2)**(n_B/2)
 
-def delay_margin(eps_w, tau_W, tau_B, n_W=3.0, n_B=1.0, k=10.0):
+def delay_margin(eps_w, tau_W, tau_B, n_W=3, n_B=1, k=10.0):
     L0 = (eps_w*k)/(2*(2-eps_w))
-    def _omega_c(tau_W, tau_B):
-        def g(omega): return (L0**2 * (1 + (omega*tau_W/n_W)**2)**(-n_W) * (1 + (omega*tau_B/n_B)**2)**(-n_B) - 1)
-        if g(0) <= 0: return None
-        return brentq(g, 1e-10, 1000.0)
-    omega_c = _omega_c(tau_W, tau_B)
-    if omega_c is None: return np.inf
+    def g(omega):
+        return (L0**2 * (1 + (omega*tau_W/n_W)**2)**(-n_W) * (1 + (omega*tau_B/n_B)**2)**(-n_B) - 1)
+    if g(0) <= 0:
+        return np.inf
+    omega_c = _root(g)
+    if omega_c is None:
+        return np.inf
     return (np.pi - arg_L(omega=omega_c, tau_W=tau_W, tau_B=tau_B, n_W=n_W, n_B=n_B)) / omega_c

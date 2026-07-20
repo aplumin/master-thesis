@@ -1,7 +1,8 @@
 """
 Model descriptions
 """
-import jax; jax.config.update("jax_enable_x64", True)
+import jax
+jax.config.update("jax_enable_x64", True)
 
 from .parameters import Params, logistic_response_function
 from .compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W

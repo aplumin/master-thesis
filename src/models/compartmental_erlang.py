@@ -4,20 +4,22 @@ SEIPAR model with wastewater feedback and linear chains for infected compartment
 
 import jax
 import jax.numpy as jnp
-from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, PIDController
 from functools import partial
 
 from models.parameters_erlang import ParamsErlang
 from models.parameters import logistic_response_function
-from models.compartmental import linear_chain, chain_derivative
+from models.compartmental import linear_chain, chain_derivative, _solve
 
 
-@partial(jax.jit, static_argnames=['t1', 'n_W', 'n_B', 'nE', 'nP', 'nS', 'nA'])
+@partial(jax.jit, static_argnames=['n_ts'])
 def simulate_SEIPAR_W_Erlang(
     params: ParamsErlang = ParamsErlang.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6,
-    n_W: int = 3, n_B: int = 1, nE: int = 6, nP: int = 3, nS: int = 6, nA: int = 4
+    n_ts: int = 5000,
 ):
     """SEIPAR model with wastewater feedback and linear chains for infected compartments."""
+    nE, nP, nS, nA = params.nE, params.nP, params.nS, params.nA
+    n_W, n_B = params.n_W, params.n_B
+
     # compartment indices
     iIa = 1 + nE
     iIp = iIa + nA
@@ -63,20 +65,11 @@ def simulate_SEIPAR_W_Erlang(
         return jnp.concatenate([dFlow, dW, dB])
 
     y0 = jnp.concatenate([
-        jnp.array([1.0 - E0]), # S
-        jnp.array([E0]), jnp.zeros(nE - 1), # E
+        jnp.atleast_1d(1.0 - E0), # S
+        jnp.atleast_1d(E0), jnp.zeros(nE - 1), # E
         jnp.zeros(nA), jnp.zeros(nP), jnp.zeros(nS), # I
-        jnp.array([0.0]), # R
+        jnp.zeros(1), # R
         jnp.zeros(n_W), jnp.ones(n_B), # delays
     ])
 
-    solution = diffeqsolve(
-        terms=ODETerm(_SEIPAR_W),
-        solver=Tsit5(),
-        t0=0.0, t1=t1, dt0=0.1,
-        y0=y0,
-        args=params,
-        saveat=SaveAt(ts=jnp.linspace(0.0, t1, 5000)),
-        stepsize_controller=PIDController(rtol=1e-7, atol=1e-9), max_steps=50_000,
-    )
-    return solution.ts, solution.ys
+    return _solve(_SEIPAR_W, y0, params, t1, n_ts)

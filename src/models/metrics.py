@@ -13,80 +13,123 @@ from typing import Callable
 from models.parameters import Params
 
 
-def calculate_averaged_Rt(params: Params, tt, t1, dt, N_t, S, Is, rt_true, delta_dep):
-    # t_0 = t_Icrit + tau_W+tau_B + 2*sigma
-    crosses = Is >= params.I_crit
-    t_I_crit = jnp.where(jnp.any(crosses), tt[jnp.argmax(crosses)],t1)
-    sd = jnp.sqrt(params.tau_W**2/params.n_W + params.tau_B**2/params.n_B)
-    t_0 = t_I_crit + params.tau_W+params.tau_B + 2.0*sd
-    # t_1 = first time after t_0 S drops below (1 - delta_dep) * S_0
-    depleted = (tt > t_0) & (S < (1.0 - delta_dep) * S[0])
-    t_1 = jnp.where(jnp.any(depleted), tt[jnp.argmax(depleted)], tt[-1])
-    t_1 = jnp.where(t_1 > 10.0*t_0, 10.0*t_0, t_1) # clip at 10*t_0
-    # plain mean over [t_0,t_1]
-    in_window = (tt >= t_0) & (tt <= t_1) 
-    n_in = jnp.sum(in_window)
-    mean_Rt = jnp.where(n_in > 0, jnp.sum(rt_true * in_window) / jnp.maximum(n_in, 1), rt_true[-1])
-    # normalised autocorrelation of centred R_t
-    F = jnp.fft.fft(jnp.where(in_window, rt_true - mean_Rt, 0.0), n=2*N_t)
-    acorr = jnp.real(jnp.fft.ifft(F * jnp.conj(F)))[:N_t]
-    acorr = acorr / jnp.maximum(acorr[0],1e-12)
-    # T_osc: first local maximum
-    is_local_max = jnp.concatenate([jnp.array([False]), (acorr[1:-1] > acorr[:-2]) & (acorr[1:-1] > acorr[2:]), jnp.array([False])])
-    has_period = jnp.any(is_local_max)
-    T_osc = jnp.argmax(is_local_max) * dt
-    # largest m with t_0 + m * T_osc <= t_1
-    m = jnp.where(has_period, jnp.floor((t_1-t_0) / jnp.maximum(T_osc,1e-9)).astype(jnp.int32), jnp.int32(0))
-    # period-aligned mean
-    window_floor = (tt >= t_0) & (tt <= t_0 + m * T_osc)
-    mean_floor = jnp.sum(rt_true * window_floor) / jnp.maximum(jnp.sum(window_floor), 1)
-    Rt_final = jnp.where(has_period & (m >= 1), mean_floor, mean_Rt)
-    return Rt_final
+def _get_crossing(tt, fn, level, rising=True, fallback=None):
+    """Get the time when a trajectory crosses a specific level."""
+    g = (fn - level) if rising else (level - fn)
+    crossed = g >= 0.0
+    any_crossed = jnp.any(crossed)
+    idx_cross = jnp.clip(jnp.argmax(crossed), 1, tt.shape[0] - 1)
+    # gradient values before and after the crossing
+    g0, g1 = g[idx_cross - 1], g[idx_cross]
+    # fraction between g0 and g1 where crossing happens
+    frac = jnp.clip(jnp.where(g1 - g0 != 0.0, -g0 / (g1 - g0), 0.0), 0.0, 1.0)    
+    # return linear interpolation of the crossing time or fallback if no crossing
+    t_cross = jnp.where(crossed[0], tt[0], tt[idx_cross - 1] + frac * (tt[idx_cross] - tt[idx_cross - 1]))
+    fallback = tt[-1] if fallback is None else fallback
+    return jnp.where(any_crossed, t_cross, fallback)
+
+def _cumulative_trapezoid(tt, fn):
+    areas = 0.5 * (fn[1:] + fn[:-1]) * jnp.diff(tt)
+    return jnp.concatenate([jnp.zeros((1,), fn.dtype), jnp.cumsum(areas)])
+
+def _integral_to(tt, fn, C, t):
+    """Cumulative integral C at time t."""
+    i = jnp.clip(jnp.searchsorted(tt, jnp.clip(t, tt[0], tt[-1]), side='right'), 1, tt.shape[0] - 1)
+    t0, t1 = tt[i - 1], tt[i]
+    f0, f1 = fn[i - 1], fn[i]
+    f_of_t = f0 + jnp.where(t1 > t0, (t - t0) / (t1 - t0), 0.0) * (f1 - f0)
+    return C[i - 1] + 0.5 * (t - t0) * (f0 + f_of_t)
+
+def _window_mean(tt, f, t_a, t_b, taper='hann'):
+    """Continuous mean of f over [t_a, t_b]."""
+    t_a = jnp.clip(t_a, tt[0], tt[-1])
+    t_b = jnp.clip(t_b, t_a, tt[-1])
+    width = jnp.maximum(t_b - t_a, 1e-12)
+    
+    if taper == 'rect':
+        C = _cumulative_trapezoid(tt, f)
+        num = _integral_to(tt, f, C, t_b) - _integral_to(tt, f, C, t_a)
+        return num / width
+        
+    if taper != 'hann':
+        raise ValueError(taper)
+        
+    # Hann window weights
+    u = (tt - t_a) / width
+    w = jnp.where((u >= 0.0) & (u <= 1.0), 0.5 * (1.0 - jnp.cos(2.0 * jnp.pi * u)), 0.0)
+
+    # integrate weights and weighted function
+    Cw = _cumulative_trapezoid(tt, w)
+    Cwf = _cumulative_trapezoid(tt, w * f)
+    
+    denom = _integral_to(tt, w, Cw, t_b) - _integral_to(tt, w, Cw, t_a)
+    num = _integral_to(tt, w * f, Cwf, t_b) - _integral_to(tt, w * f, Cwf, t_a)
+    return jnp.where(denom <= 1e-12, f[-1], num / denom)
 
 def trajectory_indices(n_W, n_B):
     return {"S": 0, "Is": -(n_W + n_B + 2), "R": -(n_W + n_B + 1), "W_out": -(n_B + 1), "B_out": -1}
 
-def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None):
+def rt_amplitude(tt, rt_true, window: str = "initial"):
+    """Maximum Rt amplitude over first 1% or final third."""
+    if window == "initial":
+        initial = rt_true[:max(rt_true.shape[0] // 100, 1)]
+        return jnp.max(initial) - jnp.min(initial)
+    if window == "final":
+        final = tt >= 2.0 * tt[-1] / 3.0
+        return jnp.max(jnp.where(final, rt_true, -jnp.inf)) - jnp.min(jnp.where(final, rt_true, jnp.inf))
+    raise ValueError(window)
+
+def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, taper='hann'):
+    """Average Rt after policy interventions trigger but before susceptible depletion."""
+    t_I_crit = _get_crossing(tt, Is, params.I_crit, rising=True, fallback=tt[jnp.argmax(Is)])
+    sd = jnp.sqrt(params.tau_W**2 / params.n_W + params.tau_B**2 / params.n_B)
+    t_0 = jnp.clip(t_I_crit + params.tau_W + params.tau_B + 2.0 * sd, tt[0], tt[-1])
+    t_depleted = _get_crossing(tt, -jnp.where(tt >= t_0, S, S[0]), -(1.0 - delta_dep) * S[0], rising=True, fallback=tt[-1])
+    t_1 = jnp.clip(jnp.minimum(t_depleted, 10 * t_0), t_0, tt[-1])
+    return _window_mean(tt, rt_true, t_0, t_1, taper=taper)
+
+def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window: str = "initial", taper: str = "rect"):
     """Compute outcome metrics from model trajectories."""
-    N_t = tt.shape[0]
-    dt = (tt[-1] - tt[0]) / jnp.maximum(N_t - 1, 1)
     idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B)
     S = yy[:, idx["S"]] / population_size
     Is = yy[:, idx["Is"]] / population_size
+    R = yy[:, idx["R"]] / population_size
     rt_true = params.R_0 * params.rho * yy[:, idx["B_out"]] * S
 
-    # final Rt
-    Rt_final = calculate_averaged_Rt(params, tt, t1, dt, N_t, S, Is, rt_true, delta_dep)
-    time_to_below = jnp.where(jnp.any(rt_true < 1.0), tt[jnp.argmax(rt_true < 1.0)], t1)
+    # basic metrics
+    Rt_final = calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, taper=taper)
+    time_to_below = _get_crossing(tt, -rt_true, -1.0, rising=True, fallback=t1)
     Itot = S[0] - S[-1]
     peak_Is = jnp.max(Is)
-    extinction_time = tt[-1]
-    first_100th = rt_true[:max(rt_true.shape[0] // 100, 1)]
-    amplitude = jnp.max(first_100th) - jnp.min(first_100th)
+    amplitude = rt_amplitude(tt, rt_true, amplitude_window)
 
-    # warning duration / switch count
+    # extinction time 
+    infected = (1.0 - S - R) * population_size
+    threshold = 0.5 if population_size > 1 else 1e-6 
+    extinction_time = tt[-1] - _get_crossing(tt[-1] - tt[::-1], infected[::-1], threshold, rising=True, fallback=tt[-1] - tt[0])
+
+    # warning duration and count
     if warning_state is not None:
-        above = (warning_state >= 0.5).astype(jnp.int32)
+        above = (warning_state >= 0.5).astype(jnp.float32)
     else:
-        rt_reported = yy[:, -(params.n_B + 1)]
-        above = (rt_reported >= params.R_crit).astype(jnp.int32)
-    total_time_above = above.mean() * t1
-    num_crossings = jnp.sum(jnp.diff(above) > 0)
+        above = (yy[:, idx["W_out"]] >= params.R_crit).astype(jnp.float32)
+    dt_array = jnp.diff(tt)
+    total_time_above = jnp.sum(0.5 * (above[1:] + above[:-1]) * dt_array)
+    num_crossings = jnp.sum(jnp.diff(above) > 0.0)
 
     return Rt_final, time_to_below, Itot, peak_Is, extinction_time, amplitude, total_time_above, num_crossings
 
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: float, t1: float = 100.0, E0: float = 1e-6):
+@partial(jax.jit, static_argnames=['model', 'n_ts'])
+def compute_R_grid(model: Callable, base_params: Params, eps_ww: float, eps_ss: float, t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000):
     """Compute a 2D grid of Rt values with wastewater warning response efficacy on the x axis and isolation efficacy on the y axis."""
     def final_R(w, s):
         params = base_params.update(epsilon_w=w, epsilon_s=s)
-        tt, yy, *_ = model(params=params, t1=t1, E0=E0)
-        Rt,_,_,_,_,_,_,_ = outcome_metrics(tt, yy, params, t1, delta_dep=0.05)
-        return Rt #params.R_0 * params.rho * yy[-1, -1] * yy[-1, 0]
+        tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
+        Rt = outcome_metrics(tt, yy, params, t1, delta_dep=0.05)[0]
+        return Rt
     return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
 
-@partial(jax.jit, static_argnames=['model', 't1'])
+@partial(jax.jit, static_argnames=['model'])
 def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1: float = 100.0, E0: float = 1e-6):
     """
     Compute a 2D grid of proportion infected relative to a no intervention baseline. 
@@ -99,7 +142,7 @@ def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1:
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
     return I_tot_grid / I_tot(0.0, 0.0)
 
-@partial(jax.jit, static_argnames=['model', 't1'])
+@partial(jax.jit, static_argnames=['model'])
 def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 50.0, E0: float = 1e-6):
     """
     Compute a 2D grid of the reproductive number after interventions.
@@ -108,11 +151,10 @@ def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float,
     def final_R(p, phi_a):
         params = base_params.update(p=p, phi_a=phi_a)
         tt, yy, *_ = model(params=params, t1=t1, E0=E0)
-        Rt,_,_,_,_,_,_,_ = outcome_metrics(tt, yy, params, t1, delta_dep=0.05)
-        return Rt
+        return outcome_metrics(tt, yy, params, t1, delta_dep=0.05)[0]
     return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(p, phi_a)
 
-@partial(jax.jit, static_argnames=['model', 't1'])
+@partial(jax.jit, static_argnames=['model'])
 def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 600.0, E0: float = 1e-6):
     """
     Compute a 2D grid of proportion infected relative to a no intervention baseline.
@@ -121,10 +163,9 @@ def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: floa
     def I_tot(p, phi_a):
         _, yy, *_ = model(params=base_params.update(p=p, phi_a=phi_a), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(p, phi_a)
-    return I_tot_grid # return absolute fraction infected
+    return jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(p, phi_a)
 
-@partial(jax.jit, static_argnames=['model', 't1'])
+@partial(jax.jit, static_argnames=['model'])
 def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_crit_list, t1: float = 100.0, E0: float = 1e-6):
     """
     Compute a 2D grid of proportion infected relative to baseline across different
@@ -138,16 +179,43 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
     _, yy_base, *_ = model(params=base_params.update(epsilon_w=0.0), t1=t1, E0=E0)
     return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
 
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, delta_dep=0.05):
+@partial(jax.jit, static_argnames=['model', 'n_ts'])
+def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, delta_dep=0.05, n_ts=5000):
+    """Grid of (Rt, time_to_below, Itot, peak_Is)."""
     def wrap_metrics(w, s):
             params = base_params.update(epsilon_w=w, epsilon_s=s)
-            tt, yy, *_ = model(params=params, t1=t1, E0=E0)
+            tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
             Rt_final, time_to_below, Itot, peak_Is, _, _, _, _ = outcome_metrics(tt, yy, params, t1, delta_dep)
             return Rt_final, time_to_below, Itot, peak_Is
     return jax.vmap(jax.vmap(wrap_metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
 
-@partial(jax.jit, static_argnames=['model', 't1'])
+
+def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level=1.0, metric='Rt', baseline_Itot=None, n_ts=5000):
+    def _fn(eps_w, eps_s):
+        params = base_params.update(epsilon_w=float(eps_w), epsilon_s=float(eps_s))
+        tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
+        Rt, _, Itot, peak = outcome_metrics(tt, yy, params, t1)[:4]
+        if metric == 'Rt':
+            outcome_value = float(Rt)
+        elif metric == 'Itot':
+            outcome_value = float(Itot) / float(baseline_Itot)
+        elif metric == 'peak_Is': 
+            outcome_value = float(peak)
+        else:
+            raise ValueError(metric)
+        return outcome_value - level
+
+    boundary = []
+    for eps_w in np.asarray(eps_ww):
+        lower_contour = _fn(lo)
+        upper_contour = _fn(hi)
+        if not np.isfinite(lower_contour) or not np.isfinite(upper_contour) or lower_contour * upper_contour > 0:
+            boundary.append(np.nan)
+        else:
+            boundary.append(brentq(partial(_fn, eps_w=eps_w), lo, hi, xtol=1e-6))
+    return np.asarray(eps_ww), np.asarray(boundary)
+
+@partial(jax.jit, static_argnames=['model'])
 def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05):
     def wrap_delay_metrics(tau_W, tau_B):
         params = base_params.update(tau_W=tau_W, tau_B=tau_B)
@@ -174,22 +242,25 @@ def compute_amplitude_duration_piecewise(model, base_params, sweep_values, sweep
         return amplitude, total_time_above, num_crossings
     return jax.vmap(wrap)(sweep_values)
 
-def R0_decomposition(params: Params) -> dict[str, float]:
+def R0_decomposition(params: Params, include_isolation: bool = False) -> dict[str, float]:
     """Decomposition of R0 into asymptomatic, presymptomatic and symptomatic contributions."""
+    eps = float(params.epsilon_s) if include_isolation else 0.0
     R_a = float(params.beta * params.p * params.phi_a * params.mu_a_inv)
     R_p = float(params.beta * (1.0 - params.p) * params.phi_p * params.sigma_inv)
-    R_s = float(params.beta * (1.0 - params.p) * params.mu_s_inv)
+    R_s = float(params.beta * (1.0 - params.p) * (1.0 - eps) * params.mu_s_inv)
     return {"a": R_a, "p": R_p, "s": R_s}
 
 def transmission_fractions(params: Params) -> dict[str, float]:
-    """Fraction of all transmission events from to each type."""
+    """Fraction of all transmission events of each type."""
     R = R0_decomposition(params)
     total = R["a"] + R["p"] + R["s"]
     return {k: (R[k] / total if total > 0 else 0.0) for k in ("a", "p", "s")}
 
 def _infection_jacobian(params: Params) -> tuple[np.ndarray, list[str]]:
-    """Jacobian linearised around the disease-free equilibrium."""
+    """Jacobian of the infection subsystem linearised around the disease-free equilibrium."""
     beta = float(params.beta)
+    eps_s = float(params.epsilon_s)
+    beta_s = beta * (1.0 - eps_s)
     gamma = 1.0 / float(params.gamma_inv)
     mu_s = 1.0 / float(params.mu_s_inv)
     p = float(params.p)
@@ -201,24 +272,24 @@ def _infection_jacobian(params: Params) -> tuple[np.ndarray, list[str]]:
         sigma = 1.0 / float(params.sigma_inv)
         mu_a = 1.0 / float(params.mu_a_inv)
         J = np.array([
-            [-gamma,        beta * phi_a, beta * phi_p, beta ],
-            [p * gamma,     -mu_a,        0.0,          0.0  ],
-            [(1-p) * gamma, 0.0,          -sigma,       0.0  ],
-            [0.0,           0.0,          sigma,        -mu_s],
+            [-gamma,        beta * phi_a, beta * phi_p, beta_s],
+            [p * gamma,     -mu_a,        0.0,          0.0   ],
+            [(1-p) * gamma, 0.0,          -sigma,       0.0   ],
+            [0.0,           0.0,          sigma,        -mu_s ],
         ])
         labels = ["a", "p", "s"]
     elif has_asymptomatic: # SEIAR
         mu_a = 1.0 / float(params.mu_a_inv)
         J = np.array([
-            [-gamma,          beta * phi_a, beta ],
-            [p * gamma,       -mu_a,        0.0  ],
-            [(1 - p) * gamma, 0.0,          -mu_s],
+            [-gamma,          beta * phi_a, beta_s],
+            [p * gamma,       -mu_a,        0.0   ],
+            [(1 - p) * gamma, 0.0,          -mu_s ],
         ])
         labels = ["a", "s"]
     else: # SEIR
         J = np.array([
-            [-gamma, beta ],
-            [gamma,  -mu_s],
+            [-gamma, beta_s],
+            [gamma,  -mu_s ],
         ])
         labels = ["s"]
     return J, labels
@@ -236,80 +307,89 @@ def infectious_fractions(params: Params) -> dict[str, float]:
     infectious = v[1:]
     total = infectious.sum()
     fractions = infectious / total if total > 0 else infectious
-    f = {"a": 0.0, "p": 0.0, "s": 0.0}
-    f.update({lab: float(f) for lab, f in zip(labels, fractions)})
-    return f
+    infectious_fractions = {"a": 0.0, "p": 0.0, "s": 0.0}
+    infectious_fractions.update({label: float(value) for label, value in zip(labels, fractions)})
+    return infectious_fractions
+
+def mean_warning_multiplier(epsilon_w: float) -> float:
+    return 1.0 - epsilon_w / 2.0
 
 def calculate_mt_branching_q(ps, ew, es):
+    """Extinction probability of the multi-type branching process approximation."""
+    warn = mean_warning_multiplier(ew)
     def extinction_prob(q):
-        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * (1-ew/2)
-        presyx = ps.phi_p * ps.beta * ps.sigma_inv * (1-ew/2)
-        syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
+        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * warn
+        presyx = ps.phi_p * ps.beta * ps.sigma_inv * warn
+        syx = ps.beta * ps.mu_s_inv * (1-es) * warn
         return ps.p / (1 + asyx * (1-q)) + (1-ps.p) / ((1 + presyx * (1-q)) * (1 + syx * (1-q))) - q
-    ext_prob = 1.0
-    try: 
-        ext_prob = brentq(extinction_prob, 0.0, 1.0-1e-9)
-    except ValueError: pass
-    return ext_prob
+    try:
+        return brentq(extinction_prob, 0.0, 1.0-1e-9)
+    except ValueError:
+        return 1.0
 
 def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
+    """Extinction probability of the multi-type branching process approximation including superspreading."""
+    warn = mean_warning_multiplier(ew)
     def g_r(q,r):
         return 1-(1+(1-q)/r)**(-r)
     def extinction_prob(q):
-        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * (1-ew/2)
-        presyx = ps.phi_p * ps.beta * ps.sigma_inv * (1-ew/2)
-        syx = ps.beta * ps.mu_s_inv * (1-es) * (1-ew/2)
+        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * warn
+        presyx = ps.phi_p * ps.beta * ps.sigma_inv * warn
+        syx = ps.beta * ps.mu_s_inv * (1-es) * warn
         return ps.p / (1 + asyx * g_r(q,k)) + (1-ps.p) / ((1 + presyx * g_r(q,k)) * (1 + syx * g_r(q,k))) - q
-    ext_prob = 1.0
-    try: ext_prob = brentq(extinction_prob, 0.0, 1.0 - 1e-9)
-    except ValueError: pass
-    return ext_prob
+    try:
+        return brentq(extinction_prob, 0.0, 1.0 - 1e-9)
+    except ValueError:
+        return 1.0
 
-def strategy_metrics(tau_W, tau_B, n_W, n_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
+def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
     params = base_params.update(tau_W=tau_W, tau_B=tau_B)
+    n_W, n_B = params.n_W, params.n_B
     ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
-    S, B_out = ys[:, 0], ys[:, -1]
+    idx = trajectory_indices(n_W, n_B)
+    S, B_out = ys[:, idx["S"]], ys[:, idx["B_out"]]
     rt_true = params.R_0 * params.rho * B_out * S
 
-    mask = ts >= 2.0 * t1 / 3.0
-    amplitude = (jnp.max(jnp.where(mask, rt_true, -jnp.inf)) - jnp.min(jnp.where(mask, rt_true, jnp.inf)))
+    amplitude = rt_amplitude(ts, rt_true, window="final")
     if asymmetric or discrete_eval:
         time_above = ms.mean() * t1
     else:
-        W_out = ys[:, -(1 + n_B)]
+        W_out = ys[:, idx["W_out"]]
         if T_lead_on:
-            R_est = W_out + base_params.T_lead * (n_W / params.tau_W) * (ys[:, -(1 + n_B) - 1] - W_out)
+            R_est = W_out + base_params.T_lead * (n_W / params.tau_W) * (ys[:, idx["W_out"] - 1] - W_out)
         else:
             R_est = W_out
         time_above = (R_est >= params.R_crit).mean() * t1
 
     cost = jnp.trapezoid(1.0 - B_out, ts)
     Itot = S[0] - S[-1]
-    Is = ys[:, -(n_W + n_B + 2)]
+    Is = ys[:, idx["Is"]]
     peak_Is = jnp.max(Is)
     N_t = ts.shape[0]
     dt = (ts[-1] - ts[0]) / jnp.maximum(N_t - 1, 1)
     Rt_final = calculate_averaged_Rt(params, ts, t1, dt, N_t, S, Is, rt_true, 0.05)
     return jnp.stack([Rt_final, Itot, peak_Is, amplitude, time_above, cost])
 
-@partial(jax.jit, static_argnames=['model', 't1', 'asymmetric', 'discrete_eval', 'check_interval', 'n_W', 'n_B', 'T_lead_on'])
-def strategy_metric_grid(model, base_params, taus_W, taus_B, t1, asymmetric, discrete_eval, check_interval, n_W=3, n_B=1, T_lead_on=False):
-    strategy_metrics_vmap = partial(strategy_metrics, n_W=n_W, n_B=n_B, model=model, base_params=base_params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval, T_lead_on=T_lead_on)
+@partial(jax.jit, static_argnames=['model', 't1', 'asymmetric', 'discrete_eval', 'check_interval', 'T_lead_on'])
+def strategy_metric_grid(model, base_params, taus_W, taus_B, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
+    strategy_metrics_vmap = partial(strategy_metrics, model=model, base_params=base_params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval, T_lead_on=T_lead_on)
     return jax.vmap(jax.vmap(strategy_metrics_vmap, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
 
 def strategy_grid(
-    model, base_params, k, eps_w, eps_s, strategies,
-    t1=300.0, taus_W=np.linspace(1.0, 30.0, 100), taus_B=np.linspace(1.0, 30.0, 100), 
-    R_off=0.8, eval_interval=14.0,
+    model, base_params, k, eps_w, eps_s, strategies, t1=300.0, 
+    taus_W=None, taus_B=None, R_off=0.8, eval_interval=14.0,
 ):
+    taus_W = np.linspace(1.0, 30.0, 100) if taus_W is None else taus_W
+    taus_B = np.linspace(1.0, 30.0, 100) if taus_B is None else taus_B
     base_params = base_params.update(epsilon_s=eps_s, epsilon_w=eps_w, k=k, R_off=R_off, eval_interval=eval_interval)
     taus_W, taus_B = jnp.asarray(taus_W), jnp.asarray(taus_B)
     data = {}
     for s, (asym, disc, tl, ci) in strategies.items():
         bp = base_params.update(T_lead=tl)
-        grid = strategy_metric_grid(model, bp, taus_W, taus_B, t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, n_W=int(bp.n_W), n_B=int(bp.n_B), T_lead_on=(tl > 0.0))
+        grid = strategy_metric_grid(model, bp, taus_W, taus_B, t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, T_lead_on=(tl > 0.0))
         data[s] = np.asarray(grid)
     return data, list(np.asarray(taus_W)), list(np.asarray(taus_B))
 
 def R_boundary(theta, eps_s, eps_w):
-    return 1.0 / ((1.0 - eps_w / 2.0) * (1.0 - eps_s * (1.0 - theta)))
+    """Rt = 1 boundary in (theta, eps_s) for a given warning efficacy."""
+    return 1.0 / (mean_warning_multiplier(eps_w) * (1.0 - eps_s * (1.0 - theta)))

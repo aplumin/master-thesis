@@ -2,6 +2,7 @@
 Parameter class for compartmental models and utility functions.
 """
 
+import jax
 import jax.numpy as jnp
 from typing import NamedTuple
 
@@ -87,15 +88,15 @@ class Params(NamedTuple):
         Parameters for the full model with presymptomatic and asymptomatic transmission.
         Uses SARS-CoV-2 parameters by default.
         """
-        r = _calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, mu_s_inv=mu_s_inv)
-        r_eps = _calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
+        r = calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, mu_s_inv=mu_s_inv)
+        r_eps = calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
             R_0=R_0, phi_a=phi_a, phi_p=phi_p, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
+            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
         )
 
     @classmethod
@@ -124,15 +125,15 @@ class Params(NamedTuple):
         Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
         Uses H1N1-like parameters without presymptomatic transmission by default.
         """
-        r = _calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, mu_s_inv=mu_s_inv)
-        r_eps = _calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
+        r = calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, mu_s_inv=mu_s_inv)
+        r_eps = calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
             R_0=R_0, phi_a=phi_a, phi_p=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
+            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
         )
 
     @classmethod
@@ -158,13 +159,16 @@ class Params(NamedTuple):
         Parameters for the SEIR model without asymptomatic or presymptomatic transmission.
         Uses Ebola parameters by default.
         """
-        beta = R_0 / mu_s_inv
-        rho = 1 - epsilon_s
+        # Same generation-weighted sum as the other constructors, with p = phi_p = sigma_inv = 0.
+        r = calculate_r(p=0.0, phi_a=0.0, phi_p=0.0, mu_a_inv=0.0, sigma_inv=0.0, mu_s_inv=mu_s_inv)
+        r_eps = calculate_r(p=0.0, phi_a=0.0, phi_p=0.0, mu_a_inv=0.0, sigma_inv=0.0, mu_s_inv=mu_s_inv, epsilon_s=epsilon_s)
+        beta = R_0 / r
+        rho = r_eps / r
         return cls(
             R_0=R_0, phi_a=0.0, phi_p=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=0.0, mu_s_inv=mu_s_inv, p=0.0, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=n_W, n_B=n_B, R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
+            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
         )
 
     def update(self, **kwargs) -> "Params":
@@ -172,12 +176,34 @@ class Params(NamedTuple):
         base_params = {"R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s"}
         if base_params & kwargs.keys():
             v = {f: kwargs.get(f, getattr(self, f)) for f in base_params}
-            r = _calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"])
-            r_eps = _calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"], epsilon_s=v["epsilon_s"])
+            r = calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"])
+            r_eps = calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"], epsilon_s=v["epsilon_s"])
             kwargs.setdefault("beta", jnp.where(r > 0, v["R_0"]/r, 0.0))
             kwargs.setdefault("rho",  jnp.where(r > 0, r_eps/r, 1.0))
             kwargs["R_0"] = jnp.where(r > 0, v["R_0"], 0.0)
         return self._replace(**kwargs)
+
+def _register_static_pytree(cls, static_fields=("n_W", "n_B")):
+    fields = cls._fields
+    dynamic = tuple(f for f in fields if f not in static_fields)
+    static = tuple(f for f in fields if f in static_fields)
+
+    def flatten(p):
+        return (tuple(getattr(p, f) for f in dynamic), tuple(getattr(p, f) for f in static))
+
+    def unflatten(aux, children):
+        values = dict(zip(dynamic, children))
+        values.update(zip(static, aux))
+        return cls(**values)
+
+    jax.tree_util.register_pytree_node(
+        nodetype=cls, 
+        flatten_func=flatten, 
+        unflatten_func=unflatten
+    )
+    return cls
+
+_register_static_pytree(Params)
 
 
 def logistic_response_function(reproductive_number: float, params: Params, number_infected: float):
@@ -190,5 +216,6 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
     )
     return 1.0 - params.epsilon_w * gate_W * gate_I
 
-def _calculate_r(p, phi_a, phi_p, mu_a_inv, sigma_inv, mu_s_inv, epsilon_s=0.0):
+def calculate_r(p, phi_a, phi_p, mu_a_inv, sigma_inv, mu_s_inv, epsilon_s=0.0):
+    """Weighted infectiousness sum, R_0 / beta."""
     return p * phi_a * mu_a_inv + (1-p) * (phi_p * sigma_inv + (1.0 - epsilon_s) * mu_s_inv)
