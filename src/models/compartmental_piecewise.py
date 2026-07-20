@@ -112,8 +112,9 @@ def _solve_piecewise(
             floored_next = floored
             t_next = t
 
-        warning_state = jnp.full((save_per_seg,), jnp.maximum(m, floored))
-        return (y_end, m_next, floored_next, t_next), (sol.ts, ys_seg, warning_state)
+        published = (R_est >= params.R_crit).astype(jnp.float64)
+        state = jnp.maximum(jnp.maximum(m, floored), published if not (asymmetric or discrete_eval) else 0.0)
+        return (y_end, m_next, floored_next, t_next), (sol.ts, ys_seg, jnp.full((save_per_seg,), state))
 
     zero = jnp.asarray(0.0, jnp.float64)
     init = (y0, zero, zero, zero)

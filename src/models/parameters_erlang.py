@@ -120,11 +120,24 @@ class ParamsErlang(NamedTuple):
             nE=int(nE), nP=int(nP), nS=int(nS), nA=int(nA), weighted=bool(weighted),
         )
 
+    _DERIVED_FROM = [
+        "R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", 
+        "epsilon_s", "w_a", "w_p", "w_s", "nP", "nS", "nA"]
     def update(self, **kwargs) -> "ParamsErlang":
         """Update any parameter(s)."""
         for f in _ERLANG_STATIC_FIELDS:
             if f in kwargs:
                 kwargs[f] = bool(kwargs[f]) if f == "weighted" else int(kwargs[f])
+        if set(self._DERIVED_FROM) & kwargs.keys():
+            v = {f: kwargs.get(f, getattr(self, f)) for f in self._DERIVED_FROM}
+            common = dict(
+                p=v["p"], phi_a=v["phi_a"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"],
+                mu_a_inv=v["mu_a_inv"], mu_s_inv=v["mu_s_inv"], w_a=v["w_a"], w_p=v["w_p"], 
+                w_s=v["w_s"], nP=v["nP"], nS=v["nS"], nA=v["nA"])
+            r = _r_weighted(epsilon_s=0.0, **common)
+            r_eps = _r_weighted(epsilon_s=v["epsilon_s"], **common)
+            kwargs.setdefault("beta", jnp.where(r > 0, v["R_0"] / r, 0.0))
+            kwargs.setdefault("rho", jnp.where(r > 0, r_eps / r, 1.0))
         return self._replace(**kwargs)
 
 _register_static_pytree(ParamsErlang, _ERLANG_STATIC_FIELDS)

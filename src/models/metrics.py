@@ -22,7 +22,8 @@ def _get_crossing(tt, fn, level, rising=True, fallback=None):
     # gradient values before and after the crossing
     g0, g1 = g[idx_cross - 1], g[idx_cross]
     # fraction between g0 and g1 where crossing happens
-    frac = jnp.clip(jnp.where(g1 - g0 != 0.0, -g0 / (g1 - g0), 0.0), 0.0, 1.0)    
+    dg = g1 - g0
+    frac = jnp.clip(jnp.where(dg != 0.0, -g0 / jnp.where(dg != 0.0, dg, 1.0), 0.0), 0.0, 1.0)
     # return linear interpolation of the crossing time or fallback if no crossing
     t_cross = jnp.where(crossed[0], tt[0], tt[idx_cross - 1] + frac * (tt[idx_cross] - tt[idx_cross - 1]))
     fallback = tt[-1] if fallback is None else fallback
@@ -66,8 +67,14 @@ def _window_mean(tt, f, t_a, t_b, taper='hann'):
     num = _integral_to(tt, w * f, Cwf, t_b) - _integral_to(tt, w * f, Cwf, t_a)
     return jnp.where(denom <= 1e-12, f[-1], num / denom)
 
-def trajectory_indices(n_W, n_B):
-    return {"S": 0, "Is": -(n_W + n_B + 2), "R": -(n_W + n_B + 1), "W_out": -(n_B + 1), "B_out": -1}
+def trajectory_indices(n_W, n_B, n_S: int = 1):
+    R = -(n_W + n_B + 1)
+    Is = R - n_S if n_S == 1 else slice(R - n_S, R)
+    return {"S": 0, "Is": Is, "R": R, "W_out": -(n_B + 1), "B_out": -1}
+
+def _column(yy, index):
+    col = yy[:, index]
+    return jnp.sum(col, axis=-1) if col.ndim > 1 else col
 
 def rt_amplitude(tt, rt_true, window: str = "initial"):
     """Maximum Rt amplitude over first 1% or final third."""
@@ -79,22 +86,25 @@ def rt_amplitude(tt, rt_true, window: str = "initial"):
         return jnp.max(jnp.where(final, rt_true, -jnp.inf)) - jnp.min(jnp.where(final, rt_true, jnp.inf))
     raise ValueError(window)
 
-def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, taper='hann'):
+def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, taper='hann', max_window=10.0):
     """Average Rt after policy interventions trigger but before susceptible depletion."""
     t_I_crit = _get_crossing(tt, Is, params.I_crit, rising=True, fallback=tt[jnp.argmax(Is)])
     sd = jnp.sqrt(params.tau_W**2 / params.n_W + params.tau_B**2 / params.n_B)
     t_0 = jnp.clip(t_I_crit + params.tau_W + params.tau_B + 2.0 * sd, tt[0], tt[-1])
     t_depleted = _get_crossing(tt, -jnp.where(tt >= t_0, S, S[0]), -(1.0 - delta_dep) * S[0], rising=True, fallback=tt[-1])
-    t_1 = jnp.clip(jnp.minimum(t_depleted, 10 * t_0), t_0, tt[-1])
+    t_1 = jnp.clip(jnp.minimum(t_depleted, max_window * t_0), t_0, tt[-1])
     return _window_mean(tt, rt_true, t_0, t_1, taper=taper)
 
-def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window: str = "initial", taper: str = "rect"):
+def outcome_metrics(
+    tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None,
+    amplitude_window: str = "initial", taper: str = "hann", n_S: int = 1
+):
     """Compute outcome metrics from model trajectories."""
-    idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B)
-    S = yy[:, idx["S"]] / population_size
-    Is = yy[:, idx["Is"]] / population_size
-    R = yy[:, idx["R"]] / population_size
-    rt_true = params.R_0 * params.rho * yy[:, idx["B_out"]] * S
+    idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B, n_S=n_S)
+    S = _column(yy, idx["S"]) / population_size
+    Is = _column(yy, idx["Is"]) / population_size
+    R = _column(yy, idx["R"]) / population_size
+    rt_true = params.R_0 * params.rho * _column(yy, idx["B_out"]) * S
 
     # basic metrics
     Rt_final = calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, taper=taper)
@@ -103,16 +113,17 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warni
     peak_Is = jnp.max(Is)
     amplitude = rt_amplitude(tt, rt_true, amplitude_window)
 
-    # extinction time 
+    # extinction time
     infected = (1.0 - S - R) * population_size
     threshold = 0.5 if population_size > 1 else 1e-6 
-    extinction_time = tt[-1] - _get_crossing(tt[-1] - tt[::-1], infected[::-1], threshold, rising=True, fallback=tt[-1] - tt[0])
+    extinct = infected < threshold
+    extinction_time = jnp.where(jnp.any(extinct), tt[jnp.argmax(extinct)], tt[-1])
 
     # warning duration and count
     if warning_state is not None:
         above = (warning_state >= 0.5).astype(jnp.float32)
     else:
-        above = (yy[:, idx["W_out"]] >= params.R_crit).astype(jnp.float32)
+        above = (_column(yy, idx["W_out"]) >= params.R_crit).astype(jnp.float32)
     dt_array = jnp.diff(tt)
     total_time_above = jnp.sum(0.5 * (above[1:] + above[:-1]) * dt_array)
     num_crossings = jnp.sum(jnp.diff(above) > 0.0)
@@ -207,12 +218,12 @@ def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level
 
     boundary = []
     for eps_w in np.asarray(eps_ww):
-        lower_contour = _fn(lo)
-        upper_contour = _fn(hi)
+        lower_contour = _fn(eps_w, lo)
+        upper_contour = _fn(eps_w, hi)
         if not np.isfinite(lower_contour) or not np.isfinite(upper_contour) or lower_contour * upper_contour > 0:
             boundary.append(np.nan)
         else:
-            boundary.append(brentq(partial(_fn, eps_w=eps_w), lo, hi, xtol=1e-6))
+            boundary.append(brentq(lambda e_s, e_w=eps_w: _fn(e_w, e_s), lo, hi, xtol=1e-6))
     return np.asarray(eps_ww), np.asarray(boundary)
 
 @partial(jax.jit, static_argnames=['model'])
@@ -365,9 +376,7 @@ def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_
     Itot = S[0] - S[-1]
     Is = ys[:, idx["Is"]]
     peak_Is = jnp.max(Is)
-    N_t = ts.shape[0]
-    dt = (ts[-1] - ts[0]) / jnp.maximum(N_t - 1, 1)
-    Rt_final = calculate_averaged_Rt(params, ts, t1, dt, N_t, S, Is, rt_true, 0.05)
+    Rt_final = calculate_averaged_Rt(params, ts, S, Is, rt_true, 0.05)
     return jnp.stack([Rt_final, Itot, peak_Is, amplitude, time_above, cost])
 
 @partial(jax.jit, static_argnames=['model', 't1', 'asymmetric', 'discrete_eval', 'check_interval', 'T_lead_on'])

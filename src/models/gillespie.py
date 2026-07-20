@@ -56,7 +56,7 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
     W_start = num_mass
     B_start = num_mass + n_W
     num_states = num_mass + n_W + n_B
-    n_rows = int(N * 10)
+    n_rows = int(N * 10) + 20
 
     # initialise states
     current_state = np.zeros(num_states, dtype=np.float64)
@@ -146,6 +146,8 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
         times[step] = t
         states[step, :] = current_state
         step += 1
+        if step >= n_rows:
+            break
     return times[:step], states[:step]
 
 @njit(cache=True)

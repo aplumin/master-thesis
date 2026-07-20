@@ -1583,7 +1583,7 @@ rule plot_alternative_warning_strategies_eps_w:
         nE = len(eps_ww)
         nM = len(METRIC_NAMES)
         base_params = parameters[pathogen].update(epsilon_s=eps_s, R_off=R_OFF, eval_interval=EVAL_INTERVAL)
-        baseline_metrics = jnp.unstack(strategy_metrics(base_params.tau_W, base_params.tau_B, base_params.n_W, base_params.n_B, model, base_params, t1, False, False, 1.0))
+        baseline_metrics = jnp.unstack(strategy_metrics(tau_W=base_params.tau_W, tau_B=base_params.tau_B, model=model, base_params=base_params, t1=t1, asymmetric=False, discrete_eval=False, check_interval=1.0, T_lead_on=False))
         baseline = np.array([1.0, baseline_metrics[1], baseline_metrics[2], 1.0, t1, t1])
 
         data = {s: np.zeros((nM, nE)) for s in STRATEGIES}
@@ -1591,7 +1591,7 @@ rule plot_alternative_warning_strategies_eps_w:
             for i, ew in enumerate(eps_ww):
                 ps = base_params.update(epsilon_w=float(ew), T_lead=tl)
                 T_lead_on = tl > 1e-3
-                data[s][:, i] = jnp.unstack(strategy_metrics(ps.tau_W, ps.tau_B, ps.n_W, ps.n_B, model, ps, t1, asym, disc, ci))
+                data[s][:, i] = jnp.unstack(strategy_metrics(tau_W=ps.tau_W, tau_B=ps.tau_B, model=model, base_params=ps, t1=t1, asymmetric=asym, discrete_eval=disc, check_interval=ci))
 
         strat_colors = dict(zip(STRATEGIES, sns.color_palette("colorblind", len(STRATEGIES))))
         linestyles = dict(zip(STRATEGIES, ['-','--', '-.', ':']))

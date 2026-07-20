@@ -10,20 +10,25 @@ from scipy.ndimage import gaussian_filter1d
 from functools import partial
 import models
 
+
 def arg_L(omega, tau_W, tau_B, n_W=3, n_B=1):
     return -n_W*np.arctan(omega*tau_W/n_W) - n_B*np.arctan(omega*tau_B/n_B)
 
-def _characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W=3, n_B=1):
+def _loop_gain(eps_w, k, R_crit=1.0):
+    """Static loop gain L(0) = K * R_eps = eps_w * k * R_crit / (2 * (2 - eps_w))."""
+    return (eps_w * k * R_crit) / (2 * (2 - eps_w))
+
+def _characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W=3, n_B=1, R_crit=1.0):
     """pW * pB + L0 = 0."""
     P = np.convolve(
         np.array([comb(n_W, j) * (tau_W/n_W)**j for j in range(n_W+1)]),
         np.array([comb(n_B, j) * (tau_B/n_B)**j for j in range(n_B+1)]))
-    P[0] += (eps_w * k) / (2 * (2-eps_w))
+    P[0] += _loop_gain(eps_w, k, R_crit)
     return P
 
-def dominant_pole(tau_W, tau_B, eps_w, k, n_W=3, n_B=1):
+def dominant_pole(tau_W, tau_B, eps_w, k, n_W=3, n_B=1, R_crit=1.0):
     """Dominant complex root of characteristic polynomial."""
-    roots = np.roots(_characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W, n_B)[::-1])
+    roots = np.roots(_characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W, n_B, R_crit)[::-1])
     complex_roots = roots[np.abs(roots.imag) > 1e-9]
     if complex_roots.size == 0: return np.nan
     return complex_roots[np.argmax(complex_roots.real)]
@@ -88,18 +93,30 @@ def _root(fn, lo=1e-10, hi=1000.0):
     try: return brentq(fn, lo, hi)
     except ValueError: return None
 
-def gain_margin(eps_w, tau_W, tau_B, n_W=3, n_B=1, k=10.0):
+def gain_margin(eps_w, tau_W, tau_B, n_W=3, n_B=1, k=10.0, R_crit=1.0):
+    """M_G = |L(j omega_PC)|^-1 at phase crossover arg L = -pi."""
+    L0 = _loop_gain(eps_w, k, R_crit)
+    if L0 <= 0: return np.inf
     omega_PC = _root(lambda w: np.pi + arg_L(omega=w, tau_W=tau_W, tau_B=tau_B, n_W=n_W, n_B=n_B))
     if omega_PC is None: return np.inf
-    return (2*(2-eps_w))/(eps_w*k) * (1+(omega_PC*tau_W/n_W)**2)**(n_W/2) * (1+(omega_PC*tau_B/n_B)**2)**(n_B/2)
+    return (1.0/L0) * (1+(omega_PC*tau_W/n_W)**2)**(n_W/2) * (1+(omega_PC*tau_B/n_B)**2)**(n_B/2)
 
-def delay_margin(eps_w, tau_W, tau_B, n_W=3, n_B=1, k=10.0):
-    L0 = (eps_w*k)/(2*(2-eps_w))
+def phase_margin(eps_w, tau_W, tau_B, n_W=3, n_B=1, k=10.0, R_crit=1.0):
+    """M_P = pi + arg L(j omega_c) at gain crossover |L| = 1."""
+    L0 = _loop_gain(eps_w, k, R_crit)
     def g(omega):
         return (L0**2 * (1 + (omega*tau_W/n_W)**2)**(-n_W) * (1 + (omega*tau_B/n_B)**2)**(-n_B) - 1)
     if g(0) <= 0:
-        return np.inf
+        return np.inf, None
     omega_c = _root(g)
     if omega_c is None:
+        return np.inf, None
+    return np.pi + arg_L(omega=omega_c, tau_W=tau_W, tau_B=tau_B, n_W=n_W, n_B=n_B), omega_c
+
+def delay_margin(eps_w, tau_W, tau_B, n_W=3, n_B=1, k=10.0, R_crit=1.0, clip_negative=True):
+    """M_D = M_P / omega_c."""
+    M_P, omega_c = phase_margin(eps_w, tau_W, tau_B, n_W, n_B, k, R_crit)
+    if omega_c is None:
         return np.inf
-    return (np.pi - arg_L(omega=omega_c, tau_W=tau_W, tau_B=tau_B, n_W=n_W, n_B=n_B)) / omega_c
+    M_D = M_P / omega_c
+    return max(M_D, 0.0) if clip_negative else M_D
