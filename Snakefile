@@ -29,7 +29,7 @@ from models.metrics import (
 from models.spatial import simulate_SEIPAR_W_spatial, simulate_SEIR_W_spatial, SpatialParams, run_spatial, unpack_spatial
 from models.sensitivity import (
     SensitivityResults, run_sensitivity_analysis, partial_rank_residuals, 
-    load_sensitivity_results, export_sensitivity_bounds,
+    load_sensitivity_results, export_sensitivity_bounds, param_symbol, ordered_params,
 )
 from models.stability import arg_L, dominant_pole, compute_rt_grid, period_and_damping, gain_margin, delay_margin
 from models.gillespie import gillespie_SEIPAR_W
@@ -136,15 +136,6 @@ prcc_scenarios = ['start', 'threshold']
 prcc_outcomes = ['Rt', 'Itot']
 prcc_scenario_titles = {'start': r'$I_{\text{crit}}=0$', 'threshold': r'$I_{\text{crit}}=10^{-4}$'}
 prcc_outcome_titles = {'Rt': r'$\mathcal{R}_t$', 'Itot': r'$I_\text{tot}$'}
-PARAM_LABELS = {
-    "R_0": r"$\mathcal{R}_0$", "phi_a": r"$\varphi_a$", "phi_p": r"$\varphi_p$", "p": r"$p$", 
-    "gamma_inv": r"$1/\gamma$", "sigma_inv": r"$1/\sigma$", "mu_a_inv": r"$1/\mu_a$", "mu_s_inv": r"$1/\mu_s$", 
-    "epsilon_s": r"$\varepsilon_s$", "epsilon_w": r"$\varepsilon_w$",
-    "tau_W": r"$\tau_W$", "tau_B": r"$\tau_B$", "log_k": r"$\log k$", "log_k_I": r"$\log k_I$",
-    "R_crit": r"$\mathcal{R}_{\text{crit}}$", "log_I_crit": r"$\log I_{\text{crit}}$",
-    "RR_p": r"$\mathcal{R}_p/\mathcal{R}_s$", "RR_a": r"$\mathcal{R}_a/\mathcal{R}_s$",
-    "log_kI_Icrit": r"$\log_{10}(k_I I_{\text{crit}})$", "dummy": r"dummy",
-}
 
 E0 = 1e-6
 gillespie_popsizes = [10000] #, 1_000_000]
@@ -649,14 +640,13 @@ rule compute_prcc:
             model=models[wildcards.pathogen], scenario=wildcards.scenario, outcome=wildcards.outcome,
             base_params=parameters[wildcards.pathogen].update(epsilon_s=0.8, epsilon_w=0.8),
             priors=None if around_mean else sensitivity_ranges[wildcards.pathogen], second_order=True,
-            t1=1000.0, E0=E0, n_lhs=5000, n_replicates=20, n_sobol_base=1024, around_mean=around_mean,
+            t1=1000.0, E0=E0, n_lhs=5000, n_sobol_base=1024, around_mean=around_mean,
         )
         np.savez_compressed(
             output.npz, param_names=np.array(results.param_names), lower_bounds=np.array([results.bounds[k][0] for k in results.param_names]), 
             upper_bounds=np.array([results.bounds[k][1] for k in results.param_names]), samples=results.samples, outputs=results.outputs, 
-            prcc_mean=results.prcc_mean, prcc_lower=results.prcc_lower, prcc_upper=results.prcc_upper, prcc_samples=results.prcc_samples, 
-            sobol_S1=results.sobol_S1, sobol_S1_conf=results.sobol_S1_conf, sobol_ST=results.sobol_ST, sobol_ST_conf=results.sobol_ST_conf, 
-            sobol_S1_sum=results.sobol_S1_sum, prcc_fisher_lower=results.prcc_fisher_lower, prcc_fisher_upper=results.prcc_fisher_upper
+            prcc_mean=results.prcc_mean, prcc_lower=results.prcc_lower, prcc_upper=results.prcc_upper, sobol_S1=results.sobol_S1, 
+            sobol_S1_conf=results.sobol_S1_conf, sobol_ST=results.sobol_ST, sobol_ST_conf=results.sobol_ST_conf, sobol_S1_sum=results.sobol_S1_sum,
         )
 
 rule plot_prcc_monotonicity:
@@ -689,7 +679,7 @@ rule plot_prcc_monotonicity:
             ax = axs[i // n_cols, i % n_cols]
             ex, ey = partial_rank_residuals(results.samples, results.outputs, i)
             ax.scatter(ex, ey, s=4, alpha=0.25, edgecolors='none', color=colors[wildcards.pathogen])
-            ax.set_title(f'{PARAM_LABELS.get(name, name)} ({results.prcc_mean[i]:+.2f})', fontsize=18)
+            ax.set_title(f'{param_symbol(name)} ({results.prcc_mean[i]:+.2f})', fontsize=18)
             x_trend, y_trend = calculate_binned_means(ex, ey)
             ax.plot(x_trend, y_trend, color='black', lw=1.4, alpha=0.8)
             ax.set_xticks([]); ax.set_yticks([])
@@ -707,17 +697,13 @@ rule plot_prcc_grid:
     input:
         npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz", outdir=wc.outdir, pathogen=pathogens, scenario=['start', 'threshold'], outcome=prcc_outcomes, bounds=wc.bounds)
     output:
-        plot="{outdir}/compartmental/combined_prcc_grid_{bounds}.png"
+        plot="{outdir}/compartmental/prcc/combined_prcc_grid_{bounds}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         
         # all params for global x axis
-        all_params = []
-        for path in input.npz:
-            res = load_sensitivity_results(path)
-            for p in res.param_names: 
-                if p not in all_params: all_params.append(p)  
-        labels = [PARAM_LABELS.get(n, n) for n in all_params]
+        all_params = ordered_params([p for path in input.npz for p in load_sensitivity_results(path).param_names])
+        labels = [param_symbol(n) for n in all_params]
         x = np.arange(len(all_params))
 
         def params_aligned(res, metric, is_err=False, is_abs=False):
@@ -766,17 +752,13 @@ rule plot_combined_sensitivity_grid:
     input:
         npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz", outdir=wc.outdir, pathogen=pathogens, scenario=['start', 'threshold'], outcome=prcc_outcomes, bounds=["empirical"])
     output:
-        plot="{outdir}/compartmental/combined_sensitivity_grid.png"
+        plot="{outdir}/compartmental/prcc/combined_sensitivity_grid.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         
         # all params for global x axis
-        all_params = []
-        for path in input.npz:
-            res = load_sensitivity_results(path)
-            for p in res.param_names: 
-                if p not in all_params: all_params.append(p)  
-        labels = [PARAM_LABELS.get(n, n) for n in all_params]
+        all_params = ordered_params([p for path in input.npz for p in load_sensitivity_results(path).param_names])
+        labels = [param_symbol(n) for n in all_params]
         x = np.arange(len(all_params))
 
         def params_aligned(res, metric, is_err=False, is_abs=False):

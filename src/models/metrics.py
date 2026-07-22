@@ -41,31 +41,14 @@ def _integral_to(tt, fn, C, t):
     f_of_t = f0 + jnp.where(t1 > t0, (t - t0) / (t1 - t0), 0.0) * (f1 - f0)
     return C[i - 1] + 0.5 * (t - t0) * (f0 + f_of_t)
 
-def _window_mean(tt, f, t_a, t_b, taper='hann'):
+def _window_mean(tt, f, t_a, t_b):
     """Continuous mean of f over [t_a, t_b]."""
     t_a = jnp.clip(t_a, tt[0], tt[-1])
     t_b = jnp.clip(t_b, t_a, tt[-1])
     width = jnp.maximum(t_b - t_a, 1e-12)
-    
-    if taper == 'rect':
-        C = _cumulative_trapezoid(tt, f)
-        num = _integral_to(tt, f, C, t_b) - _integral_to(tt, f, C, t_a)
-        return num / width
-        
-    if taper != 'hann':
-        raise ValueError(taper)
-        
-    # Hann window weights
-    u = (tt - t_a) / width
-    w = jnp.where((u >= 0.0) & (u <= 1.0), 0.5 * (1.0 - jnp.cos(2.0 * jnp.pi * u)), 0.0)
-
-    # integrate weights and weighted function
-    Cw = _cumulative_trapezoid(tt, w)
-    Cwf = _cumulative_trapezoid(tt, w * f)
-    
-    denom = _integral_to(tt, w, Cw, t_b) - _integral_to(tt, w, Cw, t_a)
-    num = _integral_to(tt, w * f, Cwf, t_b) - _integral_to(tt, w * f, Cwf, t_a)
-    return jnp.where(denom <= 1e-12, f[-1], num / denom)
+    C = _cumulative_trapezoid(tt, f)
+    num = _integral_to(tt, f, C, t_b) - _integral_to(tt, f, C, t_a)
+    return num / width
 
 def trajectory_indices(n_W, n_B, n_S: int = 1):
     R = -(n_W + n_B + 1)
@@ -86,19 +69,16 @@ def rt_amplitude(tt, rt_true, window: str = "initial"):
         return jnp.max(jnp.where(final, rt_true, -jnp.inf)) - jnp.min(jnp.where(final, rt_true, jnp.inf))
     raise ValueError(window)
 
-def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, taper='hann', max_window=10.0):
+def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, max_window=10.0):
     """Average Rt after policy interventions trigger but before susceptible depletion."""
     t_I_crit = _get_crossing(tt, Is, params.I_crit, rising=True, fallback=tt[jnp.argmax(Is)])
     sd = jnp.sqrt(params.tau_W**2 / params.n_W + params.tau_B**2 / params.n_B)
     t_0 = jnp.clip(t_I_crit + params.tau_W + params.tau_B + 2.0 * sd, tt[0], tt[-1])
     t_depleted = _get_crossing(tt, -jnp.where(tt >= t_0, S, S[0]), -(1.0 - delta_dep) * S[0], rising=True, fallback=tt[-1])
     t_1 = jnp.clip(jnp.minimum(t_depleted, max_window * t_0), t_0, tt[-1])
-    return _window_mean(tt, rt_true, t_0, t_1, taper=taper)
+    return _window_mean(tt, rt_true, t_0, t_1)
 
-def outcome_metrics(
-    tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None,
-    amplitude_window: str = "initial", taper: str = "hann", n_S: int = 1
-):
+def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window="initial", n_S=1):
     """Compute outcome metrics from model trajectories."""
     idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B, n_S=n_S)
     S = _column(yy, idx["S"]) / population_size
@@ -107,7 +87,7 @@ def outcome_metrics(
     rt_true = params.R_0 * params.rho * _column(yy, idx["B_out"]) * S
 
     # basic metrics
-    Rt_final = calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, taper=taper)
+    Rt_final = calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep)
     time_to_below = _get_crossing(tt, -rt_true, -1.0, rising=True, fallback=t1)
     Itot = S[0] - S[-1]
     peak_Is = jnp.max(Is)

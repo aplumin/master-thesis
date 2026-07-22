@@ -25,7 +25,7 @@ def gillespie_SEIPAR_W_superspreading(
     W_start = num_mass
     B_start = num_mass + n_W
     num_states = num_mass + n_W + n_B
-    n_rows = int(N * 10)
+    n_rows = int(N * 10) + 20
 
     N_inv = 1.0 / float(N)
     beta = params.beta
@@ -123,6 +123,8 @@ def gillespie_SEIPAR_W_superspreading(
         times[step] = t
         states[step, :] = current_state
         step += 1
+        if step >= n_rows:
+            break
     return times[:step], states[:step]
 
 
