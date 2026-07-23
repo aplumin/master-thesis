@@ -1,5 +1,10 @@
 """
-Global sensitivity analysis.
+Global sensitivity analysis of outcomes to parameters.
+
+  * PRCC: rank inputs and output, then measure the correlation between each input 
+    and the output after linearly regressing out all other inputs.
+  * Sobol indices: decompose the output variance into contributions from each input 
+    (first-order S1) and each input including all its interactions (total-order ST).
 """
 
 from functools import lru_cache, partial
@@ -170,7 +175,11 @@ def _construct_latin_hypercube(bounds, n, seed=None):
     return qmc.scale(sample=qmc.LatinHypercube(d=len(names), seed=seed).random(n=n), l_bounds=np.array([bounds[p][0] for p in names]), u_bounds=np.array([bounds[p][1] for p in names]))
 
 def _partial_rank_corr_coeff(X, y):
-    """Compute the partial rank correlation coefficients between model parameters and output."""
+    """
+    Partial rank correlation coefficient of each input column of X with output y.
+        PRCC_i = -W[i, y] / sqrt(W[i, i] * W[y, y]),
+    where W is the precision matrix.
+    """
     ranks = np.hstack((np.apply_along_axis(rankdata, 0, X), rankdata(y).reshape(-1, 1)))
     if np.any(ranks.std(axis=0) == 0):
         raise ValueError
@@ -181,7 +190,10 @@ def _partial_rank_corr_coeff(X, y):
     return np.array([-W[i, -1] / denom[i] for i in range(X.shape[1])])
 
 def _prcc_fisher_ci(r, n, d, alpha=0.05):
-    """Eq. 10, Merino et al. (2008)."""
+    """
+    Confidence interval for a PRCC via the Fisher z-transform (Eq. 10, Merino et al. 2008).
+    z = arctanh(r), z approx. normal with SE 1/sqrt(n - (d - 1) - 3) and n samples, d params.
+    """
     df = max(n - (d - 1) - 3, 1)
     z = np.arctanh(np.clip(np.asarray(r, float), -1 + 1e-12, 1 - 1e-12))
     half = norm.ppf(1 - alpha / 2) / np.sqrt(df)

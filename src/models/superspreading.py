@@ -1,5 +1,8 @@
 """
-Stochastic compartmental models with superspreading.
+Gillespie SEIPAR model with superspreading.
+
+Superspreading is modelled by drawing the number of secondary cases of a transmission
+event from a NB(k_ss, p_nb) distribution.
 """
 
 import numpy as np
@@ -8,7 +11,7 @@ from numba import njit
 
 from models.parameters import Params
 from models.metrics import outcome_metrics, calculate_mt_branching_q_with_superspreading
-from models.gillespie import _advance_chain, _exponential_dt, _select_event, _response
+from models.gillespie import _chain_derivative, _exponential_dt, _select_event, _response
 
 
 @njit(cache=True, fastmath=True)
@@ -48,11 +51,12 @@ def gillespie_SEIPAR_W_superspreading(
     xi_W = float(n_W) / params.tau_W
     xi_B = float(n_B) / params.tau_B
 
+    # negative binomial s.t. the mean is 1
     p_nb = k_ss / (k_ss + 1.0) if k_ss > 0.0 else 1.0
     can_superspread = k_ss > 0.0
-    ss_a = a_ss and can_superspread
-    ss_p = p_ss and can_superspread
-    ss_s = s_ss and can_superspread
+    ss_a = a_ss and can_superspread # asymptomatics can superspread
+    ss_p = p_ss and can_superspread # presymptomatics can superspread
+    ss_s = s_ss and can_superspread # symptomatics can superspread
 
     current_state = np.zeros(num_states, dtype=np.float64)
     current_state[0] = float(N - 1) # S
@@ -82,14 +86,14 @@ def gillespie_SEIPAR_W_superspreading(
         B_out = current_state[B_start + n_B - 1]
 
         base_infection_rate = B_out * beta * (S * N_inv)
-        a[0] = base_infection_rate * phi_a * Ia
-        a[1] = base_infection_rate * phi_p * Ip
-        a[2] = base_infection_rate * eps_s_comp * Is
-        a[3] = E * rate_E_Ia
-        a[4] = E * rate_E_Ip
-        a[5] = Ip * rate_Ip
-        a[6] = Ia * rate_Ia
-        a[7] = Is * rate_Is
+        a[0] = base_infection_rate * phi_a * Ia # infection from asymptomatic
+        a[1] = base_infection_rate * phi_p * Ip # infection from presymptomatic
+        a[2] = base_infection_rate * eps_s_comp * Is # infection from symptomatic
+        a[3] = E * rate_E_Ia # E -> Ia
+        a[4] = E * rate_E_Ip # E -> Ip
+        a[5] = Ip * rate_Ip # Ip -> Is
+        a[6] = Ia * rate_Ia # Ia -> R
+        a[7] = Is * rate_Is # Is -> R
         a0 = 0.0
         for i in range(num_reactions):
             a0 += a[i]
@@ -100,15 +104,14 @@ def gillespie_SEIPAR_W_superspreading(
         f_W = _response(W_out, Is * N_inv, eps_w, k_W, R_crit, k_I, I_crit)
         Rt_in = R0_rho * B_out * (S * N_inv)
         time_step = _exponential_dt(a0)
-        _advance_chain(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
-        _advance_chain(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
+        _chain_derivative(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
+        _chain_derivative(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
 
         # execute next event
         event_idx = _select_event(a, a0, num_reactions)
-        if event_idx <= 2:
-            superspreads = (event_idx == 0 and ss_a) or (event_idx == 1 and ss_p) or (event_idx == 2 and ss_s)
+        if event_idx <= 2: # superspreading if event is a transmission and the infector can superspread
             Z = 1.0
-            if superspreads:
+            if (event_idx == 0 and ss_a) or (event_idx == 1 and ss_p) or (event_idx == 2 and ss_s):
                 Z = float(np.random.negative_binomial(k_ss, p_nb))
             if Z > current_state[0]:
                 Z = current_state[0]

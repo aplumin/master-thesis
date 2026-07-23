@@ -1,5 +1,14 @@
 """
-Piecewise compartmental models for alternative warning systems with hysteresis.
+Piecewise-constant warning policies.
+The warning decision is updated only at discrete check points (default: 0.1 days).
+
+  - Asymmetric thresholds: the warning switches on when the reported Rt rises
+    above R_crit but only switches off once it falls below a lower threshold
+    R_off < R_crit.
+  - Discrete evaluation intervals: once a warning is issued, it is held for at 
+    least eval_interval days before it is re-evaluated.
+  - Lead-time extrapolation: use a linear forecast as the reported Rt:
+    R_est = R_reported + T_lead * d(R_reported)/dt.
 """
 
 import jax
@@ -12,6 +21,9 @@ from models.compartmental import chain_derivative, RTOL, ATOL, MAX_STEPS
 
 
 def _published_response(W, dW, prevalence, params, m, floored):
+    """Logistic response function for the alternative warning systems.
+    m is the current warning state (1 = on) and floored=True means that the warning is kept on.
+    """
     R_est = W[-1] + params.T_lead * dW[-1] # lead estimate
     threshold = jnp.where(m > 0.5, params.R_off, params.R_crit) # asymmetric: R_off if warning is on, R_crit if it is off
     signal = jnp.where(floored > 0.5, jnp.maximum(params.R_crit, R_est), R_est) # floor at R_crit if in evaluation interval
@@ -69,6 +81,7 @@ def _SEIR(y, params, B_out):
     ])
     return dFlow, S, II
 
+# model name -> ODE function, number of population flow compartments
 _MODELS = {"SEIPAR": (_SEIPAR, 6), "SEIAR": (_SEIAR, 5), "SEIR": (_SEIR, 4)}
 
 
@@ -76,6 +89,7 @@ def _solve_piecewise(
     diffeq, # (t, y, (params, m, floored))
     y0, w_out_idx, params, t1, check_interval, asymmetric, discrete_eval, save_per_seg
     ):
+    """Integrate the ODE over [0, t1] with fixed length segments."""
     n_segments = int(round(t1 / check_interval))
     dt0 = min(0.1, 0.5 * check_interval)
     R_off, R_crit, eval_interval = params.R_off, params.R_crit, params.eval_interval
@@ -93,16 +107,18 @@ def _solve_piecewise(
         )
         ys_seg = sol.ys
         y_end = ys_seg[-1]
+        # forecast the reported Rt at the end of the segment
         dy_end = diffeq(t_end, y_end, (params, m, floored))
         R_est = y_end[w_out_idx] + params.T_lead * dy_end[w_out_idx]
 
-        # next warning state
+        # Asymmetric: if the warning is on, keep it on until R_est falls below R_off
+        # if it is off, turn it on when R_est > R_crit
         if asymmetric: # R_off if warning is on, R_crit if it is off
             m_next = jnp.where(m > 0.5, R_est >= R_off, R_est > R_crit).astype(jnp.float64)
         else:
             m_next = m
 
-        # re-evaluate warning if next evaluation date reached, else keep warning state
+        # Discrete intervals: re-evaluate warning if next evaluation date reached, else keep warning state
         if discrete_eval:
             t2 = t + check_interval
             reevaluate = t2 >= eval_interval - 1e-9

@@ -1,5 +1,5 @@
 """
-Functions for running models.
+Outcome metrics and analytical approximations from model runs.
 """
 
 import jax
@@ -30,6 +30,7 @@ def _get_crossing(tt, fn, level, rising=True, fallback=None):
     return jnp.where(any_crossed, t_cross, fallback)
 
 def _cumulative_trapezoid(tt, fn):
+    """Cumulative trapezoidal integral of fn(tt)."""
     areas = 0.5 * (fn[1:] + fn[:-1]) * jnp.diff(tt)
     return jnp.concatenate([jnp.zeros((1,), fn.dtype), jnp.cumsum(areas)])
 
@@ -51,6 +52,7 @@ def _window_mean(tt, f, t_a, t_b):
     return num / width
 
 def trajectory_indices(n_W, n_B, n_S: int = 1):
+    """Return compartment indices dict."""
     R = -(n_W + n_B + 1)
     Is = R - n_S if n_S == 1 else slice(R - n_S, R)
     return {"S": 0, "Is": Is, "R": R, "W_out": -(n_B + 1), "B_out": -1}
@@ -74,6 +76,7 @@ def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, max_window=10.0
     t_I_crit = _get_crossing(tt, Is, params.I_crit, rising=True, fallback=tt[jnp.argmax(Is)])
     sd = jnp.sqrt(params.tau_W**2 / params.n_W + params.tau_B**2 / params.n_B)
     t_0 = jnp.clip(t_I_crit + params.tau_W + params.tau_B + 2.0 * sd, tt[0], tt[-1])
+    # only look for depletion after t_0
     t_depleted = _get_crossing(tt, -jnp.where(tt >= t_0, S, S[0]), -(1.0 - delta_dep) * S[0], rising=True, fallback=tt[-1])
     t_1 = jnp.clip(jnp.minimum(t_depleted, max_window * t_0), t_0, tt[-1])
     return _window_mean(tt, rt_true, t_0, t_1)
@@ -182,6 +185,7 @@ def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, delta_dep=0.05, 
 
 
 def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level=1.0, metric='Rt', baseline_Itot=None, n_ts=5000):
+    """For each eps_w, find eps_s at which the outcome Rt, relative Itot, or peak equals level."""
     def _fn(eps_w, eps_s):
         params = base_params.update(epsilon_w=float(eps_w), epsilon_s=float(eps_s))
         tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
@@ -208,6 +212,7 @@ def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level
 
 @partial(jax.jit, static_argnames=['model'])
 def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05):
+    """Outcome metrics over a (tau_W, tau_B) grid of reporting and behavioural delays."""
     def wrap_delay_metrics(tau_W, tau_B):
         params = base_params.update(tau_W=tau_W, tau_B=tau_B)
         tt, yy, *_ = model(params=params, t1=t1, E0=E0)
@@ -217,6 +222,7 @@ def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E
 
 @partial(jax.jit, static_argnames=['model', 't1'])
 def compute_delay_metrics_grid_piecewise(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05):
+    """As compute_delay_metrics_grid but for piecewise models."""
     def wrap_delay_metrics(tau_W, tau_B):
         params = base_params.update(tau_W=tau_W, tau_B=tau_B)
         tt, yy, ms = model(params=params, t1=t1, E0=E0)
@@ -226,6 +232,7 @@ def compute_delay_metrics_grid_piecewise(model, base_params, taus_W, taus_B, t1=
 
 @partial(jax.jit, static_argnames=['model', 't1', 'sweep_field'])
 def compute_amplitude_duration_piecewise(model, base_params, sweep_values, sweep_field='R_off', t1=10000.0, E0=1e-6, delta_dep=0.05):
+    """Get sustained oscillation amplitude, time above threshold, and number of crossings."""
     def wrap(value):
         params = base_params.update(**{sweep_field: value})
         tt, yy, ms = model(params=params, t1=t1, E0=E0)
@@ -295,7 +302,7 @@ def infectious_fractions(params: Params) -> dict[str, float]:
     J, labels = _infection_jacobian(params)
     w, V = np.linalg.eig(J)
     v = np.abs(np.real(V[:, int(np.argmax(w.real))]))
-    infectious = v[1:]
+    infectious = v[1:] # E is not yet infectious
     total = infectious.sum()
     fractions = infectious / total if total > 0 else infectious
     infectious_fractions = {"a": 0.0, "p": 0.0, "s": 0.0}
@@ -303,6 +310,7 @@ def infectious_fractions(params: Params) -> dict[str, float]:
     return infectious_fractions
 
 def mean_warning_multiplier(epsilon_w: float) -> float:
+    """1 - epsilon_w/2."""
     return 1.0 - epsilon_w / 2.0
 
 def calculate_mt_branching_q(ps, ew, es):
@@ -319,7 +327,7 @@ def calculate_mt_branching_q(ps, ew, es):
         return 1.0
 
 def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
-    """Extinction probability of the multi-type branching process approximation including superspreading."""
+    """As calculate_mt_branching_q but with overdispersed transmission."""
     warn = mean_warning_multiplier(ew)
     def g_r(q,r):
         return 1-(1+(1-q)/r)**(-r)
@@ -334,6 +342,10 @@ def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
         return 1.0
 
 def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
+    """
+    Summary metrics for one piecewise warning strategy given delays (tau_W, tau_B).
+    Returns [Rt_final, Itot, peak_Is, amplitude, time_above, cost].
+    """
     params = base_params.update(tau_W=tau_W, tau_B=tau_B)
     n_W, n_B = params.n_W, params.n_B
     ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
@@ -361,6 +373,7 @@ def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_
 
 @partial(jax.jit, static_argnames=['model', 't1', 'asymmetric', 'discrete_eval', 'check_interval', 'T_lead_on'])
 def strategy_metric_grid(model, base_params, taus_W, taus_B, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
+    """strategy_metrics over the full (tau_W, tau_B) grid."""
     strategy_metrics_vmap = partial(strategy_metrics, model=model, base_params=base_params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval, T_lead_on=T_lead_on)
     return jax.vmap(jax.vmap(strategy_metrics_vmap, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
 
@@ -368,6 +381,7 @@ def strategy_grid(
     model, base_params, k, eps_w, eps_s, strategies, t1=300.0, 
     taus_W=None, taus_B=None, R_off=0.8, eval_interval=14.0,
 ):
+    """Delay-grid metrics for multiple warning strategies."""
     taus_W = np.linspace(1.0, 30.0, 100) if taus_W is None else taus_W
     taus_B = np.linspace(1.0, 30.0, 100) if taus_B is None else taus_B
     base_params = base_params.update(epsilon_s=eps_s, epsilon_w=eps_w, k=k, R_off=R_off, eval_interval=eval_interval)
@@ -380,5 +394,9 @@ def strategy_grid(
     return data, list(np.asarray(taus_W)), list(np.asarray(taus_B))
 
 def R_boundary(theta, eps_s, eps_w):
-    """Rt = 1 boundary in (theta, eps_s) for a given warning efficacy."""
+    """
+    Boundary R_t = 1 as a function of the non-symptomatic transmission fraction theta 
+    and the intervention efficacies:
+        R_0_crit = 1 / ((1 - epsilon_w/2) * (1 - epsilon_s*(1 - theta))).
+    """
     return 1.0 / (mean_warning_multiplier(eps_w) * (1.0 - eps_s * (1.0 - theta)))

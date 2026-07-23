@@ -88,7 +88,9 @@ class Params(NamedTuple):
         Parameters for the full model with presymptomatic and asymptomatic transmission.
         Uses SARS-CoV-2 parameters by default.
         """
+        # weighted infectiousness sum, s.t. r = R_0 / beta
         r = calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, mu_s_inv=mu_s_inv)
+        # weighted infectiousness sum with symptomatic isolation
         r_eps = calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
         beta = R_0 / r
         rho = r_eps / r
@@ -172,7 +174,7 @@ class Params(NamedTuple):
         )
 
     def update(self, **kwargs) -> "Params":
-        """Update any parameter(s)."""
+        """Update any parameter(s). Recomputes derived parameters beta and rho if not specified."""
         base_params = {"R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s"}
         if base_params & kwargs.keys():
             v = {f: kwargs.get(f, getattr(self, f)) for f in base_params}
@@ -184,22 +186,23 @@ class Params(NamedTuple):
         return self._replace(**kwargs)
 
 def _register_static_pytree(cls, static_fields=("n_W", "n_B")):
+    """Register NamedTuple parameter class as JAX pytree."""
     fields = cls._fields
     dynamic = tuple(f for f in fields if f not in static_fields)
     static = tuple(f for f in fields if f in static_fields)
 
-    def flatten(p):
+    def _flatten(p):
         return (tuple(getattr(p, f) for f in dynamic), tuple(getattr(p, f) for f in static))
 
-    def unflatten(aux, children):
+    def _unflatten(aux, children):
         values = dict(zip(dynamic, children))
         values.update(zip(static, aux))
         return cls(**values)
 
     jax.tree_util.register_pytree_node(
         nodetype=cls, 
-        flatten_func=flatten, 
-        unflatten_func=unflatten
+        flatten_func=_flatten, 
+        unflatten_func=_unflatten
     )
     return cls
 
@@ -207,7 +210,14 @@ _register_static_pytree(Params)
 
 
 def logistic_response_function(reproductive_number: float, params: Params, number_infected: float):
-    """Logistic response function of the reproductive number for the wastewater warning response."""
+    """
+    Logistic response function of the reproductive number for the wastewater warning response.
+    The response scales the transmission rate by f = 1 - epsilon_w * gate_W * gate_I,
+    where each gate is a logistic function:
+        gate_W = sigma(k * (R_est - R_crit))
+        gate_I = sigma(k_I * (I - I_crit))
+    with sigma(x) = 1 / (1 + exp(-x)).
+    """
     gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
     gate_I = jnp.where( # no effect if threshold set to 0
         params.I_crit > 0.0, 
@@ -217,5 +227,11 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
     return 1.0 - params.epsilon_w * gate_W * gate_I
 
 def calculate_r(p, phi_a, phi_p, mu_a_inv, sigma_inv, mu_s_inv, epsilon_s=0.0):
-    """Weighted infectiousness sum, R_0 / beta."""
+    """
+    Weighted infectiousness sum, r = R_0 / beta. The contribution from each type is:
+    probability of the route * relative infectiousness * mean time
+        asymptomatic   :      p  * phi_a           * (1/mu_a)
+        presymptomatic : (1 - p) * phi_p           * (1/sigma)
+        symptomatic    : (1 - p) * (1 - epsilon_s) * (1/mu_s)
+    """
     return p * phi_a * mu_a_inv + (1-p) * (phi_p * sigma_inv + (1.0 - epsilon_s) * mu_s_inv)

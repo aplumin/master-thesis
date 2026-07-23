@@ -21,6 +21,7 @@ def simulate_SEIPAR_W_Erlang(
     n_W, n_B = params.n_W, params.n_B
 
     # compartment indices
+    # S(1), E(nE), Ia(nA), Ip(nP), Is(nS), R(1), W(n_W), B(n_B)
     iIa = 1 + nE
     iIp = iIa + nA
     iIs = iIp + nP
@@ -30,6 +31,7 @@ def simulate_SEIPAR_W_Erlang(
 
     def _SEIPAR_W(t, y, params):
         # unpack compartments
+        # each infected compartment is a chain of subcompartments
         S = y[0]
         E = y[1:1 + nE]
         Ia = y[iIa:iIa + nA]
@@ -40,6 +42,7 @@ def simulate_SEIPAR_W_Erlang(
         B_out = B[-1]
 
         # weighted force of infection
+        # relative infectiousness * subcompartment weights * subcompartment vector
         infectious = (
             params.phi_a * jnp.dot(params.w_a, Ia) + 
             params.phi_p * jnp.dot(params.w_p, Ip) + 

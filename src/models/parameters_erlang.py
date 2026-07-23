@@ -1,5 +1,6 @@
 """
-Parameters for the compartmental model with linear chain Erlang infected compartments.
+Parameters for the Erlang variant of the compartmental model, in which each
+infected stage (E, Ia, Ip, Is) is a linear chain of multiple subcompartments.
 """
 
 import jax.numpy as jnp
@@ -152,10 +153,19 @@ def compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS):
     return w_p, w_s
 
 def _mean_time(t0, mean, n):
+    """
+    Mean time since infection at the midpoint of each subcompartment:
+        t0 + (i - 0.5) * mean/n for i = 1, ..., n.
+    """
     return t0 + (jnp.arange(1, n+1) - 0.5) * (mean/n)
 
 def _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0):
-    """Weighted infectiousness sum, R_0 / beta."""
+    """
+    Weighted infectiousness sum r = R_0 / beta for the Erlang model.
+    The contribution from each type is:
+    probability of the route * relative infectiousness * compartment weights * mean time.
+    The mean time per subcompartment is the total compartment chain period divided by the number of subcompartments.
+    """
     ra = p * phi_a * jnp.sum(w_a) * (mu_a_inv / nA)
     rp = (1.0 - p) * phi_p * jnp.sum(w_p) * (sigma_inv / nP)
     rs = (1.0 - p) * (1.0 - epsilon_s) * jnp.sum(w_s) * (mu_s_inv / nS)

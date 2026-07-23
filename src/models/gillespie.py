@@ -1,5 +1,9 @@
 """
-Stochastic compartmental models.
+Stochastic Gillespie versions of the compartmental models.
+
+The compartments are simulated eventwise using the Gillespie algorithm with exponential 
+waiting times and the selection of the next event proportional to their rate propensities.
+The W and B delay chains are solved analytically between events.
 """
 
 import numpy as np
@@ -7,8 +11,12 @@ from numba import njit
 
 
 @njit(cache=True)
-def _advance_chain(X, inflow, xi, dt, coeffs, scratch):
-    """X_i(t+dt) = u + sum_{j<=i} exp(-xi*dt) (xi*dt)^(i-j)/(i-j)! * (X_j(t) - u)."""
+def _chain_derivative(X, inflow, xi, dt, coeffs, scratch):
+    """
+    Integrate the linear delay chain over timestep dt:
+        X_i(t+dt) = inflow + sum_{j<=i} c_{i-j} * (X_j(t) - inflow),
+    with Poisson coefficients c_m = exp(-xi*dt) * (xi*dt)^m / m!.
+    """
     n = X.shape[0]
     for i in range(n):
         scratch[i] = X[i]
@@ -24,10 +32,12 @@ def _advance_chain(X, inflow, xi, dt, coeffs, scratch):
 
 @njit(cache=True)
 def _exponential_dt(a0):
+    """Exponential waiting time with a rate equal to the total propensity a0."""
     return -np.log(1.0 - np.random.random()) / a0
 
 @njit(cache=True)
 def _select_event(a, a0, num_reactions):
+    """Select event i with probability a[i]/a0."""
     r2 = np.random.random() * a0
     cumsum = 0.0
     for i in range(num_reactions):
@@ -38,6 +48,7 @@ def _select_event(a, a0, num_reactions):
 
 @njit(cache=True)
 def _response(W_out, Is_frac, epsilon_w, k, R_crit, k_I, I_crit):
+    """Logistic response function."""
     if I_crit > 0.0:
         gate_I = 1.0 / (1.0 + np.exp(-k_I * (Is_frac - I_crit)))
     else:
@@ -54,11 +65,14 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
     n_W = params.n_W
     n_B = params.n_B
     W_start = num_mass
-    B_start = num_mass + n_W
+    B_start = num_mass + n_W              # index where the B chain begins
     num_states = num_mass + n_W + n_B
+    # Pre-allocate output rows. An epidemic in a population of N produces at most
+    # ~4N events (each individual: S->E->...->R), so 10N + 20 rows is safe headroom.
     n_rows = int(N * 10) + 20
 
-    # initialise states
+    # Initialise counts: one exposed seed, the rest susceptible. The behavioural
+    # chain B starts at 1 (transmission unmodified) and W starts at 0 (no signal).
     current_state = np.zeros(num_states, dtype=np.float64)
     current_state[0] = float(N - 1) # S
     current_state[1] = 1.0 # E
@@ -90,12 +104,12 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
             Ia = current_state[2]
             Ip = current_state[3]
             Is = current_state[4]
-            a[0] = B_out * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * (S / N)
-            a[1] = params.p * E / params.gamma_inv
-            a[2] = (1.0 - params.p) * E / params.gamma_inv
-            a[3] = Ip / params.sigma_inv
-            a[4] = Ia / params.mu_a_inv
-            a[5] = Is / params.mu_s_inv
+            a[0] = B_out * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * (S / N)  # infection
+            a[1] = params.p * E / params.gamma_inv # E -> Ia
+            a[2] = (1.0 - params.p) * E / params.gamma_inv # E -> Ip
+            a[3] = Ip / params.sigma_inv # Ip -> Is
+            a[4] = Ia / params.mu_a_inv # Ia -> R
+            a[5] = Is / params.mu_s_inv # Is -> R
         elif model == 1: # SEIAR
             Ia = current_state[2]
             Is = current_state[3]
@@ -119,8 +133,8 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
         f_W = _response(W_out, Is / N, params.epsilon_w, params.k, params.R_crit, params.k_I, params.I_crit)
         Rt_in = params.R_0 * params.rho * B_out * (S / N)
         time_step = _exponential_dt(a0)
-        _advance_chain(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
-        _advance_chain(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
+        _chain_derivative(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
+        _chain_derivative(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
 
         # execute next event
         event_idx = _select_event(a, a0, num_reactions)

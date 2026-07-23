@@ -1,5 +1,5 @@
 """
-Uncertainty handling.
+Prior specification and Monte Carlo uncertainty handling.
 """
 
 from typing import NamedTuple, Optional, Dict, Tuple
@@ -29,7 +29,14 @@ class Marginal(NamedTuple):
         return float(_ppf(self, np.array([0.5]))[0])
 
 def _ppf(m: Marginal, u: np.ndarray):
-    """Inverse-CDF of a Marginal at uniform draws u in (0, 1)."""
+    """
+    Inverse-CDF of a Marginal at uniform draws u in (0, 1):
+      - uniform:   linear between lo and hi.
+      - normal:    mean + s*Phi^{-1}(u) 
+                   with scale s = (hi - lo)/(z_hi - z_lo) and mean = lo - s*z_lo.
+      - lognormal: same as normal in logspace.
+      - beta:      fit to mean and concentration mean*(1-mean)/sd^2 - 1.
+    """
     u = np.asarray(u, dtype=float)
     if m.lo == m.hi:
         return np.full(u.shape, float(m.lo))
@@ -107,17 +114,22 @@ def cached_sample_derived(priors: Priors, n: int = 20000, seed: int = 0):
 def epi_quantities(s: Dict[str, np.ndarray], epsilon_s: float = 0.0, epsilon_w: float = 0.0):
     """Derived epidemiological quantities."""
     R0 = s["R_0"]
-    ca = s["p"] * s["phi_a"] * s["mu_a_inv"]
-    cp = (1.0 - s["p"]) * s["phi_p"] * s["sigma_inv"]
-    cs = (1.0 - s["p"]) * s["mu_s_inv"]
-    r = ca + cp + cs
+    # infectious weights (probability * relative infectiousness * duration).
+    ra = s["p"] * s["phi_a"] * s["mu_a_inv"]
+    rp = (1.0 - s["p"]) * s["phi_p"] * s["sigma_inv"]
+    rs = (1.0 - s["p"]) * s["mu_s_inv"]
+    r = ra + rp + rs
     with np.errstate(divide="ignore", invalid="ignore"):
-        R_a = np.where(r > 0, R0 * ca/r, 0.0)
-        R_p = np.where(r > 0, R0 * cp/r, 0.0)
-        R_s = np.where(r > 0, R0 * cs/r, 0.0)
+        R_a = np.where(r > 0, R0 * ra/r, 0.0)
+        R_p = np.where(r > 0, R0 * rp/r, 0.0)
+        R_s = np.where(r > 0, R0 * rs/r, 0.0)
+        # nonsymptomatic fraction
         theta = np.where(R0 > 0, (R_a + R_p) / np.where(R0 > 0, R0, 1.0), 0.0)
+        # mean generation time
         T_g = s["gamma_inv"] + np.where(r > 0, (s["p"] * s["phi_a"] * s["mu_a_inv"]**2 + (1.0 - s["p"]) * (s["phi_p"] * s["sigma_inv"]**2 + s["mu_s_inv"]**2 + s["sigma_inv"] * s["mu_s_inv"])) / np.where(r > 0, r, 1.0), 0.0)
+        # isolation efficacy needed for R_t = 1 (eps_w = 0)
         eps_s_crit = np.where(R_s > 0, 1.0 - (1.0 - (R_a + R_p)) / np.where(R_s > 0, R_s, 1.0), np.nan)
+        # warning efficacy needed for R_t = 1 (eps_s = 0)
         eps_w_crit = 2.0 * (1.0 - 1.0 / np.where(R0 > 0, R0, np.nan)) # assuming R_crit=1
     R_t = (R_a + R_p + (1.0 - epsilon_s) * R_s) * mean_warning_multiplier(epsilon_w)
     return dict(R_a=R_a, R_p=R_p, R_s=R_s, theta=theta, T_g=T_g, eps_s_crit=eps_s_crit, eps_w_crit=eps_w_crit, R_t=R_t)
@@ -172,31 +184,4 @@ def get_epi_characteristics_dict(ps: Params):
         d[f"R_{k}"] = eq[f"R_{k}"]
         d[f"transmission_frac_{k}"] = trans_f[k]
         d[f"infectious_frac_{k}"] = inf_f[k]
-    return d
-
-_BEST_LOW = ("R_0", "sigma_inv", "mu_a_inv", "p")
-_BEST_HIGH = ("gamma_inv", "mu_s_inv")
-
-def corner_kwargs(pr, which):
-    """Best/worst-case parameter combinations."""
-    if which not in ("best", "worst"):
-        raise ValueError(which)
-    m = pr.marginals
-    low = (which == "best")
-    d = {}
-    for k in _BEST_LOW: 
-        if k in m:
-            d[k] = m[k].lo if low else m[k].hi
-    for k in _BEST_HIGH: 
-        if k in m:
-            d[k] = m[k].hi if low else m[k].lo
-    if pr.presymptomatic and m["sigma_inv"].central() > 0:
-        d["phi_p"] = (m["RR_p"].lo if low else m["RR_p"].hi) * m["mu_s_inv"].central() / m["sigma_inv"].central()
-    else:
-        d["phi_p"] = 0.0
-    if pr.asymptomatic:
-        mean_mu_a_inv = float(np.mean(cached_sample_derived(pr)["mu_a_inv"]))
-        d["phi_a"] = (m["RR_a"].lo if low else m["RR_a"].hi) * m["mu_s_inv"].central() / mean_mu_a_inv
-    else:
-        d["phi_a"] = 0.0
     return d

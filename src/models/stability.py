@@ -1,5 +1,8 @@
 """
-Stability analysis.
+Control theory stability analysis of the warning feedback loop.
+Linearising the loop around R_t = R_crit gives the open-loop transfer function:
+    L(s) = L0 * (1 + s*tau_W/n_W)^(-n_W) * (1 + s*tau_B/n_B)^(-n_B),
+with static loop gain L0 = L(0).
 """
 
 import numpy as np
@@ -12,6 +15,7 @@ import models
 
 
 def arg_L(omega, tau_W, tau_B, n_W=3, n_B=1):
+    """Phase of the open-loop transfer function, L(j*omega)."""
     return -n_W*np.arctan(omega*tau_W/n_W) - n_B*np.arctan(omega*tau_B/n_B)
 
 def _loop_gain(eps_w, k, R_crit=1.0):
@@ -19,7 +23,7 @@ def _loop_gain(eps_w, k, R_crit=1.0):
     return (eps_w * k * R_crit) / (2 * (2 - eps_w))
 
 def _characteristic_polynomial(tau_W, tau_B, eps_w, k, n_W=3, n_B=1, R_crit=1.0):
-    """pW * pB + L0 = 0."""
+    """Closed-loop characteristic polynomial pW(s) * pB(s) + L0."""
     P = np.convolve(
         np.array([comb(n_W, j) * (tau_W/n_W)**j for j in range(n_W+1)]),
         np.array([comb(n_B, j) * (tau_B/n_B)**j for j in range(n_B+1)]))
@@ -43,7 +47,7 @@ def compute_rt_grid(model, base_params, taus_W, taus_B, t1=300.0):
     return jax.vmap(jax.vmap(_rt, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
 
 def period_and_damping(t, x, t0=50.0, t1=250.0, smoothing_days=20.0, peak_threshold=0.2, T_min=4.0, T_max=200.0):
-    """Period and damping rate from trajectory."""
+    """Estimate period and damping rate from a trajectory x."""
     t_m = t[(t>t0) & (t<t1)]
     x_m = x[(t>t0) & (t<t1)]
     dt = float(t_m[1] - t_m[0])

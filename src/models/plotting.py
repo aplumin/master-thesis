@@ -155,9 +155,10 @@ def plot_trajectory(
     # final size
     if not no_decomp:
         def calculate_final_size(R0):
-            def final_size_equation(Z): 
+            """1 - Z = exp(-R0*Z)."""
+            def _fs(Z): 
                 return 1-Z-np.exp(-R0*Z)
-            return fsolve(final_size_equation, x0=0.5)[0]
+            return fsolve(_fs, x0=0.5)[0]
         final_size = calculate_final_size(params.R_0)
         ax_main.axhline(final_size, label=r'$I_\text{tot}=$'+f'{final_size:.2f}', color='grey', linestyle='--')
     
@@ -372,7 +373,7 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     lines_2, labels_2 = ax_hist.get_legend_handles_labels()
     ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc='best', fontsize=9)
 
-def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, eps_w, path, res, pathogens, colors, parameters, best_params_kwargs, worst_params_kwargs):
+def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, eps_w, path, res, pathogens, colors, parameters, R0_lo, R0_hi):
     t = np.arange(0, 50, dt)
     fig, axes = plt.subplots(3, 2, figsize=(14, 12), width_ratios=(1,2))
     # Reporting delay
@@ -419,8 +420,8 @@ def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, e
     
     for p in pathogens:
         x_m, y_m, z_m = total_response(parameters[p].R_0)
-        x_l, y_l, z_l = total_response(best_params_kwargs[p]["R_0"])
-        x_h, y_h, z_h = total_response(worst_params_kwargs[p]["R_0"])
+        x_l, y_l, z_l = total_response(R0_lo[p])
+        x_h, y_h, z_h = total_response(R0_hi[p])
         color = colors[p]
         axes[0, 1].plot(t, x_m, color=color, linewidth=2, label=p)
         axes[0, 1].fill_between(t, x_l, x_h, color=color, alpha=0.2)

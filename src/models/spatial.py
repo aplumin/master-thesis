@@ -98,6 +98,7 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
     N_A = spatial_params.N_A
     N_B = 1.0 - N_A
     m_AB = spatial_params.m
+    # back migration s.t. pop sizes stay constant: m_BA = m_AB * N_A / N_B
     m_BA = _div(spatial_params.m * N_A, N_B)
 
     def _rhs(t, y, args):
@@ -111,17 +112,17 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
             B_B = y[i:i + n_B]; i += n_B
 
         B_out_A = B_A[-1]
-        if response_in_B_to_A:
+        if response_in_B_to_A: # B responds to warnings in A
             B_out_B = B_A[-1]
-        elif ww_in_B:
+        elif ww_in_B: # B has own surveillance
             B_out_B = B_B[-1]
-        else:
+        else: # B has no behavioural response
             B_out_B = jnp.ones_like(B_out_A)
 
         prev_A = tuple(_div(X_A[j], N_A) for j in infectious_idx)
         prev_B = tuple(_div(X_B[j], N_B) for j in infectious_idx)
 
-        migration = m_BA * X_B - m_AB * X_A
+        migration = m_BA * X_B - m_AB * X_A # net migration into A
         dX_A = local_fn(X_A, prev_A, B_out_A, ps) + migration
         dX_B = local_fn(X_B, prev_B, B_out_B, ps) - migration
         dFlow = jnp.concatenate([dX_A, dX_B])
