@@ -386,3 +386,21 @@ def plot_flows(df, gdf):
     cbar.set_label('weekday/weekend ratio')
     ax.set_axis_off()
     return fig, ax
+
+def get_canton_pair_stats(df, canton_str, weekday_type, holiday_type):
+    """
+    Return list of mean m and N_A values. canton_str contains 2-letter abbreviations, where
+    the pairs are separated by an underspace, and the cantons within a pair are not separated.
+    """
+    m_list = []
+    N_A_list = []
+    for pair in canton_str.split("_"):
+        A, B = pair[:2], pair[2:]
+        df_filtered = df[(df.origin_name==A) & (df.destination_name==B) & (df.weekday_type==weekday_type) & (df.holiday_type==holiday_type)]
+        df_reverse = df[(df.origin_name==B) & (df.destination_name==A) & (df.weekday_type==weekday_type) & (df.holiday_type==holiday_type)]
+        N_A = df_filtered.N_A.to_numpy()[0]
+        m_AB = df_filtered.m.to_numpy()
+        m_BA = df_reverse.m.to_numpy() * (1-N_A) / N_A
+        m_list.append(np.mean(np.concatenate([m_AB, m_BA])))
+        N_A_list.append(N_A)
+    return m_list, N_A_list

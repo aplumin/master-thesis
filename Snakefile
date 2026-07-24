@@ -28,7 +28,7 @@ from models.metrics import (
 )
 from models.spatial import (
     simulate_SEIPAR_W_spatial, simulate_SEIR_W_spatial, SpatialParams, run_spatial, unpack_spatial,
-    load_and_preprocess_phone_data, plot_flows,
+    load_and_preprocess_phone_data, plot_flows, get_canton_pair_stats,
 )
 from models.sensitivity import (
     SensitivityResults, run_sensitivity_analysis, partial_rank_residuals, 
@@ -155,10 +155,18 @@ INTERVENTION_SCENARIOS = {
     "Ebola": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
 }
 
+# Spatial
+CANTON_PAIRS = "ZHAG_ZHBS_ZHGR_AGBS"
+HOLIDAY_TYPES = ['workday', 'summer', 'christmas']
+
 # Files
 IMAGE_RESOLUTION = 300
 OUTDIR = "results"
 DATADIR = "data"
+
+LINESTYLES = ['-','--', '-.', ':']
+PALETTE = sns.color_palette("colorblind")
+MARKERS = ["o", "s", "^", "D", "v", "p", "*", "P"]
 
 
 ###############################################
@@ -239,7 +247,7 @@ rule plot_nonlinear_response_analysis:
             R0_lo={pathogen: PRIORS[pathogen].marginals["R_0"].lo for pathogen in PATHOGENS}, 
             R0_hi={pathogen: PRIORS[pathogen].marginals["R_0"].hi for pathogen in PATHOGENS},
         )
-        
+
 
 ###############################################
 # INTERVENTIONS
@@ -1570,16 +1578,14 @@ rule plot_alternative_warning_strategies_eps_w:
                 T_lead_on = tl > 1e-3
                 data[s][:, i] = jnp.unstack(strategy_metrics(tau_W=ps.tau_W, tau_B=ps.tau_B, model=model, base_params=ps, t1=t1, asymmetric=asym, discrete_eval=disc, check_interval=ci))
 
-        strat_colors = dict(zip(STRATEGIES, sns.color_palette("colorblind", len(STRATEGIES))))
-        linestyles = dict(zip(STRATEGIES, ['-','--', '-.', ':']))
         fig, axs = plt.subplots(ncols=nM, nrows=1, figsize=(20, 4), sharex=True)
         for r in range(nM):
             ax = axs[r]
-            for s in STRATEGIES: 
+            for i, s in enumerate(STRATEGIES): 
                 y = data[s][r] / baseline[r]
                 if r==3 and s=="asymmetric":
                     print(np.argmax(y > 0.1))
-                ax.plot(eps_ww, y, linestyle=linestyles[s], label=s, color=strat_colors[s], lw=2, alpha=0.8)
+                ax.plot(eps_ww, y, linestyle=LINESTYLES[i], label=s, color=PALETTE[i], lw=2, alpha=0.8)
             if r==0: ax.axhline(1.0, c='k', lw=1)
             ax.set_title(METRIC_NAMES[r], fontsize=12)
             ax.set_xlim(0.0, 1.0)
@@ -1848,21 +1854,26 @@ rule plot_spatial_trajectories:
 
 rule plot_Rt_spatial:
     output:
-        plot="{outdir}/spatial/Rt_spatial.png",
+        plot="{outdir}/spatial/Rt_spatial_{canton_pairs}.png",
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         pathogen = "SARS-CoV-2"
         t1 = 700.0
-        m_values = [0.0, 0.001, 0.01]
-        N_A_values = [0.0, 0.1, 0.5, 0.9]
         response_in_B_to_A = True
         epi_params = PARAMETERS[pathogen].update(epsilon_w=0.4)
 
+        pair_list = wildcards.canton_pairs.split("_")
+        df, _ = load_and_preprocess_phone_data(
+            data_path = f'{DATADIR}/phones_CH/swiss_travellers_phones.feather', 
+            geo_path = f'{DATADIR}/map_CH/swissBOUNDARIES3D_1_5_TLM_KANTONSGEBIET.shp'
+        )
+        
+        # columns are canton pairs, rows are holiday_types
         sns.set_theme(style="white", rc={"axes.grid": False})
-        fig, axs = plt.subplots(nrows=len(m_values), ncols=len(N_A_values), figsize=(12, 8), sharex=True, sharey=True)
-
-        for i, m in enumerate(m_values):
-            for j, N_A in enumerate(N_A_values):
+        fig, axs = plt.subplots(nrows=len(HOLIDAY_TYPES), ncols=len(pair_list), figsize=(12, 8), sharex=True, sharey=True)
+        for i, ht in enumerate(HOLIDAY_TYPES):
+            m_list, N_A_list = get_canton_pair_stats(df, wildcards.canton_pairs, 'weekday', ht)
+            for j, (m, N_A) in enumerate(zip(m_list, N_A_list)):
                 spatial_params = SpatialParams(epi_params=epi_params, m=m, N_A=N_A)
                 tt, yy = SPATIAL_MODELS[pathogen](spatial_params=spatial_params, t1=t1, primary_in_A=False, response_in_B_to_A=response_in_B_to_A)
                 c = unpack_spatial(yy, epi_params, model=MODEL_NAMES[pathogen], response_in_B_to_A=response_in_B_to_A)
@@ -1870,19 +1881,21 @@ rule plot_Rt_spatial:
                 rt_A = jnp.where(N_A > 0.0, epi_params.R_0 * epi_params.rho * c["B_A"][:, -1] * c["S_A"] / N_A, jnp.nan)
                 rt_B = jnp.where(N_B > 0.0, epi_params.R_0 * epi_params.rho * c["B_B"][:, -1] * c["S_B"] / N_B, jnp.nan)
                 rt_reported = c["W_A"][:, -1]
+                rt_diff = jnp.mean(jnp.abs(rt_A - rt_B)) * 100
 
                 ax = axs[i,j]
-                if j == 0: ax.set_ylabel(f'$m={m}$', fontsize=16)
-                if i == 0: ax.set_title(f'$N_A={N_A}$', fontsize=16)
+                if j == 0: ax.set_ylabel(ht, fontsize=16)
+                if i == 0: ax.set_title(f"{pair_list[j][:2]} to {pair_list[j][2:]}", fontsize=16)
                 ax.set_xticks([])
                 ax.plot(tt, rt_A, color='blue', alpha=0.8)
                 ax.plot(tt, rt_B, color='red', alpha=0.8)
                 ax.plot(tt, rt_reported, color='black', alpha=0.8)
                 ax.axhline(epi_params.R_crit, color='grey', linestyle='--')
+                ax.text(250,1.7,rf"$m=${m:.4f}"+"\n"+rf"$N_A=${N_A:.4f}"+"\n"+"$\\Delta\\mathcal{R}_t=$"+rf"{rt_diff:.4f}%")
 
         fig.legend(
             [Line2D([0], [0], color='blue', lw=2), Line2D([0], [0], color='red', lw=2), Line2D([0], [0], color='black', lw=2)],
-            ['True $R_t$ in A', 'True $R_t$ in B', 'Reported $R_t$'],
+            ['True $\\mathcal{R}_t$ in A', 'True $\\mathcal{R}_t$ in B', 'Reported $\\mathcal{R}_t$'],
             loc='lower center', ncol=3, bbox_to_anchor=(0.5, 0.02), fontsize=16,
         )
         plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close()
@@ -1922,12 +1935,26 @@ rule plot_Rt_divergence_heatmap:
         ax.set_title("Mean difference in $\\mathcal{R}_t$ between demes, "+pathogen, fontsize=12)
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("average $\\mathcal{R}_t$ difference")
+
+        # plot canton pairs
+        df, _ = load_and_preprocess_phone_data(
+            data_path = f'{DATADIR}/phones_CH/swiss_travellers_phones.feather', 
+            geo_path = f'{DATADIR}/map_CH/swissBOUNDARIES3D_1_5_TLM_KANTONSGEBIET.shp'
+        )
+        pairs = CANTON_PAIRS.split("_")
+        for j, ht in enumerate(HOLIDAY_TYPES):
+            m_list, N_A_list = get_canton_pair_stats(df, CANTON_PAIRS, 'weekday', ht)
+            for i, (m, N_A) in enumerate(zip(m_list, N_A_list)):
+                plt.scatter(m, N_A, color=PALETTE[i], marker=MARKERS[j], alpha=0.5)
+        color_handles = [Patch(facecolor=PALETTE[i], label=f"{pair[:2]} to {pair[2:]}") for i, pair in enumerate(pairs)]
+        marker_handles = [Line2D([0], [0], marker=MARKERS[j], color="grey", label=ht) for j, ht in enumerate(HOLIDAY_TYPES)]
+        plt.legend(handles=color_handles+marker_handles, loc="lower right")
         plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
         plt.close()
 
 rule plot_migration:
     output:
-        plot="{outdir}/compartmental/migration.png",
+        plot="{outdir}/spatial/migration.png",
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         df, gdf = load_and_preprocess_phone_data(
@@ -2020,7 +2047,7 @@ rule all:
         expand(rules.derived_epi_characteristics.output, outdir=OUTDIR),
         expand(rules.baseline_intervention_table.output, outdir=OUTDIR),
         expand(rules.plot_Rt_divergence_heatmap.output, outdir=OUTDIR, pathogen=PATHOGENS),
-        expand(rules.plot_Rt_spatial.output, outdir=OUTDIR),
+        expand(rules.plot_Rt_spatial.output, outdir=OUTDIR, canton_pairs=CANTON_PAIRS),
         expand(rules.plot_spatial_heatmaps.output, outdir=OUTDIR),
         expand(rules.plot_spatial_trajectories.output, outdir=OUTDIR),
         expand(rules.plot_alternative_warning_strategies_eps_w.output, outdir=OUTDIR, pathogen=PATHOGENS),
