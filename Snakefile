@@ -26,7 +26,10 @@ from models.metrics import (
     outcome_metrics, compute_metrics, compute_R_grid, compute_asymptomatic_grid_Rt, compute_delay_metrics_grid,
     calculate_mt_branching_q, calculate_mt_branching_q_with_superspreading, strategy_metrics, strategy_grid, R_boundary,
 )
-from models.spatial import simulate_SEIPAR_W_spatial, simulate_SEIR_W_spatial, SpatialParams, run_spatial, unpack_spatial
+from models.spatial import (
+    simulate_SEIPAR_W_spatial, simulate_SEIR_W_spatial, SpatialParams, run_spatial, unpack_spatial,
+    load_and_preprocess_phone_data, plot_flows,
+)
 from models.sensitivity import (
     SensitivityResults, run_sensitivity_analysis, partial_rank_residuals, 
     load_sensitivity_results, export_sensitivity_bounds, param_symbol, ordered_params,
@@ -155,6 +158,7 @@ INTERVENTION_SCENARIOS = {
 # Files
 IMAGE_RESOLUTION = 300
 OUTDIR = "results"
+DATADIR = "data"
 
 
 ###############################################
@@ -1921,6 +1925,19 @@ rule plot_Rt_divergence_heatmap:
         plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
         plt.close()
 
+rule plot_migration:
+    output:
+        plot="{outdir}/compartmental/migration.png",
+    run:
+        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
+        df, gdf = load_and_preprocess_phone_data(
+            data_path = f'{DATADIR}/phones_CH/swiss_travellers_phones.feather', 
+            geo_path = f'{DATADIR}/map_CH/swissBOUNDARIES3D_1_5_TLM_KANTONSGEBIET.shp'
+        )
+        fig, ax = plot_flows(df, gdf)
+        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
+        plt.close()
+
 
 rule plot_infectiousness_distributions:
     output:
@@ -1996,6 +2013,7 @@ rule plot_infectiousness_distributions:
 ###############################################
 rule all:
     input:
+        expand(rules.plot_migration.output, outdir=OUTDIR),
         expand(rules.plot_crossings.output, outdir=OUTDIR),
         expand(rules.plot_infectiousness_distributions.output, outdir=OUTDIR),
         expand(rules.alternative_warning_strategies_table.output, outdir=OUTDIR, pathogen=PATHOGENS),

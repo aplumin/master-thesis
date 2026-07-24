@@ -4,6 +4,16 @@ Spatial metapopulation model with two demes.
 
 import jax
 import jax.numpy as jnp
+
+import numpy as np
+from pyarrow import feather
+import geopandas as gpd
+import datetime
+
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.patches import FancyArrowPatch
+
 from functools import partial
 from typing import NamedTuple
 
@@ -247,3 +257,132 @@ def run_spatial(N_A, m, epi_params: Params = None, response_in_B_to_A=False, mod
     peak_A = jnp.max(_div(inf_A, N_A))
     peak_B = jnp.max(_div(inf_B, N_B))
     return Itot_A, Itot_B, peak_A, peak_B, d["R_A"][-1] + d["R_B"][-1]
+
+
+CANTON_NAME_DICT = {
+    'Aargau': 'AG',
+    'Appenzell Ausserrhoden': 'AR',
+    'Appenzell Innerrhoden': 'AI',
+    'Basel Landschaft': 'BL',
+    'Basel Stadt': 'BS',
+    'Basel-Landschaft': 'BL',
+    'Basel-Stadt': 'BS',
+    'Bern': 'BE',
+    'Fribourg': 'FR',
+    'Geneve': 'GE',
+    'Genève': 'GE',
+    'Glarus': 'GL',
+    'Graubuenden': 'GR',
+    'Graubünden': 'GR',
+    'Jura': 'JU',
+    'Luzern': 'LU',
+    'Neuchatel': 'NE',
+    'Neuchâtel': 'NE',
+    'Nidwalden': 'NI',
+    'Obwalden': 'OB',
+    'Schaffhausen': 'SH',
+    'Schwyz': 'SZ',
+    'Solothurn': 'SO',
+    'St Gallen': 'SG',
+    'St. Gallen': 'SG',
+    'Thurgau': 'TH',
+    'Ticino': 'TI',
+    'Uri': 'UR',
+    'Valais': 'VS',
+    'Vaud': 'VD',
+    'Zug': 'ZU',
+    'Zurich': 'ZH',
+    'Zürich': 'ZH',
+}
+
+def _load_and_preprocess_map(path):
+    """Data from the Federal Office of Topography swisstopo."""
+    gdf = gpd.read_file(path)
+    gdf.NAME = gdf.NAME.map(CANTON_NAME_DICT)
+    gdf['midpoint'] = gdf.geometry.centroid
+    return gdf
+
+def _get_pop_sizes(gdf):
+    return {name: gdf[gdf['NAME']==name].EINWOHNERZ.to_numpy()[0] for name in gdf.NAME.to_list()}
+
+def _holiday_ZH_map(d):
+    return 'summer' if (
+        (d >= datetime.date(2022,7,16) and d <= datetime.date(2022,8,21) or 
+        (d >= datetime.date(2023,7,15) and d <= datetime.date(2023,8,20)) or 
+        (d >= datetime.date(2024,7,13) and d <= datetime.date(2024,8,18)))
+    ) else 'christmas' if (
+        (d >= datetime.date(2021,12,23) and d <= datetime.date(2022,1,2)) or
+        (d >= datetime.date(2022,12,23) and d <= datetime.date(2023,1,8)) or
+        (d >= datetime.date(2023,12,23) and d <= datetime.date(2024,1,3))
+    ) else 'winter' if (
+        (d >= datetime.date(2022,2,12) and d <= datetime.date(2022,2,27)) or
+        (d >= datetime.date(2023,2,11) and d <= datetime.date(2023,2,26)) or
+        (d >= datetime.date(2024,2,10) and d <= datetime.date(2024,2,25))
+    ) else 'workday'
+
+def load_and_preprocess_phone_data(data_path, geo_path):
+    df = feather.read_feather(data_path)
+    gdf = _load_and_preprocess_map(geo_path)
+
+    df.origin_name = df.origin_name.map(CANTON_NAME_DICT)
+    df.destination_name = df.destination_name.map(CANTON_NAME_DICT)
+
+    df['holiday_type'] = df['date'].map(_holiday_ZH_map)
+    pop_sizes = _get_pop_sizes(gdf)
+    df['pop_origin'] = df.origin_name.map(pop_sizes)
+    df['pop_destination'] = df.destination_name.map(pop_sizes)
+    df['m'] = df.total_travellers / df.pop_origin
+    df['weekday_type'] = np.where(df.day_type == 'WK Day', 'weekday', 'weekend')
+
+    final_df = final_df = df.groupby(
+        ['origin_name', 'destination_name', 'weekday_type', 'holiday_type'], as_index=False
+    ).agg(m=('m', 'mean'), count=('day_type', 'count'))
+    pivot_df = final_df.pivot(index=['origin_name', 'destination_name', 'holiday_type'], columns='weekday_type', values='m').reset_index()
+    pivot_df['ratio'] = (pivot_df['weekday'] / pivot_df['weekend'].replace(0, np.nan)).fillna(1.0)
+    final_df = final_df.merge(pivot_df[['origin_name', 'destination_name', 'holiday_type', 'ratio']], on=['origin_name', 'destination_name', 'holiday_type'], how='left')
+    final_df['pop_origin'] = final_df.origin_name.map(pop_sizes)
+    final_df['pop_destination'] = final_df.destination_name.map(pop_sizes)
+    final_df['N_A'] = final_df.pop_origin / (final_df.pop_origin + final_df.pop_destination)
+
+    midpoints = gpd.GeoSeries(gdf.set_index('NAME')['midpoint'])
+    x_map = midpoints.x.to_dict()
+    y_map = midpoints.y.to_dict()
+    midpoint_map = midpoints.to_dict()
+    final_df['start_x'] = final_df.origin_name.map(x_map)
+    final_df['start_y'] = final_df.origin_name.map(y_map)
+    final_df['end_x'] = final_df.destination_name.map(x_map)
+    final_df['end_y'] = final_df.destination_name.map(y_map)
+    final_df['distance'] = gpd.GeoSeries(final_df.origin_name.map(midpoint_map)).distance(gpd.GeoSeries(final_df.destination_name.map(midpoint_map)))
+
+    return final_df, gdf
+
+def plot_flows(df, gdf):
+    """
+    Plot mean flows during working days and outside holidays.
+    The arrow colour is the ratio of weekday/weekend migration.
+    The background is the internal migration rate.
+    """
+    fig, ax = plt.subplots(figsize=(12, 8))
+    df = df[df.weekday_type=='weekday']
+    df = df[df.holiday_type=='workday']
+    internal_flows = df[df['origin_name'] == df['destination_name']]
+    gdf['internal_m'] = gdf['NAME'].map(dict(zip(internal_flows['origin_name'], internal_flows['m'])))
+    gdf.plot(ax=ax, column='internal_m', cmap='Greys')
+
+    vmin = df['ratio'].min()
+    vmax = df['ratio'].max()
+    norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
+    cmap = plt.get_cmap('RdBu_r')
+
+    max_magnitude = df['m'].max()
+    max_linewidth = 20.0
+    for i, row in df.iterrows():
+        lw = (row['m'] / max_magnitude) * max_linewidth 
+        posA = [row['start_x'], row['start_y']]
+        posB = [row['end_x'], row['end_y']]
+        ax.add_patch(FancyArrowPatch(posA=posA, posB=posB, arrowstyle='-|>', mutation_scale=lw * 4, linewidth=lw, color=cmap(norm(row['ratio'])), alpha=0.75, connectionstyle='arc3,rad=0.2'))
+
+    cbar = fig.colorbar(plt.cm.ScalarMappable(cmap=cmap, norm=norm), ax=ax, shrink=0.6)
+    cbar.set_label('weekday/weekend ratio')
+    ax.set_axis_off()
+    return fig, ax
