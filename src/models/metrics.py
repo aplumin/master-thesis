@@ -71,15 +71,33 @@ def rt_amplitude(tt, rt_true, window: str = "initial"):
         return jnp.max(jnp.where(final, rt_true, -jnp.inf)) - jnp.min(jnp.where(final, rt_true, jnp.inf))
     raise ValueError(window)
 
-def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, max_window=10.0):
-    """Average Rt after policy interventions trigger but before susceptible depletion."""
+def _oscillation_period(tt, f, t_a, t_b, T_min=4.0, T_max=200.0, peak_threshold=0.2):
+    """First local maximum of the normalised autocorrelation of f - <f> over [t_a, t_b]."""
+    dt = tt[1] - tt[0]
+    interval = (tt >= t_a) & (tt <= t_b)
+    x = jnp.where(interval, f, 0.0)
+    x = x - jnp.sum(x) / jnp.maximum(jnp.sum(interval), 1)
+    ac = jnp.correlate(x, x, mode="full")[x.shape[0] - 1:]
+    ac = ac / jnp.maximum(ac[0], 1e-30)
+    lag = jnp.arange(ac.shape[0]) * dt
+    peak = (ac[1:-1] > ac[:-2]) & (ac[1:-1] > ac[2:]) & (ac[1:-1] > peak_threshold)
+    in_range = (lag[1:-1] >= T_min) & (lag[1:-1] <= T_max)
+    max_idx = jnp.argmax(peak & in_range)
+    return jnp.where(jnp.any(peak & in_range), lag[1:-1][max_idx], jnp.nan)
+
+def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, max_window=10.0, max_periods=10):
+    """Average Rt after interventions take effect but before susceptible depletion."""
     t_I_crit = _get_crossing(tt, Is, params.I_crit, rising=True, fallback=tt[jnp.argmax(Is)])
     sd = jnp.sqrt(params.tau_W**2 / params.n_W + params.tau_B**2 / params.n_B)
     t_0 = jnp.clip(t_I_crit + params.tau_W + params.tau_B + 2.0 * sd, tt[0], tt[-1])
     # only look for depletion after t_0
     t_depleted = _get_crossing(tt, -jnp.where(tt >= t_0, S, S[0]), -(1.0 - delta_dep) * S[0], rising=True, fallback=tt[-1])
     t_1 = jnp.clip(jnp.minimum(t_depleted, max_window * t_0), t_0, tt[-1])
-    return _window_mean(tt, rt_true, t_0, t_1)
+    # average over whole oscillation periods
+    T_osc = _oscillation_period(tt, rt_true, t_0, t_1)
+    m = jnp.clip(jnp.floor((t_1 - t_0) / T_osc), 0.0, float(max_periods))
+    t_end = jnp.where(jnp.isfinite(T_osc) & (m >= 1.0), t_0 + m * T_osc, t_1)
+    return _window_mean(tt, rt_true, t_0, t_end)
 
 def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window="initial", n_S=1):
     """Compute outcome metrics from model trajectories."""
