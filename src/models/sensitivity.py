@@ -31,8 +31,8 @@ PARAM_LABELS = {
     "sigma_inv": (r"$1/\sigma$", "presymptomatic period"),
     "mu_s_inv": (r"$1/\mu_s$", "symptomatic period"),
     "p": (r"$p$", "proportion asymptomatic"),
-    "RR_a": (r"$\mathcal{R}_a/\mathcal{R}_s$", "asymptomatic infectiousness ratio"),
-    "RR_p": (r"$\mathcal{R}_p/\mathcal{R}_s$", "presymptomatic infectiousness ratio"),
+    "RR_a": (r"$\mathrm{RR}_a$", "asymptomatic risk ratio"),
+    "RR_p": (r"$\mathrm{RR}_p$", "presymptomatic risk ratio"),
     "epsilon_s": (r"$\varepsilon_s$", "isolation efficacy"),
     "epsilon_w": (r"$\varepsilon_w$", "warning response efficacy"),
     "tau_W": (r"$\tau_W$", "reporting delay"),
@@ -191,7 +191,7 @@ def _partial_rank_corr_coeff(X, y):
 
 def _prcc_fisher_ci(r, n, d, alpha=0.05):
     """
-    Confidence interval for a PRCC via the Fisher z-transform (Eq. 10, Merino et al. 2008).
+    Confidence interval for a PRCC via the Fisher z-transform (Eq. 10, Marino et al. 2008).
     z = arctanh(r), z approx. normal with SE 1/sqrt(n - (d - 1) - 3) and n samples, d params.
     """
     df = max(n - (d - 1) - 3, 1)

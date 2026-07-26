@@ -295,6 +295,9 @@ CANTON_NAME_DICT = {
     'Zürich': 'ZH',
 }
 
+
+ALL_ZH_PAIRS = "_".join(f"ZH{CANTON_NAME_DICT[name]}" for name in list(CANTON_NAME_DICT))
+
 def _load_and_preprocess_map(path):
     """Data from the Federal Office of Topography swisstopo."""
     gdf = gpd.read_file(path)

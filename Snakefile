@@ -28,7 +28,7 @@ from models.metrics import (
 )
 from models.spatial import (
     simulate_SEIPAR_W_spatial, simulate_SEIR_W_spatial, SpatialParams, run_spatial, unpack_spatial,
-    load_and_preprocess_phone_data, plot_flows, get_canton_pair_stats,
+    load_and_preprocess_phone_data, plot_flows, get_canton_pair_stats, ALL_ZH_PAIRS,
 )
 from models.sensitivity import (
     SensitivityResults, run_sensitivity_analysis, partial_rank_residuals, 
@@ -145,8 +145,9 @@ PRCC_OUTCOME_TITLES = {'Rt': r'$\mathcal{R}_t$', 'Itot': r'$I_\text{tot}$'}
 R_OFF = 0.8
 EVAL_INTERVAL = 14.0
 T_LEAD = 7.0
-STRATEGIES = {"baseline": (False, False, 0.0, 1.0), "lead": (False, False, T_LEAD, 1.0),
-    "interval": (False, True, 0.0, 1.0), "asymmetric": (True, False, 0.0, 0.1)}
+CHECK_INTERVAL = 0.1
+STRATEGIES = {"baseline": (False, False, 0.0, CHECK_INTERVAL), "lead": (False, False, T_LEAD, CHECK_INTERVAL),
+              "interval": (False, True,  0.0, CHECK_INTERVAL), "asymmetric": (True,  False, 0.0, CHECK_INTERVAL)}
 METRIC_NAMES = ["$\\mathcal{R}_t$", "total number of infections", "symptomatic peak", "steady-state $\\mathcal{R}_t$ amplitude", "time above $\\mathcal{R}_{crit}$", "total contact reduction cost"]
 METRIC_BOUNDS = [(0.0, 3.0), (0.0, 1.25), (0.0, 300.0), (0.0, 175.0), (0.0, 0.0005), (0.0, 0.000025)]
 INTERVENTION_SCENARIOS = {
@@ -165,7 +166,7 @@ OUTDIR = "results"
 DATADIR = "data"
 
 LINESTYLES = ['-','--', '-.', ':']
-PALETTE = sns.color_palette("colorblind")
+PALETTE = sns.color_palette("colorblind", 1024)
 MARKERS = ["o", "s", "^", "D", "v", "p", "*", "P"]
 
 
@@ -969,6 +970,8 @@ rule plot_true_vs_reported_Rt_heatmaps:
                 norm = LogNorm(vmin=np.max([vmin,1]), vmax=np.max([vmax,1]))
             else:
                 norm = Normalize(vmin=vmin, vmax=vmax)
+
+            
 
             # meshgrid
             fig, ax = plt.subplots(figsize=(6,6))
@@ -1941,16 +1944,30 @@ rule plot_Rt_divergence_heatmap:
             data_path = f'{DATADIR}/phones_CH/swiss_travellers_phones.feather', 
             geo_path = f'{DATADIR}/map_CH/swissBOUNDARIES3D_1_5_TLM_KANTONSGEBIET.shp'
         )
-        pairs = CANTON_PAIRS.split("_")
+        all_pairs = list(set(ALL_ZH_PAIRS.split("_")))
+        all_pairs.append("AGBS")
+        pair_string = "_".join(pair for pair in all_pairs)
+        selected_pairs = CANTON_PAIRS.split("_")
+        colors = []
+        j = 0
+        for i in range(len(all_pairs)):
+            if all_pairs[i] in selected_pairs:
+                colors.append(PALETTE[j])
+                j += 1
+            else: colors.append("white")
+
         for j, ht in enumerate(HOLIDAY_TYPES):
-            m_list, N_A_list = get_canton_pair_stats(df, CANTON_PAIRS, 'weekday', ht)
+            m_list, N_A_list = get_canton_pair_stats(df, pair_string, 'weekday', ht)
             for i, (m, N_A) in enumerate(zip(m_list, N_A_list)):
-                plt.scatter(m, N_A, color=PALETTE[i], marker=MARKERS[j], alpha=0.5)
-        color_handles = [Patch(facecolor=PALETTE[i], label=f"{pair[:2]} to {pair[2:]}") for i, pair in enumerate(pairs)]
+                plt.scatter(m, N_A, color=colors[i], marker=MARKERS[j], alpha=0.5, sizes=[40 if all_pairs[i] in selected_pairs else 10])
+        color_handles = []
+        for i, pair in enumerate(all_pairs):
+            if colors[i]!="white": color_handles.append(Patch(facecolor=colors[i], label=f"{pair[:2]} to {pair[2:]}"))
         marker_handles = [Line2D([0], [0], marker=MARKERS[j], color="grey", label=ht) for j, ht in enumerate(HOLIDAY_TYPES)]
         plt.legend(handles=color_handles+marker_handles, loc="lower right")
         plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
         plt.close()
+
 
 rule plot_migration:
     output:
@@ -2007,7 +2024,7 @@ rule plot_infectiousness_distributions:
         plt.plot(tt, g_chain_flat, lw=2.2, color=colors[2], label=f'SEIPAR-LCT (mean {m_chain_flat:.1f})')
         plt.fill_between(tt, g_chain_flat, color=colors[2], alpha=0.15)
 
-        w_p, w_s = compute_weights(ps.gamma_inv, ps.sigma_inv, ps.mu_s_inv, shape, scale, nP, nS)
+        w_p, w_s = compute_weights(ps.gamma_inv, ps.sigma_inv, ps.mu_s_inv, shape, scale, nP, nS, ps.phi_p)
         g_weighted, m_weighted = generation_time(nE, nP, nS, w_p, w_s)
         plt.plot(tt, g_weighted, lw=2.2, color=colors[0], label=f'SEIPAR-LCT weighted (mean {m_weighted:.1f})')
         plt.fill_between(tt, g_weighted, color=colors[0], alpha=0.2)
