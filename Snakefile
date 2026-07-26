@@ -34,7 +34,7 @@ from models.sensitivity import (
     SensitivityResults, run_sensitivity_analysis, partial_rank_residuals, 
     load_sensitivity_results, export_sensitivity_bounds, param_symbol, ordered_params,
 )
-from models.stability import arg_L, dominant_pole, compute_rt_grid, period_and_damping, gain_margin, delay_margin
+from models.stability import arg_L, dominant_pole, compute_rt_grid, period_and_damping, gain_margin, delay_margin, loop_gain
 from models.gillespie import gillespie_SEIPAR_W
 from models.superspreading import gillespie_SEIPAR_W_superspreading, simulate_superspreading_outcomes
 from models.plotting import (
@@ -120,6 +120,7 @@ P_CI = {p: _joint[p]["p"][1:] for p in ASYMPTOMATIC_PATHOGENS}
 PHI_A_CI = {p: _joint[p]["phi_a"][1:] for p in ASYMPTOMATIC_PATHOGENS}
 DISPERSION_SC2 = 0.4
 EPSILON_S = 0.8
+EPSILON_W = 0.8
 E0 = 1e-6
 PARAMETERS = {p: params_from_priors(PRIORS[p]) for p in PATHOGENS}
 Rt_TIMES = {"SARS-CoV-2": 50.0, "H1N1": 100.0, "Ebola": 100.0, "Omicron": 50.0, "Measles": 50.0, "Dengue": 50.0, "Rhino": 50.0}
@@ -970,8 +971,8 @@ rule plot_true_vs_reported_Rt_heatmaps:
                 norm = LogNorm(vmin=np.max([vmin,1]), vmax=np.max([vmax,1]))
             else:
                 norm = Normalize(vmin=vmin, vmax=vmax)
-
             
+            # TODO: same style with plot_heatmap as above
 
             # meshgrid
             fig, ax = plt.subplots(figsize=(6,6))
@@ -997,29 +998,50 @@ rule plot_true_vs_reported_Rt_heatmaps:
 ### CONTROL THEORY ###
 rule plot_gain_margins:
     output:
-        plot="{outdir}/compartmental/gain_margins.png"
+        plot="{outdir}/compartmental/gain_margins_{pathogen}_vary_{scenario}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        eps_w = 0.8
-        taus_W = np.linspace(1.0, 31.0, 100)
-        taus_B = np.linspace(1.0, 31.0, 100)
-        MG = np.array([[gain_margin(eps_w, tw, tb) for tb in taus_B] for tw in taus_W])
-        vmin, vmax = float(np.nanmin(MG)), float(np.nanmax(MG))
+        ps = PARAMETERS[wildcards.pathogen].update(epsilon_w=EPSILON_W)
+        if wildcards.scenario == "delays":
+            xs = np.linspace(1.0, 31.0, 100)
+            ys = np.linspace(1.0, 31.0, 100)
+            L0 = loop_gain(ps.R_0 * ps.rho, ps.epsilon_w, ps.k, ps.R_crit)
+            MG = np.array([[gain_margin(L0, tw, tb) for tb in ys] for tw in xs])
+            xlabel = r'Behavioural delay ($\tau_B$)'
+            ylabel = r'Reporting delay ($\tau_W$)'
+            ticks = [1,2,3,4,5,10,20]
+        else: # vary efficacies
+            xs = np.linspace(0.0, 0.999, 100)
+            ys = np.linspace(0.0, 0.999, 100)
+            MG = np.array([[gain_margin(loop_gain(ps.R_0 * ps.rho, ew, ps.k, ps.R_crit), ps.tau_W, ps.tau_B) for ew in xs] for es in ys])
+            xlabel = 'Warning response efficacy $\\varepsilon_w$'
+            ylabel = 'Isolation efficacy $\\varepsilon_s$'
+            ticks = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]
+        vmin, vmax = float(np.nanmin(MG)), float(np.min([np.nanmax(MG),int(1e6)]))
         norm = LogNorm(vmin=np.max([vmin,1]), vmax=np.max([vmax,1]))
-        ticks = [1,2,3,4,5,10,20]
-        fig, ax = plot_heatmap(taus_B, taus_W, MG, norm=norm, cmap='magma_r', cbar_ticks=ticks, contour_levels=[1.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Gain margin')
+        fig, ax = plot_heatmap(xs, ys, MG, norm=norm, cmap='magma_r', cbar_ticks=ticks, contour_levels=[1.0], xlabel=xlabel, ylabel=ylabel, title='Gain margin')
         fig.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close(fig)
 
 rule plot_delay_margins:
     output:
-        plot="{outdir}/compartmental/delay_margins.png"
+        plot="{outdir}/compartmental/delay_margins_{pathogen}_vary_{scenario}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        eps_w = 0.8
-        taus_W = np.linspace(1.0, 31.0, 100)
-        taus_B = np.linspace(1.0, 31.0, 100)
-        MD = np.array([[delay_margin(eps_w, tw, tb) for tb in taus_B] for tw in taus_W])
-        fig, ax = plot_heatmap(taus_B, taus_W, MD, cmap='magma_r', contour_levels=[0.0], xlabel=r'Behavioural delay ($\tau_B$)', ylabel=r'Reporting delay ($\tau_W$)', title='Delay margin')
+        ps = PARAMETERS[wildcards.pathogen].update(epsilon_w=EPSILON_W)
+        if wildcards.scenario == "delays":
+            taus_W = np.linspace(1.0, 31.0, 100)
+            taus_B = np.linspace(1.0, 31.0, 100)
+            MD = np.array([[delay_margin(ps.update(tau_W=tw, tau_B=tb)) for tb in taus_B] for tw in taus_W])
+            xlabel = r'Behavioural delay ($\tau_B$)'
+            ylabel = r'Reporting delay ($\tau_W$)'
+            fig, ax = plot_heatmap(taus_B, taus_W, MD, cmap='magma_r', contour_levels=[0.0], xlabel=xlabel, ylabel=ylabel, title='Delay margin')
+        else: # vary efficacies
+            eps_ww = np.linspace(0.0, 0.999, 100)
+            eps_ss = np.linspace(0.0, 0.999, 100)
+            MD = np.array([[delay_margin(ps.update(epsilon_w=ew, epsilon_s=es)) for ew in eps_ww] for es in eps_ss])
+            xlabel = 'Warning response efficacy $\\varepsilon_w$'
+            ylabel = 'Isolation efficacy $\\varepsilon_s$'
+            fig, ax = plot_heatmap(eps_ww, eps_ss, MD, cmap='magma_r', contour_levels=[0.0], xlabel=xlabel, ylabel=ylabel, title='Delay margin')
         fig.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close(fig)
 
 rule plot_period_and_damping_scatter:
@@ -1045,7 +1067,7 @@ rule plot_period_and_damping_scatter:
         analytical_damping = np.full((N, N), np.nan)
         for i, tw in enumerate(np.array(taus_W)):
             for j, tb in enumerate(np.array(taus_B)):
-                pole = dominant_pole(float(tw), float(tb), eps_w, k, n_W, n_B)
+                pole = dominant_pole(base_params.update(tau_W=tw, tau_B=tb))
                 if not np.isnan(pole):
                     analytical_period[i, j] = 2*np.pi / abs(pole.imag)
                     analytical_damping[i, j] = -pole.real
@@ -2103,6 +2125,6 @@ rule all:
         expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=OUTDIR, pathogen=ASYMPTOMATIC_PATHOGENS),
         expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=OUTDIR),
         expand(rules.plot_asymptomatic_landscape.output.plot, outdir=OUTDIR),
-        expand(rules.plot_gain_margins.output.plot, outdir=OUTDIR),
-        expand(rules.plot_delay_margins.output.plot, outdir=OUTDIR),
+        expand(rules.plot_gain_margins.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=["delays", "efficacies"]),
+        expand(rules.plot_delay_margins.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=["delays", "efficacies"]),
         expand(rules.plot_period_and_damping_scatter.output, outdir=OUTDIR, pathogen=PATHOGENS, k=[10, 30]),
