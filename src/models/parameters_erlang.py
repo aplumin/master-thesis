@@ -106,7 +106,7 @@ class ParamsErlang(NamedTuple):
             nA: int = 10,
             weighted: bool = False,
         ) -> "ParamsErlang":
-        w_p, w_s = (compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS) if weighted else (jnp.ones(nP), jnp.ones(nS)))
+        w_p, w_s = (compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS, phi_p) if weighted else (jnp.ones(nP), jnp.ones(nS)))
         w_a = jnp.ones(nA)
         r = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
         r_eps = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
@@ -121,9 +121,7 @@ class ParamsErlang(NamedTuple):
             nE=int(nE), nP=int(nP), nS=int(nS), nA=int(nA), weighted=bool(weighted),
         )
 
-    _DERIVED_FROM = [
-        "R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", 
-        "epsilon_s", "w_a", "w_p", "w_s", "nP", "nS", "nA"]
+    _DERIVED_FROM = ["R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s", "w_a", "w_p", "w_s", "nP", "nS", "nA"]
     def update(self, **kwargs) -> "ParamsErlang":
         """Update any parameter(s)."""
         for f in _ERLANG_STATIC_FIELDS:
@@ -143,14 +141,15 @@ class ParamsErlang(NamedTuple):
 
 _register_static_pytree(ParamsErlang, _ERLANG_STATIC_FIELDS)
 
-def compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS):
+def compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS, phi_p):
     """
     Infectiousness weights for the Ip and Is subcompartments.
     Computed from a Gamma pdf with given shape and scale parameters.
     """
-    w_p = gamma.pdf(x=_mean_time(gamma_inv, sigma_inv, nP), a=shape, scale=scale)
-    w_s = gamma.pdf(x=_mean_time(gamma_inv+sigma_inv, mu_s_inv, nS), a=shape, scale=scale)
-    return w_p, w_s
+    w_p = gamma.pdf(_mean_time(gamma_inv, sigma_inv, nP), a=shape, scale=scale)
+    w_s = gamma.pdf(_mean_time(gamma_inv + sigma_inv, mu_s_inv, nS), a=shape, scale=scale)
+    norm = (phi_p * sigma_inv + mu_s_inv) / (phi_p * jnp.sum(w_p) * (sigma_inv / nP) + jnp.sum(w_s) * (mu_s_inv / nS))
+    return norm * w_p, norm * w_s
 
 def _mean_time(t0, mean, n):
     """
