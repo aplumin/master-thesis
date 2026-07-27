@@ -229,11 +229,10 @@ def plot_trajectory(
     indices_above = np.where(Is > params.I_crit)[0]
     t1_crit = tt[indices_above[0]] if indices_above.size > 0 else tt[-1]
     # first time after Is is below threshold
-    t2_crit = tt[indices_above[-1] + 1] if indices_above.size > 0 else tt[-1]
+    t2_crit = tt[indices_above[-1] + 1] if indices_above.size > 0 and indices_above[-1] + 1 < len(tt) else tt[-1]
     time_to_peak = t_peak - t1_crit
     total_time = t2_crit - t1_crit
     return peak_Is, time_to_peak, total_time
-
 
 
 def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
@@ -430,8 +429,8 @@ def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, e
         axes[2, 1].plot(t, z_m, color=color, linewidth=2)
         axes[2, 1].fill_between(t, np.minimum(z_l, z_h), np.maximum(z_l, z_h), color=color, alpha=0.2)
     axes[0, 1].axhline(threshold, color='grey', linestyle='--', linewidth=2, label=r'$\mathcal{R}_\text{crit}=1.0$')
-    axes[1, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=r'$\varepsilon_w=0.5$')
-    axes[2, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=r'$\varepsilon_w=0.5$')
+    axes[1, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=rf'$1-\varepsilon_w={1-eps_w:g}$')
+    axes[2, 1].axhline(eps_w, color='grey', linestyle='--', linewidth=2, label=rf'$1-\varepsilon_w={1-eps_w:g}$')
     # Formatting
     axes[0, 1].set_title('Reported Reproductive Number')
     axes[0, 1].legend(loc='upper left')

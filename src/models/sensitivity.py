@@ -1,9 +1,9 @@
 """
 Global sensitivity analysis of outcomes to parameters.
 
-  * PRCC: rank inputs and output, then measure the correlation between each input 
+  - PRCC: rank inputs and output, then measure the correlation between each input 
     and the output after linearly regressing out all other inputs.
-  * Sobol indices: decompose the output variance into contributions from each input 
+  - Sobol indices: decompose the output variance into contributions from each input 
     (first-order S1) and each input including all its interactions (total-order ST).
 """
 
@@ -18,12 +18,12 @@ from SALib.sample.sobol import sample as saltelli_sequence
 from SALib.analyze.sobol import analyze
 
 from models.parameters import Params
-from models.compartmental import simulate_SEIPAR_W, simulate_SEIAR_W, simulate_SEIR_W
+from models.compartmental import simulate_SEIPAR_W, simulate_SEIR_W
 from models.metrics import outcome_metrics, trajectory_indices
 from models.uncertainty import Priors
 
 DEFAULT_BATCH_SIZE = 512
-MODEL_NAMES = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIAR_W: "SEIAR_W", simulate_SEIR_W: "SEIR_W"}
+MODEL_NAMES = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIR_W: "SEIR_W"}
 DUMMY = "dummy"
 PARAM_LABELS = {
     "R_0": (r"$\mathcal{R}_0$", "basic reproductive number"),
@@ -45,10 +45,9 @@ PARAM_LABELS = {
 }
 _PRIMITIVES = {
     "SEIPAR_W": ("R_0", "gamma_inv", "sigma_inv", "mu_s_inv", "p", "RR_p", "RR_a"),
-    "SEIAR_W": ("R_0", "gamma_inv", "sigma_inv", "mu_s_inv", "p", "RR_a"),
     "SEIR_W": ("R_0", "gamma_inv", "mu_s_inv")
 }
-_INTERVENTION_BOUNDS = {"epsilon_s": (0.0, 1.0), "epsilon_w": (0.0, 1.0), "tau_W": (1.0, 30.0), "tau_B": (1.0, 30.0), "log_k": (0.0, 3.0), "R_crit": (0.8, 1.5)}
+_INTERVENTION_BOUNDS = {"epsilon_s": (0.0, 1.0), "epsilon_w": (0.0, 1.0), "tau_W": (1.0, 30.0), "tau_B": (1.0, 30.0), "log_k": (0.0, float(np.log10(30.0))), "R_crit": (0.8, 1.2)}
 _THRESHOLD_BOUNDS = {"log_kI": (0.0, 6.0), "log_I_crit": (-4.0, -2.0)}
 
 def param_symbol(name):
@@ -102,15 +101,13 @@ def _parameter_bounds_around_mean(model, mean_params: Params, scenario="start", 
     name = MODEL_NAMES[model]
     ps = mean_params
     prim = {"R_0": float(ps.R_0), "gamma_inv": float(ps.gamma_inv), "mu_s_inv": float(ps.mu_s_inv)}
-    if name in ("SEIPAR_W", "SEIAR_W"):
+    if name == "SEIPAR_W":
         prim["sigma_inv"] = float(ps.sigma_inv) if float(ps.sigma_inv) > 0 else 1.0
         prim["p"] = float(ps.p)
         prim["RR_a"] = float(ps.phi_a) * float(ps.mu_a_inv) / float(ps.mu_s_inv)
-    if name == "SEIPAR_W":
         prim["RR_p"] = float(ps.phi_p) * float(ps.sigma_inv) / float(ps.mu_s_inv)
     bounds = {k: _relative_bounds(prim[k], k, frac) for k in _PRIMITIVES[name]}
-    bounds |= {k: _relative_bounds(float(getattr(ps, k)), k, frac)
-               for k in ("epsilon_s", "epsilon_w", "tau_W", "tau_B", "R_crit")}
+    bounds |= {k: _relative_bounds(float(getattr(ps, k)), k, frac) for k in ("epsilon_s", "epsilon_w", "tau_W", "tau_B", "R_crit")}
     bounds["log_k"] = (np.log10(float(ps.k) * (1 - frac)), np.log10(float(ps.k) * (1 + frac)))
     if scenario == "threshold":
         I_crit = float(ps.I_crit) if float(ps.I_crit) > 0 else 1e-4
@@ -134,16 +131,15 @@ def _make_params(model_name, names):
             I_crit = 10.0 ** v.pop("log_I_crit")
             kwargs["I_crit"] = I_crit
             kwargs["k_I"] = (10.0 ** v.pop("log_kI"))
-        if model_name in ["SEIPAR_W", "SEIAR_W"]:
+        if model_name == "SEIPAR_W":
             sigma_inv = v.pop("sigma_inv")
             mu_s_inv = v["mu_s_inv"]
             mu_a_inv = sigma_inv + mu_s_inv
             kwargs["mu_a_inv"] = mu_a_inv
             kwargs["phi_a"] = jnp.where(
                 mu_a_inv > 0, v.pop("RR_a") * mu_s_inv / jnp.where(mu_a_inv > 0, mu_a_inv, 1.0), 0.0)
-            if model_name == "SEIPAR_W":
-                kwargs["sigma_inv"] = sigma_inv
-                kwargs["phi_p"] = jnp.where(sigma_inv > 0, v.pop("RR_p") * mu_s_inv / jnp.where(sigma_inv > 0, sigma_inv, 1.0), 0.0)
+            kwargs["sigma_inv"] = sigma_inv
+            kwargs["phi_p"] = jnp.where(sigma_inv > 0, v.pop("RR_p") * mu_s_inv / jnp.where(sigma_inv > 0, sigma_inv, 1.0), 0.0)
         kwargs.update(v)
         return params.update(**kwargs)
     return _params
@@ -206,14 +202,14 @@ def _salib_problem(bounds):
     names = list(bounds)
     return {"num_vars": len(names), "names": names, "bounds": [list(bounds[n]) for n in names]}
 
-def saltelli_sample(bounds, n_base, seed=None, second_order=False):
+def saltelli_sample(bounds, n_base, seed=None):
     """Generate Saltelli sample sequence."""
-    return saltelli_sequence(_salib_problem(bounds), N=n_base, calc_second_order=second_order, seed=seed)
+    return saltelli_sequence(_salib_problem(bounds), N=n_base, seed=seed)
 
-def _sobol_indices(bounds, Y, seed=None, second_order=False):
+def _sobol_indices(bounds, Y, seed=None):
     """Compute first-order (S_1) and total-order (S_T) Sobol sensitivity indices."""
-    Si = analyze(_salib_problem(bounds), np.asarray(Y), calc_second_order=second_order, seed=seed, print_to_console=False)
-    keys = ["S1", "S1_conf", "ST", "ST_conf"] + (["S2", "S2_conf"] if second_order else [])
+    Si = analyze(_salib_problem(bounds), np.asarray(Y), seed=seed, print_to_console=False)
+    keys = ["S1", "S1_conf", "ST", "ST_conf"]
     return {k: np.asarray(Si[k]) for k in keys}
 
 
@@ -231,12 +227,10 @@ class SensitivityResults(NamedTuple):
     sobol_ST: np.ndarray
     sobol_ST_conf: np.ndarray
     sobol_S1_sum: float = np.nan
-    sobol_S2: np.ndarray = None
-    sobol_S2_conf: np.ndarray = None
 
 def run_sensitivity_analysis(
     model, base_params: Params, scenario="start", outcome="Rt", t1=50.0, E0=1e-6, n_lhs=5000, n_sobol_base=1024, seed=0, 
-    do_sobol=True, second_order=False, around_mean=False, priors=None, include_dummy=True, batch_size=DEFAULT_BATCH_SIZE,
+    do_sobol=True, around_mean=False, priors=None, include_dummy=True, batch_size=DEFAULT_BATCH_SIZE,
 ) -> SensitivityResults:
     if around_mean: 
         bounds = _parameter_bounds_around_mean(model, base_params, scenario=scenario, include_dummy=include_dummy)
@@ -252,19 +246,14 @@ def run_sensitivity_analysis(
     lo, hi = _prcc_fisher_ci(prcc, n_lhs, len(names))
 
     if do_sobol:
-        Si = _sobol_indices(
-            Y=m(samples=saltelli_sample(bounds, n_base=n_sobol_base, seed=seed + 2, second_order=second_order)),
-            bounds=bounds, seed=seed + 3, second_order=second_order)
+        Si = _sobol_indices(Y=m(samples=saltelli_sample(bounds, n_base=n_sobol_base, seed=seed + 2)), bounds=bounds, seed=seed + 3)
         S1, S1c, ST, STc = Si["S1"], Si["S1_conf"], Si["ST"], Si["ST_conf"]
-        S2 = Si.get("S2")
-        S2c = Si.get("S2_conf")
     else:
         S1, S1c, ST, STc = (np.full(len(names), np.nan) for _ in range(4))
-        S2, S2c = None, None
 
     return SensitivityResults(
         param_names=names, bounds=bounds, samples=X, outputs=y, prcc_mean=prcc, prcc_lower=lo, prcc_upper=hi, 
-        sobol_S1=S1, sobol_S1_conf=S1c, sobol_ST=ST, sobol_ST_conf=STc, sobol_S1_sum=float(np.nansum(S1)), sobol_S2=S2, sobol_S2_conf=S2c,
+        sobol_S1=S1, sobol_S1_conf=S1c, sobol_ST=ST, sobol_ST_conf=STc, sobol_S1_sum=float(np.nansum(S1)),
     )
 
 def partial_rank_residuals(X: np.ndarray, y: np.ndarray, i: int) -> tuple[np.ndarray, np.ndarray]:

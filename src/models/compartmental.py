@@ -60,7 +60,7 @@ def _solve(diffeq, y0, params, t1, n_ts=5000):
         saveat=SaveAt(ts=jnp.linspace(0.0, t1, n_ts)),
         stepsize_controller=PIDController(rtol=RTOL, atol=ATOL), max_steps=MAX_STEPS,
     )
-    return solution.ts, solution.ys
+    return solution.ts, jnp.maximum(solution.ys, 0.0)
 
 
 @partial(jax.jit, static_argnames=['n_ts'])

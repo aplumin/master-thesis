@@ -101,6 +101,7 @@ _MODELS = { # (function, labels, indices of infectious compartments, index of sy
 
 def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww_in_B, response_in_B_to_A):
     local_fn, labels, infectious_idx, syx_idx = _MODELS[model_name]
+    syx_pos = infectious_idx.index(syx_idx)
     n_flow = len(labels)
     ps = spatial_params.epi_params
     n_W, n_B = ps.n_W, ps.n_B
@@ -137,7 +138,6 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
         dX_B = local_fn(X_B, prev_B, B_out_B, ps) - migration
         dFlow = jnp.concatenate([dX_A, dX_B])
 
-        syx_pos = infectious_idx.index(syx_idx)
         Rt_A = ps.R_0 * ps.rho * B_out_A * _div(X_A[0], N_A)
         dW_A = chain_derivative(W_A, Rt_A, n_W / ps.tau_W)
         dB_A = chain_derivative(B_A, logistic_response_function(W_A[-1], ps, prev_A[syx_pos]), n_B / ps.tau_B)
@@ -278,25 +278,24 @@ CANTON_NAME_DICT = {
     'Luzern': 'LU',
     'Neuchatel': 'NE',
     'Neuchâtel': 'NE',
-    'Nidwalden': 'NI',
-    'Obwalden': 'OB',
+    'Nidwalden': 'NW',
+    'Obwalden': 'OW',
     'Schaffhausen': 'SH',
     'Schwyz': 'SZ',
     'Solothurn': 'SO',
     'St Gallen': 'SG',
     'St. Gallen': 'SG',
-    'Thurgau': 'TH',
+    'Thurgau': 'TG',
     'Ticino': 'TI',
     'Uri': 'UR',
     'Valais': 'VS',
     'Vaud': 'VD',
-    'Zug': 'ZU',
+    'Zug': 'ZG',
     'Zurich': 'ZH',
     'Zürich': 'ZH',
 }
+ALL_ZH_PAIRS = "_".join(f"ZH{CANTON_NAME_DICT[name]}" for name in sorted(set(CANTON_NAME_DICT)))
 
-
-ALL_ZH_PAIRS = "_".join(f"ZH{CANTON_NAME_DICT[name]}" for name in list(CANTON_NAME_DICT))
 
 def _load_and_preprocess_map(path):
     """Data from the Federal Office of Topography swisstopo."""
@@ -337,7 +336,7 @@ def load_and_preprocess_phone_data(data_path, geo_path):
     df['m'] = df.total_travellers / df.pop_origin
     df['weekday_type'] = np.where(df.day_type == 'WK Day', 'weekday', 'weekend')
 
-    final_df = final_df = df.groupby(
+    final_df = df.groupby(
         ['origin_name', 'destination_name', 'weekday_type', 'holiday_type'], as_index=False
     ).agg(m=('m', 'mean'), count=('day_type', 'count'))
     pivot_df = final_df.pivot(index=['origin_name', 'destination_name', 'holiday_type'], columns='weekday_type', values='m').reset_index()

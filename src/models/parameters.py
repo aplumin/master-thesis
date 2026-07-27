@@ -67,7 +67,7 @@ class Params(NamedTuple):
             phi_p: float = 3.72,
             gamma_inv: float = 3.0,
             sigma_inv: float = 2.5,
-            mu_a_inv: float = 11.6,
+            mu_a_inv: float = 11.8,
             mu_s_inv: float =  9.3,
             p: float = 0.351,
             epsilon_s: float = 0.0,
@@ -184,6 +184,10 @@ class Params(NamedTuple):
             kwargs.setdefault("rho",  jnp.where(r > 0, r_eps/r, 1.0))
             kwargs["R_0"] = jnp.where(r > 0, v["R_0"], 0.0)
         return self._replace(**kwargs)
+    
+    def concrete(self) -> "Params":
+        return self._replace(**{f: int(getattr(self, f)) if f in ("n_W", "n_B") else float(getattr(self, f)) for f in self._fields})
+
 
 def _register_static_pytree(cls, static_fields=("n_W", "n_B")):
     """Register NamedTuple parameter class as JAX pytree."""
@@ -215,13 +219,13 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
     The response scales the transmission rate by f = 1 - epsilon_w * gate_W * gate_I,
     where each gate is a logistic function:
         gate_W = sigma(k * (R_est - R_crit))
-        gate_I = sigma(k_I * (I - I_crit))
+        gate_I = sigma(k_I * log10(I / I_crit))
     with sigma(x) = 1 / (1 + exp(-x)).
     """
     gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
     gate_I = jnp.where( # no effect if threshold set to 0
         params.I_crit > 0.0, 
-        1.0 / (1.0 + jnp.exp(-params.k_I * (number_infected - params.I_crit))), 
+        1.0 / (1.0 + jnp.exp(-params.k_I * jnp.log10(jnp.maximum(number_infected,1e-300)/(params.I_crit+1e-30)))), 
         1.0
     )
     return 1.0 - params.epsilon_w * gate_W * gate_I
@@ -230,8 +234,8 @@ def calculate_r(p, phi_a, phi_p, mu_a_inv, sigma_inv, mu_s_inv, epsilon_s=0.0):
     """
     Weighted infectiousness sum, r = R_0 / beta. The contribution from each type is:
     probability of the route * relative infectiousness * mean time
-        asymptomatic   :      p  * phi_a           * (1/mu_a)
-        presymptomatic : (1 - p) * phi_p           * (1/sigma)
-        symptomatic    : (1 - p) * (1 - epsilon_s) * (1/mu_s)
+        asymptomatic : p  * phi_a * (1/mu_a)
+        presymptomatic : (1 - p) * phi_p * (1/sigma)
+        symptomatic : (1 - p) * (1 - epsilon_s) * (1/mu_s)
     """
     return p * phi_a * mu_a_inv + (1-p) * (phi_p * sigma_inv + (1.0 - epsilon_s) * mu_s_inv)

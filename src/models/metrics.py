@@ -77,7 +77,10 @@ def _oscillation_period(tt, f, t_a, t_b, T_min=4.0, T_max=200.0, peak_threshold=
     interval = (tt >= t_a) & (tt <= t_b)
     x = jnp.where(interval, f, 0.0)
     x = x - jnp.sum(x) / jnp.maximum(jnp.sum(interval), 1)
-    ac = jnp.correlate(x, x, mode="full")[x.shape[0] - 1:]
+    n = x.shape[0]
+    nfft = 1 << int(np.ceil(np.log2(2 * n - 1)))
+    F = jnp.fft.rfft(x, n=nfft)
+    ac = jnp.fft.irfft(F * jnp.conj(F), n=nfft)[:n]
     ac = ac / jnp.maximum(ac[0], 1e-30)
     lag = jnp.arange(ac.shape[0]) * dt
     peak = (ac[1:-1] > ac[:-2]) & (ac[1:-1] > ac[2:]) & (ac[1:-1] > peak_threshold)
@@ -154,17 +157,17 @@ def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1:
     I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
     return I_tot_grid / I_tot(0.0, 0.0)
 
-@partial(jax.jit, static_argnames=['model'])
-def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 50.0, E0: float = 1e-6):
+@partial(jax.jit, static_argnames=['model', 'n_ts'])
+def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 50.0, E0: float = 1e-6, n_ts: int = 5000):
     """
     Compute a 2D grid of the reproductive number after interventions.
     Asymptomatic proportion p on the x axis and relative infectiousness phi_a on the y axis.
     """
-    def final_R(p, phi_a):
-        params = base_params.update(p=p, phi_a=phi_a)
-        tt, yy, *_ = model(params=params, t1=t1, E0=E0)
+    def final_R(p_, phi_):
+        params = base_params.update(p=p_, phi_a=phi_)
+        tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
         return outcome_metrics(tt, yy, params, t1, delta_dep=0.05)[0]
-    return jax.vmap(jax.vmap(final_R, in_axes=(0, None)), in_axes=(None, 0))(p, phi_a)
+    return jax.lax.map(lambda phi_: jax.vmap(final_R, in_axes=(0, None))(p, phi_), phi_a)
 
 @partial(jax.jit, static_argnames=['model'])
 def compute_asymptomatic_grid_Itot(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 600.0, E0: float = 1e-6):
@@ -236,17 +239,7 @@ def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E
         tt, yy, *_ = model(params=params, t1=t1, E0=E0)
         Rt_final, time_to_below, Itot, peak_Is, _, amplitude, total_time_above, num_crossings = outcome_metrics(tt, yy, params, t1, delta_dep)
         return Rt_final, time_to_below, Itot, peak_Is, amplitude, total_time_above, num_crossings
-    return jax.vmap(jax.vmap(wrap_delay_metrics, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
-
-@partial(jax.jit, static_argnames=['model', 't1'])
-def compute_delay_metrics_grid_piecewise(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05):
-    """As compute_delay_metrics_grid but for piecewise models."""
-    def wrap_delay_metrics(tau_W, tau_B):
-        params = base_params.update(tau_W=tau_W, tau_B=tau_B)
-        tt, yy, ms = model(params=params, t1=t1, E0=E0)
-        Rt_final, time_to_below, Itot, peak_Is, _, amplitude, total_time_above, num_crossings = outcome_metrics(tt, yy, params, t1, delta_dep, warning_state=ms)
-        return Rt_final, time_to_below, Itot, peak_Is, amplitude, total_time_above, num_crossings
-    return jax.vmap(jax.vmap(wrap_delay_metrics, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
+    return jax.lax.map(lambda tau_W: jax.vmap(wrap_delay_metrics, in_axes=(None, 0))(tau_W, taus_B), taus_W)
 
 @partial(jax.jit, static_argnames=['model', 't1', 'sweep_field'])
 def compute_amplitude_duration_piecewise(model, base_params, sweep_values, sweep_field='R_off', t1=10000.0, E0=1e-6, delta_dep=0.05):
@@ -334,10 +327,10 @@ def mean_warning_multiplier(epsilon_w: float) -> float:
 def calculate_mt_branching_q(ps, ew, es):
     """Extinction probability of the multi-type branching process approximation."""
     warn = mean_warning_multiplier(ew)
+    asyx = ps.phi_a * ps.beta * ps.mu_a_inv * warn
+    presyx = ps.phi_p * ps.beta * ps.sigma_inv * warn
+    syx = ps.beta * ps.mu_s_inv * (1-es) * warn
     def extinction_prob(q):
-        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * warn
-        presyx = ps.phi_p * ps.beta * ps.sigma_inv * warn
-        syx = ps.beta * ps.mu_s_inv * (1-es) * warn
         return ps.p / (1 + asyx * (1-q)) + (1-ps.p) / ((1 + presyx * (1-q)) * (1 + syx * (1-q))) - q
     try:
         return brentq(extinction_prob, 0.0, 1.0-1e-9)
@@ -347,12 +340,12 @@ def calculate_mt_branching_q(ps, ew, es):
 def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
     """As calculate_mt_branching_q but with overdispersed transmission."""
     warn = mean_warning_multiplier(ew)
+    asyx = ps.phi_a * ps.beta * ps.mu_a_inv * warn
+    presyx = ps.phi_p * ps.beta * ps.sigma_inv * warn
+    syx = ps.beta * ps.mu_s_inv * (1-es) * warn
     def g_r(q,r):
         return 1-(1+(1-q)/r)**(-r)
     def extinction_prob(q):
-        asyx = ps.phi_a * ps.beta * ps.mu_a_inv * warn
-        presyx = ps.phi_p * ps.beta * ps.sigma_inv * warn
-        syx = ps.beta * ps.mu_s_inv * (1-es) * warn
         return ps.p / (1 + asyx * g_r(q,k)) + (1-ps.p) / ((1 + presyx * g_r(q,k)) * (1 + syx * g_r(q,k))) - q
     try:
         return brentq(extinction_prob, 0.0, 1.0 - 1e-9)
@@ -418,3 +411,9 @@ def R_boundary(theta, eps_s, eps_w):
         R_0_crit = 1 / ((1 - epsilon_w/2) * (1 - epsilon_s*(1 - theta))).
     """
     return 1.0 / (mean_warning_multiplier(eps_w) * (1.0 - eps_s * (1.0 - theta)))
+
+def establishment_threshold(q, alpha=0.01):
+    """Number of infecteds above which extinction probability < alpha."""
+    if not (0.0 < q < 1.0):
+        return np.inf
+    return float(np.ceil(np.log(alpha) / np.log(q)))

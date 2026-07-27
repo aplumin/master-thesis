@@ -8,10 +8,11 @@ The W and B delay chains are solved analytically between events.
 
 import numpy as np
 from numba import njit
+from models.parameters import Params
 
 
 @njit(cache=True)
-def _chain_derivative(X, inflow, xi, dt, coeffs, scratch):
+def _advance_chain(X, inflow, xi, dt, coeffs, scratch):
     """
     Integrate the linear delay chain over timestep dt:
         X_i(t+dt) = inflow + sum_{j<=i} c_{i-j} * (X_j(t) - inflow),
@@ -50,14 +51,14 @@ def _select_event(a, a0, num_reactions):
 def _response(W_out, Is_frac, epsilon_w, k, R_crit, k_I, I_crit):
     """Logistic response function."""
     if I_crit > 0.0:
-        gate_I = 1.0 / (1.0 + np.exp(-k_I * (Is_frac - I_crit)))
+        gate_I = 1.0 / (1.0 + np.exp(-k_I * np.log10(Is_frac/I_crit)))
     else:
         gate_I = 1.0
     gate_W = 1.0 / (1.0 + np.exp(-k * (W_out - R_crit)))
     return 1.0 - epsilon_w * gate_W * gate_I
 
 @njit(cache=True)
-def _run(params, N, t1, num_mass, num_reactions, model, seed):
+def _run(params: Params, N, t1, num_mass, num_reactions, model, seed):
     """Run Gillespie simulation. model: 0 = SEIPAR, 1 = SEIAR, 2 = SEIR (S,E,I,R)."""
     if seed >= 0:
         np.random.seed(seed)
@@ -65,14 +66,10 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
     n_W = params.n_W
     n_B = params.n_B
     W_start = num_mass
-    B_start = num_mass + n_W              # index where the B chain begins
+    B_start = num_mass + n_W
     num_states = num_mass + n_W + n_B
-    # Pre-allocate output rows. An epidemic in a population of N produces at most
-    # ~4N events (each individual: S->E->...->R), so 10N + 20 rows is safe headroom.
-    n_rows = int(N * 10) + 20
+    n_rows = int(N * 4) + 20
 
-    # Initialise counts: one exposed seed, the rest susceptible. The behavioural
-    # chain B starts at 1 (transmission unmodified) and W starts at 0 (no signal).
     current_state = np.zeros(num_states, dtype=np.float64)
     current_state[0] = float(N - 1) # S
     current_state[1] = 1.0 # E
@@ -133,8 +130,8 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
         f_W = _response(W_out, Is / N, params.epsilon_w, params.k, params.R_crit, params.k_I, params.I_crit)
         Rt_in = params.R_0 * params.rho * B_out * (S / N)
         time_step = _exponential_dt(a0)
-        _chain_derivative(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
-        _chain_derivative(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
+        _advance_chain(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
+        _advance_chain(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
 
         # execute next event
         event_idx = _select_event(a, a0, num_reactions)
@@ -165,16 +162,22 @@ def _run(params, N, t1, num_mass, num_reactions, model, seed):
     return times[:step], states[:step]
 
 @njit(cache=True)
-def gillespie_SEIPAR_W(params, N: int, t1: float, seed: int = -1):
+def gillespie_SEIPAR_W(params: Params, N: int, t1: float, seed: int = -1):
     """Gillespie SEIPAR algorithm with exact integration of the delay compartments between events."""
     return _run(params=params, N=N, t1=t1, num_mass=6, num_reactions=6, model=0, seed=seed)
 
 @njit(cache=True)
-def gillespie_SEIAR_W(params, N: int, t1: float, seed: int = -1):
+def gillespie_SEIAR_W(params: Params, N: int, t1: float, seed: int = -1):
     """Gillespie SEIAR algorithm with exact integration of the delay compartments between events."""
     return _run(params=params, N=N, t1=t1, num_mass=5, num_reactions=5, model=1, seed=seed)
 
 @njit(cache=True)
-def gillespie_SEIR_W(params, N: int, t1: float, seed: int = -1):
+def gillespie_SEIR_W(params: Params, N: int, t1: float, seed: int = -1):
     """Gillespie SEIR algorithm with exact integration of the delay compartments between events."""
     return _run(params=params, N=N, t1=t1, num_mass=4, num_reactions=3, model=2, seed=seed)
+
+def to_uniform_grid(tt, yy, t1, n_ts=5000):
+    """Gillespie traces to uniform dt grid."""
+    grid = np.linspace(0.0, t1, n_ts)
+    idx = np.searchsorted(tt, grid, side="right") - 1
+    return grid, yy[np.clip(idx, 0, len(tt) - 1)]

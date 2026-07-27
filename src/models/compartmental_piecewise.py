@@ -30,7 +30,7 @@ def _published_response(W, dW, prevalence, params, m, floored):
     gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (signal - threshold)))
     gate_I = jnp.where(
         params.I_crit > 0.0,
-        1.0 / (1.0 + jnp.exp(-params.k_I * (prevalence - params.I_crit))),
+        1.0 / (1.0 + jnp.exp(-params.k_I * jnp.log10(prevalence / (params.I_crit+1e-30)))),
         1.0,
     )
     return 1.0 - params.epsilon_w * gate_W * gate_I
@@ -128,7 +128,7 @@ def _solve_piecewise(
             floored_next = floored
             t_next = t
 
-        published = (R_est >= params.R_crit).astype(jnp.float64)
+        published = (R_est >= R_crit).astype(jnp.float64)
         state = jnp.maximum(jnp.maximum(m, floored), published if not (asymmetric or discrete_eval) else 0.0)
         return (y_end, m_next, floored_next, t_next), (sol.ts, ys_seg, jnp.full((save_per_seg,), state))
 

@@ -82,7 +82,7 @@ class ParamsErlang(NamedTuple):
             phi_p: float = 3.72,
             gamma_inv: float = 3.0,
             sigma_inv: float = 2.5,
-            mu_a_inv: float = 11.6,
+            mu_a_inv: float = 11.8,
             mu_s_inv: float =  9.3,
             p: float = 0.351,
             epsilon_s: float = 0.0,
@@ -137,6 +137,7 @@ class ParamsErlang(NamedTuple):
             r_eps = _r_weighted(epsilon_s=v["epsilon_s"], **common)
             kwargs.setdefault("beta", jnp.where(r > 0, v["R_0"] / r, 0.0))
             kwargs.setdefault("rho", jnp.where(r > 0, r_eps / r, 1.0))
+            kwargs["R_0"] = jnp.where(r > 0, v["R_0"], 0.0)
         return self._replace(**kwargs)
 
 _register_static_pytree(ParamsErlang, _ERLANG_STATIC_FIELDS)

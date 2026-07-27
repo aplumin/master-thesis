@@ -10,8 +10,8 @@ import jax
 from numba import njit
 
 from models.parameters import Params
-from models.metrics import outcome_metrics, calculate_mt_branching_q_with_superspreading
-from models.gillespie import _chain_derivative, _exponential_dt, _select_event, _response
+from models.metrics import outcome_metrics, calculate_mt_branching_q_with_superspreading, establishment_threshold
+from models.gillespie import _advance_chain, _exponential_dt, _select_event, _response, to_uniform_grid
 
 
 @njit(cache=True, fastmath=True)
@@ -28,7 +28,7 @@ def gillespie_SEIPAR_W_superspreading(
     W_start = num_mass
     B_start = num_mass + n_W
     num_states = num_mass + n_W + n_B
-    n_rows = int(N * 10) + 20
+    n_rows = int(N * 4) + 20
 
     N_inv = 1.0 / float(N)
     beta = params.beta
@@ -104,8 +104,8 @@ def gillespie_SEIPAR_W_superspreading(
         f_W = _response(W_out, Is * N_inv, eps_w, k_W, R_crit, k_I, I_crit)
         Rt_in = R0_rho * B_out * (S * N_inv)
         time_step = _exponential_dt(a0)
-        _chain_derivative(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
-        _chain_derivative(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
+        _advance_chain(current_state[W_start:W_start + n_W], Rt_in, xi_W, time_step, coeffs_W, scratch_W)
+        _advance_chain(current_state[B_start:B_start + n_B], f_W, xi_B, time_step, coeffs_B, scratch_B)
 
         # execute next event
         event_idx = _select_event(a, a0, num_reactions)
@@ -147,16 +147,15 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
         for j, k_ss in enumerate(kk):
             ps = Params.for_SEIPAR(epsilon_s=float(eps_s), epsilon_w=float(ew))
             q = calculate_mt_branching_q_with_superspreading(k_ss, ps, ew, eps_s)
-            Iest = np.ceil(np.log(alpha) / np.log(q)) if 0.0 < q < 1.0 else 1.0
+            Iest = establishment_threshold(q=q, alpha=alpha)
             samples = {k: [] for k in keys}
             for rep in range(num_simulations):
                 run_seed = abs(hash((seed, i, j, rep))) % (2**31 - 1)
-                tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_ss, a_ss=True, p_ss=True, s_ss=False, seed=run_seed)
+                tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=k_ss, a_ss=True, p_ss=True, s_ss=True, seed=run_seed)
+                tt, yy = to_uniform_grid(tt, yy, t1)
                 if scenario == "establishment" and np.max(yy[:, 2] + yy[:, 3] + yy[:, 4]) < Iest:
                     continue
-                Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = metrics_fn(
-                    tt, yy, ps, t1, population_size=N
-                )
+                Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = metrics_fn(tt, yy, ps, t1, population_size=N)
                 for k, v in zip(keys, (Rt, time_to_below, Itot, peak_Is, extinction_time)):
                     samples[k].append(float(v))
             n_kept[i, j] = len(samples["Rt"])
