@@ -2,13 +2,14 @@
 SEIPAR model with wastewater feedback and linear chains for infected compartments.
 """
 
-import jax
-import jax.numpy as jnp
 from functools import partial
 
-from models.parameters_erlang import ParamsErlang
+import jax
+import jax.numpy as jnp
+
+from models.compartmental import _solve, chain_derivative, linear_chain
 from models.parameters import logistic_response_function
-from models.compartmental import linear_chain, chain_derivative, _solve
+from models.parameters_erlang import ParamsErlang
 
 
 @partial(jax.jit, static_argnames=['n_ts'])

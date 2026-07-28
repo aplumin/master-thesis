@@ -7,19 +7,19 @@ Global sensitivity analysis of outcomes to parameters.
     (first-order S1) and each input including all its interactions (total-order ST).
 """
 
-from functools import lru_cache, partial
+from functools import cache, partial
 from typing import NamedTuple
-import numpy as np
-from scipy.stats import qmc, rankdata, norm
+
 import jax
 import jax.numpy as jnp
-
-from SALib.sample.sobol import sample as saltelli_sequence
+import numpy as np
 from SALib.analyze.sobol import analyze
+from SALib.sample.sobol import sample as saltelli_sequence
+from scipy.stats import norm, qmc, rankdata
 
-from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIR_W
 from models.metrics import outcome_metrics, trajectory_indices
+from models.parameters import Params
 from models.uncertainty import Priors
 
 DEFAULT_BATCH_SIZE = 512
@@ -144,7 +144,7 @@ def _make_params(model_name, names):
         return params.update(**kwargs)
     return _params
 
-@lru_cache(maxsize=None)
+@cache
 def _outcome_metric(model, names, outcome):
     _params = _make_params(MODEL_NAMES[model], names)
     def _out(base_params, row, t1, E0):
@@ -287,8 +287,7 @@ def export_sensitivity_bounds(combinations, path, npzs):
     with open(path, "w") as f:
         f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{llccc}\n\\toprule\n")
         f.write(" & ".join(["Parameter", ""] + [col_mapping[c] for c in combinations]) + " \\\\\n\\midrule\n")
-        for name in ordered_params([n for b in bounds_data.values() for n in b]):
-            f.write(" & ".join([param_description(name), param_symbol(name)] + [cell(c, name) for c in combinations]) + " \\\\\n")
+        f.writelines(" & ".join([param_description(name), param_symbol(name)] + [cell(c, name) for c in combinations]) + " \\\\\n" for name in ordered_params([n for b in bounds_data.values() for n in b]))
         f.write(
             "\\bottomrule\n\\end{tabular}\n}\n"
             f"\\caption[Parameter ranges used for sensitivity analysis]{{Parameter ranges used for Latin hypercube and Saltelli sampling in the global sensitivity analysis. Parameters marked with an asterisk (*) are only included when the symptomatic threshold $I_\\text{{crit}}=10^{-4}$ is active. The dummy parameter has no effect on the model and only serves as a calibration.}}\n"

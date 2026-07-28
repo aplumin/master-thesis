@@ -126,8 +126,14 @@ E0 = 1e-6
 T1 = 10_000.0
 PARAMETERS = {p: params_from_priors(PRIORS[p]) for p in PATHOGENS}
 TRAJECTORY_END_TIMES = {"SARS-CoV-2": 530, "H1N1": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
-COLORS = {"SARS-CoV-2": "tab:blue", "H1N1": "tab:orange", "Ebola": "tab:green",
-    "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow"}
+COLORS = {"SARS-CoV-2": "tab:blue", "H1N1": "tab:orange", "Ebola": "tab:green", "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow"}
+
+# End times (95% extinction)
+T_BASELINE = {"SARS-CoV-2": 324, "H1N1": 433, "Ebola": 536} # eps_w = eps_s = 0
+T_ISOLATION = {"SARS-CoV-2": 378, "H1N1": 86, "Ebola": 215} # eps_w = 0, eps_s = 0.5
+T_WARNING = {"SARS-CoV-2": 769, "H1N1": 2023, "Ebola": 1823} # eps_w = 0.5, eps_s = 0
+T_STRONG = {"SARS-CoV-2": 1142, "H1N1": 68, "Ebola": 145} # eps_w = eps_s = 0.5
+T_WEAK = {"SARS-CoV-2": 484, "H1N1": 616, "Ebola": 1773} # eps_w = eps_s = 0.25
 
 # Models
 MODELS = {"SARS-CoV-2": simulate_SEIPAR_W, "H1N1": simulate_SEIPAR_W, "Ebola": simulate_SEIR_W, 
@@ -157,6 +163,11 @@ INTERVENTION_SCENARIOS = {
     "H1N1": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
     "Ebola": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
 }
+WARNING_SCENARIOS = {
+    "SARS-CoV-2": [("baseline", 0.00, 0.00), ("uncontrolled", 0.80, 0.40), ("barely controlled", 0.80, 0.80), ("controlled", 0.80, 1.00)],
+    "H1N1": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
+    "Ebola": [("baseline", 0.00, 0.00), ("uncontrolled", 0.20, 0.40), ("barely controlled", 0.20, 0.80), ("controlled", 0.20, 1.00)],
+}
 
 # Spatial
 CANTON_PAIRS = "ZHAG_ZHBS_ZHGR_AGBS"
@@ -181,7 +192,7 @@ rule baseline_trajectories:
         plot="{outdir}/compartmental/baseline_trajectories_{pathogen}.png"
     run:
         os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        peak_Is, time_to_peak, total_time = plot_trajectory(model = MODELS[wildcards.pathogen], params = PARAMETERS[wildcards.pathogen].update(I_crit=1e-4), path = output.plot, title = f"{wildcards.pathogen}", image_resolution = IMAGE_RESOLUTION, plot_total_I = True, t1 = 500.0)
+        peak_Is, time_to_peak, total_time = plot_trajectory(model = MODELS[wildcards.pathogen], params = PARAMETERS[wildcards.pathogen].update(I_crit=1e-4), path = output.plot, title = f"{wildcards.pathogen}", image_resolution = IMAGE_RESOLUTION, plot_total_I = True, t1 = T_BASELINE[wildcards.pathogen])
 
 
 rule plot_response_function:
@@ -498,18 +509,17 @@ rule derived_epi_characteristics:
                 f.write(f"{pathogen},{quantity},{pt},{med},{lo_ci},{hi_ci}\n")
 
 
-# TODO: for cost: run until 95th stochastic extinction percentile
 rule baseline_intervention_table:
     output:
         tex="{outdir}/compartmental/baseline_intervention_table.tex",
     run:
         os.makedirs(os.path.dirname(output.tex), exist_ok=True)
-        t1 = 10_000.0
         rows = {p: [] for p in PATHOGENS}
         for pathogen in PATHOGENS:
-            base = table_row_metrics(PARAMETERS[pathogen], MODELS[pathogen], 0.0, 0.0, t1)
+            base = table_row_metrics(PARAMETERS[pathogen], MODELS[pathogen], 0.0, 0.0, T_BASELINE[pathogen])
             base["prevented"] = 0.0
             for name, eps_s, eps_w in INTERVENTION_SCENARIOS[pathogen]:
+                t1 = T_ISOLATION[pathogen] if name=="isolation" else T_WARNING[pathogen] if name=="warning" else T_WEAK[pathogen] if name=="weak" else T_STRONG[pathogen] if name=="combined" else None
                 m = (base if (eps_s == 0.0 and eps_w == 0.0) else table_row_metrics(PARAMETERS[pathogen], MODELS[pathogen], eps_s, eps_w, t1, itot_baseline=base["itot"]))
                 rows[pathogen].append((name, eps_s, eps_w, m))
         with open(output.tex, "w") as f:
@@ -1614,30 +1624,23 @@ rule compute_alternative_warning_strategies_grid:
         strategies = list(STRATEGIES)
         np.savez_compressed(output.data, grid=np.stack([data[s] for s in strategies]), taus_W=np.asarray(taus_W), taus_B=np.asarray(taus_B), strategies=np.asarray(strategies), metrics=np.asarray(METRIC_NAMES))
 
-# TODO: for cost: run until 95th stochastic extinction percentile
 rule alternative_warning_strategies_table:
     output:
         tex="{outdir}/compartmental/alternative_warning_strategies_table_{pathogen}.tex",
     run:
         os.makedirs(os.path.dirname(output.tex), exist_ok=True)
-        t1 = 10_000.0
         pathogen = wildcards.pathogen
         ps = PARAMETERS[pathogen].update(R_off=R_OFF, eval_interval=EVAL_INTERVAL)
         model = MODELS_PIECEWISE[pathogen]
-        warning_scenarios = {
-            "SARS-CoV-2": [("baseline", 0.00, 0.00), ("uncontrolled", 0.80, 0.40), ("barely controlled", 0.80, 0.80), ("controlled", 0.80, 1.00)],
-            "H1N1": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
-            "Ebola": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
-        }
-        scenarios = warning_scenarios[pathogen]
+        scenarios = WARNING_SCENARIOS[pathogen]
         
         rows = {s: [] for s,_,_ in scenarios}
-        base = table_row_metrics(ps, model, 0.0, 0.0, t1)
+        base = table_row_metrics(ps, model, 0.0, 0.0, T1, icrit=1e-6)
         base["prevented"] = 0.0
         for scenario, eps_s, eps_w in scenarios:
             for strategy in list(STRATEGIES):
                 strategy_params = ps.update(T_lead=7.0) if strategy=="lead" else ps
-                m = (base if (eps_s == 0.0 and eps_w == 0.0) else table_row_metrics(strategy_params, model, eps_s, eps_w, t1, itot_baseline=base["itot"], strategy=strategy))
+                m = (base if (eps_s == 0.0 and eps_w == 0.0) else table_row_metrics(strategy_params, model, eps_s, eps_w, T1, itot_baseline=base["itot"], strategy=strategy, icrit=1e-6))
                 rows[scenario].append((strategy, eps_s, eps_w, m))
         with open(output.tex, "w") as f:
             f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{lcccccccc}\n\\toprule\n\\textbf{scenario} & $\\mathcal{R}_t$ & \\textbf{peak sympt.} & \\textbf{time to peak} & \\textbf{wave time} & \\textbf{attack rate} & \\textbf{inf. prevented} & \\textbf{isol. cost} & \\textbf{warn cost}\\\\\n\\midrule\n")

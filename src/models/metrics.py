@@ -2,13 +2,13 @@
 Outcome metrics and analytical approximations from model runs.
 """
 
+from collections.abc import Callable
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import brentq
-
-from functools import partial
-from typing import Callable
 
 from models.parameters import Params
 

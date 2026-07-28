@@ -5,10 +5,11 @@ Deterministic compartmental models:
     - SEIR_W with no presymptomatic or asymptomatic transmission and wastewater feedback
 """
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
-from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, PIDController
-from functools import partial
+from diffrax import ODETerm, PIDController, SaveAt, Tsit5, diffeqsolve
 
 from models.parameters import Params, logistic_response_function
 
@@ -68,7 +69,7 @@ def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E
     """Compartmental model with presymptomatic and asymptomatic transmission."""
     n_W, n_B = params.n_W, params.n_B
     def _SEIPAR_W(t, y, params):
-        S, E, Ia, Ip, Is, R = y[:6]
+        S, E, Ia, Ip, Is, _ = y[:6]
         W = y[6:6+n_W]
         B = y[6+n_W:]
         lambda_S = B[-1] * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * S
@@ -94,7 +95,7 @@ def simulate_SEIAR_W(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0:
     """Compartmental model without presymptomatic transmission."""
     n_W, n_B = params.n_W, params.n_B
     def _SEIAR_W(t, y, params):
-        S, E, Ia, Is, R = y[:5]
+        S, E, Ia, Is, _ = y[:5]
         W = y[5:5 + n_W]
         B = y[5 + n_W:]
         lambda_S = B[-1] * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * S
@@ -118,7 +119,7 @@ def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: f
     """Simplified compartmental model without presymptomatic or asymptomatic transmission."""
     n_W, n_B = params.n_W, params.n_B
     def _SEIR_W(t, y, params):
-        S, E, II, R = y[:4]
+        S, E, II, _ = y[:4]
         W = y[4:4 + n_W]
         B = y[4 + n_W:]
         lambda_S = B[-1] * params.beta * (1.0 - params.epsilon_s) * II * S

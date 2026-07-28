@@ -3,11 +3,13 @@ Parameters for the Erlang variant of the compartmental model, in which each
 infected stage (E, Ia, Ip, Is) is a linear chain of multiple subcompartments.
 """
 
-import jax.numpy as jnp
-from jax.scipy.stats import gamma
 from typing import NamedTuple
 
+import jax.numpy as jnp
+from jax.scipy.stats import gamma
+
 from models.parameters import _register_static_pytree
+
 _ERLANG_STATIC_FIELDS = ("n_W", "n_B", "nE", "nP", "nS", "nA", "weighted")
 
 
@@ -129,10 +131,10 @@ class ParamsErlang(NamedTuple):
                 kwargs[f] = bool(kwargs[f]) if f == "weighted" else int(kwargs[f])
         if set(self._DERIVED_FROM) & kwargs.keys():
             v = {f: kwargs.get(f, getattr(self, f)) for f in self._DERIVED_FROM}
-            common = dict(
-                p=v["p"], phi_a=v["phi_a"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"],
-                mu_a_inv=v["mu_a_inv"], mu_s_inv=v["mu_s_inv"], w_a=v["w_a"], w_p=v["w_p"], 
-                w_s=v["w_s"], nP=v["nP"], nS=v["nS"], nA=v["nA"])
+            common = {
+                "p": v["p"], "phi_a": v["phi_a"], "phi_p": v["phi_p"], "sigma_inv": v["sigma_inv"],
+                "mu_a_inv": v["mu_a_inv"], "mu_s_inv": v["mu_s_inv"], "w_a": v["w_a"], "w_p": v["w_p"], 
+                "w_s": v["w_s"], "nP": v["nP"], "nS": v["nS"], "nA": v["nA"]}
             r = _r_weighted(epsilon_s=0.0, **common)
             r_eps = _r_weighted(epsilon_s=v["epsilon_s"], **common)
             kwargs.setdefault("beta", jnp.where(r > 0, v["R_0"] / r, 0.0))

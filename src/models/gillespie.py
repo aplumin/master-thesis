@@ -8,6 +8,7 @@ The W and B delay chains are solved analytically between events.
 
 import numpy as np
 from numba import njit
+
 from models.parameters import Params
 
 

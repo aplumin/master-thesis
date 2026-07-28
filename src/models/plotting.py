@@ -2,26 +2,30 @@
 Plotting functions.
 """
 
+from collections.abc import Callable
+
 import jax.numpy as jnp
-import numpy as np
-from scipy.optimize import fsolve
-from scipy.stats import gamma
-from scipy.integrate import trapezoid
-
-from typing import Callable
-
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
+from scipy.integrate import trapezoid
+from scipy.optimize import fsolve
+from scipy.stats import gamma
 
-from models.parameters import Params
 from models.compartmental import simulate_SEIPAR_W
 from models.metrics import (
-    outcome_metrics, infectious_fractions, transmission_fractions,
-    compute_I_tot_grid, compute_R_grid, 
-    compute_asymptomatic_grid_Rt, compute_asymptomatic_grid_Itot, compute_I_tot_grid_delayed_ww,
+    compute_asymptomatic_grid_Itot,
+    compute_asymptomatic_grid_Rt,
+    compute_I_tot_grid,
+    compute_I_tot_grid_delayed_ww,
+    compute_R_grid,
+    infectious_fractions,
+    outcome_metrics,
+    transmission_fractions,
 )
+from models.parameters import Params
 
 
 def plot_heatmap(
@@ -113,7 +117,7 @@ def plot_trajectory(
     params: Params = Params.for_SEIPAR(), 
     path: str = "trajectory.png", 
     title: str = "Trajectory",
-    t1: float | int = 600.0, 
+    t1: float = 600.0, 
     image_resolution: int = 900,
     plot_S: bool = True,
     plot_E: bool = True,
@@ -206,7 +210,7 @@ def plot_trajectory(
                 w, h = cols[col], rows[row]
                 if w <= 0 or h <= 0: continue
                 x0, y0 = xb[col], 1.0 - yb[row+1]
-                ax_trans.add_patch(mpl.patches.Rectangle((x0, y0), w, h, facecolor=type_color[type_order[row]], alpha=1-0.25*(2-col), edgecolor="white"))
+                ax_trans.add_patch(mpl.patches.Rectangle((x0, y0), w, h, facecolor=type_color[i], alpha=1-0.25*(2-col), edgecolor="white"))
                 ax_trans.text(x0+w/2, y0+h/2, f"{100*h*w:.0f}%", ha="center", va="center", fontsize=14, zorder=3, color="white")
                 ax_trans.text(xb[col]+cols[col]/2, 1.04, type_I_tex[j]+f"\n{100*cols[col]:.0f}%", ha="center", va="bottom", fontsize=14, fontweight="bold", color=type_color[j])
                 ax_trans.text(-0.04, 1.0-(yb[row]+yb[row+1])/2, type_R_tex[i]+f"\n{100*rows[row]:.0f}%", ha="right", va="center", fontsize=14, fontweight="bold", color=type_color[i])
@@ -246,7 +250,7 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     epsilon_s = [0.0, 0.4, 0.8],
     epsilon_w = [0.0, 0.4, 0.8],
     E0: float = 1e-6,
-    t1: float = None, 
+    t1: float | None = None, 
     image_resolution: int = 900,
     path: str = "asymptomatic_effect.png",
 ) -> None:
@@ -457,12 +461,20 @@ def table_scenario_label(name, eps_s, eps_w, bold=False):
     return name if not parts else f"{name} (${', '.join(parts)}$)"
 
 def f_days(m): 
-    return "---" if np.isnan(m["time_to_peak"]) else f"{m['time_to_peak']:.1f}", "---" if np.isnan(m["wave_time"]) else f"{m['wave_time']:.1f}"
+    return "---" if np.isnan(m["time_to_peak"]) else f"{m['time_to_peak']:.1f} d", "---" if np.isnan(m["wave_time"]) else f"{m['wave_time']:.0f} d"
 
 def f_pct(x, dp=0):
     return "---" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:.{dp}f}\\%"
 
-def table_row_metrics(ps, model, eps_s, eps_w, t1, E0=1e-6, itot_baseline=None, icrit=1e-4, strategy="baseline"):
+def _get_end_time(I, icrit):
+    if icrit is None:
+        return -1
+    wave_ended = (I[1:] < icrit) & (np.diff(I) < 0)
+    if wave_ended.any():
+        return np.argmax(wave_ended) + 1
+    return -1
+
+def table_row_metrics(ps, model, eps_s, eps_w, t1, E0=1e-6, itot_baseline=None, icrit=None, strategy="baseline"):
     ps = ps.update(epsilon_s=eps_s, epsilon_w=eps_w)
     if strategy=="asymmetric":
         tt, yy, *_ = model(params=ps, t1=t1, E0=E0, asymmetric=True)
@@ -470,26 +482,19 @@ def table_row_metrics(ps, model, eps_s, eps_w, t1, E0=1e-6, itot_baseline=None, 
         tt, yy, *_ = model(params=ps, t1=t1, E0=E0, discrete_eval=True)
     else:
         tt, yy, *_ = model(params=ps, t1=t1, E0=E0)
-    Rt_final = float(outcome_metrics(tt, yy, ps, t1)[0])
     S = yy[:, 0]
-    B_out = yy[:, -1]
     Is = yy[:, -(ps.n_W + ps.n_B + 2)]
-    itot = float(S[0] - S[-1])
-    prevented = np.nan if itot_baseline in (None, 0.0) else 1.0 - itot / itot_baseline
+    I = Is + yy[:, -(ps.n_W + ps.n_B + 3)] + yy[:, -(ps.n_W + ps.n_B + 4)] if len(yy[0]) > 4 + ps.n_W + ps.n_B else Is
     peak_idx = int(np.argmax(Is))
-    peak_Is = float(Is[peak_idx])
-    above_idx = np.where(Is > icrit)[0]
-    if above_idx.size == 0: time_to_peak = wave_time = np.nan
-    else:
-        t_start = tt[above_idx[0]]
-        last = int(above_idx[-1])
-        if last + 1 < len(tt): t_end = tt[last + 1]
-        else: t_end = tt[-1]
-        time_to_peak = float(tt[peak_idx] - t_start)
-        wave_time = float(t_end - t_start)
-    warning_cost = float(trapezoid(1.0 - B_out, tt))
-    isolation_cost = float(trapezoid(eps_s * Is, tt))
-    return dict(
-        Rt=Rt_final, peak_Is=peak_Is, time_to_peak=time_to_peak, wave_time=wave_time, itot=itot, 
-        prevented=prevented, warning_cost=warning_cost, isolation_cost=isolation_cost, cost=warning_cost + isolation_cost
-    )
+    end_time = _get_end_time(I, icrit)
+    itot = float(S[0] - S[-1])
+    return {
+        'Rt': float(outcome_metrics(tt, yy, ps, t1)[0]), 
+        'wave_time': float(tt[end_time]),
+        'peak_Is': float(Is[peak_idx]), 
+        'time_to_peak': float(tt[peak_idx]), 
+        'itot': itot, 
+        'prevented': np.nan if itot_baseline in (None, 0.0) else 1.0 - itot / itot_baseline, 
+        'warning_cost': float(trapezoid(1.0 - yy[:end_time,-1], tt[:end_time])),
+        'isolation_cost': float(trapezoid(eps_s * Is[:end_time], tt[:end_time])),
+    }

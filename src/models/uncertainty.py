@@ -2,12 +2,18 @@
 Prior specification and Monte Carlo uncertainty handling.
 """
 
-from typing import NamedTuple, Optional, Dict, Tuple
-import numpy as np
-from scipy.stats import norm, beta
+from typing import NamedTuple
 
+import numpy as np
+from scipy.stats import beta, norm
+
+from models.metrics import (
+    growth_rate,
+    infectious_fractions,
+    mean_warning_multiplier,
+    transmission_fractions,
+)
 from models.parameters import Params, calculate_r
-from models.metrics import growth_rate, transmission_fractions, infectious_fractions, mean_warning_multiplier
 
 
 class Marginal(NamedTuple):
@@ -17,7 +23,7 @@ class Marginal(NamedTuple):
     lo: float
     hi: float
     family: str = "lognormal"
-    mean: Optional[float] = None
+    mean: float | None = None
     quant_lo: float = 0.025
     quant_hi: float = 0.975
 
@@ -63,8 +69,8 @@ def _ppf(m: Marginal, u: np.ndarray):
 
 class Priors(NamedTuple):
     """Prior dictionary {name: Marginal}."""
-    marginals: Dict[str, Marginal]
-    corr: Optional[np.ndarray] = None
+    marginals: dict[str, Marginal]
+    corr: np.ndarray | None = None
     presymptomatic: bool = True
     asymptomatic: bool = True
 
@@ -100,7 +106,7 @@ def sample_derived(priors: Priors, n: int = 20000, seed: int = 0):
     s["beta"] = np.divide(s["R_0"], r, out=np.zeros(n), where=r > 0)
     return s
 
-_SAMPLE_CACHE: Dict[tuple, tuple] = {}
+_SAMPLE_CACHE: dict[tuple, tuple] = {}
 
 def cached_sample_derived(priors: Priors, n: int = 20000, seed: int = 0):
     key = (id(priors), n, seed)
@@ -111,7 +117,7 @@ def cached_sample_derived(priors: Priors, n: int = 20000, seed: int = 0):
     _SAMPLE_CACHE[key] = (priors, result)
     return result
 
-def epi_quantities(s: Dict[str, np.ndarray], epsilon_s: float = 0.0, epsilon_w: float = 0.0):
+def epi_quantities(s: dict[str, np.ndarray], epsilon_s: float = 0.0, epsilon_w: float = 0.0):
     """Derived epidemiological quantities."""
     R0 = s["R_0"]
     # infectious weights (probability * relative infectiousness * duration).
@@ -132,11 +138,11 @@ def epi_quantities(s: Dict[str, np.ndarray], epsilon_s: float = 0.0, epsilon_w: 
         # warning efficacy needed for R_t = 1 (eps_s = 0)
         eps_w_crit = 2.0 * (1.0 - 1.0 / np.where(R0 > 0, R0, np.nan)) # assuming R_crit=1
     R_t = (R_a + R_p + (1.0 - epsilon_s) * R_s) * mean_warning_multiplier(epsilon_w)
-    return dict(R_a=R_a, R_p=R_p, R_s=R_s, theta=theta, T_g=T_g, eps_s_crit=eps_s_crit, eps_w_crit=eps_w_crit, R_t=R_t)
+    return {"R_a": R_a, "R_p": R_p, "R_s": R_s, "theta": theta, "T_g": T_g, "eps_s_crit": eps_s_crit, "eps_w_crit": eps_w_crit, "R_t": R_t}
 
 _DEFAULT_CI_NAMES = ("R_0", "gamma_inv", "sigma_inv", "mu_s_inv", "mu_a_inv", "p", "phi_p", "phi_a", "beta")
 
-def joint_ci(priors: Priors, names=None, n: int = 20000, seed: int = 0, quantiles: Tuple[float, float, float] = (0.025, 0.5, 0.975), **kw):
+def joint_ci(priors: Priors, names=None, n: int = 20000, seed: int = 0, quantiles: tuple[float, float, float] = (0.025, 0.5, 0.975), **kw):
     """Return CI {name: (median, lo, hi)} and sample dict."""
     names = list(_DEFAULT_CI_NAMES) if names is None else list(names)
     s = sample_derived(priors, n=n, seed=seed, **kw)

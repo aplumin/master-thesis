@@ -11,13 +11,14 @@ The warning decision is updated only at discrete check points (default: 0.1 days
     R_est = R_reported + T_lead * d(R_reported)/dt.
 """
 
-import jax
-import jax.numpy as jnp
-from diffrax import diffeqsolve, ODETerm, Tsit5, SaveAt, PIDController
 from functools import partial
 
+import jax
+import jax.numpy as jnp
+from diffrax import ODETerm, PIDController, SaveAt, Tsit5, diffeqsolve
+
+from models.compartmental import ATOL, MAX_STEPS, RTOL, chain_derivative
 from models.parameters import Params
-from models.compartmental import chain_derivative, RTOL, ATOL, MAX_STEPS
 
 
 def _published_response(W, dW, prevalence, params, m, floored):
@@ -37,7 +38,7 @@ def _published_response(W, dW, prevalence, params, m, floored):
 
 
 def _SEIPAR(y, params, B_out):
-    S, E, Ia, Ip, Is, R = y[:6]
+    S, E, Ia, Ip, Is, _ = y[:6]
     lambda_S = B_out * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * S
     become_infectious = E / params.gamma_inv
     become_symptomatic = Ip / params.sigma_inv
@@ -54,7 +55,7 @@ def _SEIPAR(y, params, B_out):
     return dFlow, S, Is
 
 def _SEIAR(y, params, B_out):
-    S, E, Ia, Is, R = y[:5]
+    S, E, Ia, Is, _ = y[:5]
     lambda_S = B_out * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * S
     become_infectious = E / params.gamma_inv
     recover_asyx = Ia / params.mu_a_inv
@@ -69,7 +70,7 @@ def _SEIAR(y, params, B_out):
     return dFlow, S, Is
 
 def _SEIR(y, params, B_out):
-    S, E, II, R = y[:4]
+    S, E, II, _ = y[:4]
     lambda_S = B_out * params.beta * (1.0 - params.epsilon_s) * II * S
     become_infectious = E / params.gamma_inv
     recover = II / params.mu_s_inv
@@ -90,7 +91,7 @@ def _solve_piecewise(
     y0, w_out_idx, params, t1, check_interval, asymmetric, discrete_eval, save_per_seg
     ):
     """Integrate the ODE over [0, t1] with fixed length segments."""
-    n_segments = int(round(t1 / check_interval))
+    n_segments = round(t1 / check_interval)
     dt0 = min(0.1, 0.5 * check_interval)
     R_off, R_crit, eval_interval = params.R_off, params.R_crit, params.eval_interval
     def _step(carry, i):

@@ -5,13 +5,23 @@ Superspreading is modelled by drawing the number of secondary cases of a transmi
 event from a NB(k_ss, p_nb) distribution.
 """
 
-import numpy as np
 import jax
+import numpy as np
 from numba import njit
 
+from models.gillespie import (
+    _advance_chain,
+    _exponential_dt,
+    _response,
+    _select_event,
+    to_uniform_grid,
+)
+from models.metrics import (
+    calculate_mt_branching_q_with_superspreading,
+    establishment_threshold,
+    outcome_metrics,
+)
 from models.parameters import Params
-from models.metrics import outcome_metrics, calculate_mt_branching_q_with_superspreading, establishment_threshold
-from models.gillespie import _advance_chain, _exponential_dt, _select_event, _response, to_uniform_grid
 
 
 @njit(cache=True, fastmath=True)
@@ -113,8 +123,7 @@ def gillespie_SEIPAR_W_superspreading(
             Z = 1.0
             if (event_idx == 0 and ss_a) or (event_idx == 1 and ss_p) or (event_idx == 2 and ss_s):
                 Z = float(np.random.negative_binomial(k_ss, p_nb))
-            if Z > current_state[0]:
-                Z = current_state[0]
+            Z = min(Z, current_state[0])
             current_state[0] -= Z; current_state[1] += Z                       # S  -> E
         elif event_idx == 3: current_state[1] -= 1.0; current_state[2] += 1.0  # E  -> Ia
         elif event_idx == 4: current_state[1] -= 1.0; current_state[3] += 1.0  # E  -> Ip

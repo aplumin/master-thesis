@@ -5,12 +5,14 @@ Linearising the loop around R_t = R_crit gives the open-loop transfer function:
 with static loop gain L0 = L(0).
 """
 
-import numpy as np
-import jax
-from math import comb
-from scipy.optimize import brentq
-from scipy.ndimage import gaussian_filter1d
 from functools import partial
+from math import comb
+
+import jax
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import brentq
+
 from models.parameters import Params
 
 

@@ -2,9 +2,10 @@
 Parameter class for compartmental models and utility functions.
 """
 
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
-from typing import NamedTuple
 
 
 class Params(NamedTuple):
@@ -222,12 +223,12 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
         gate_I = sigma(k_I * log10(I / I_crit))
     with sigma(x) = 1 / (1 + exp(-x)).
     """
-    gate_W = 1.0 / (1.0 + jnp.exp(-params.k * (reproductive_number - params.R_crit)))
-    gate_I = jnp.where( # no effect if threshold set to 0
-        params.I_crit > 0.0, 
-        1.0 / (1.0 + jnp.exp(-params.k_I * jnp.log10(jnp.maximum(number_infected,1e-300)/(params.I_crit+1e-30)))), 
-        1.0
-    )
+    gate_W = 1.0 / (1.0 + jnp.exp(-jnp.clip(params.k * (reproductive_number - params.R_crit), -80.0, 80.0)))
+    active = params.I_crit > 0.0
+    I_safe = jnp.where(active, jnp.maximum(number_infected, 1e-300), 1.0)
+    I_crit_safe = jnp.where(active, params.I_crit + 1e-30, 1.0)
+    exponent = jnp.clip(params.k_I * jnp.log10(I_safe / I_crit_safe), -80.0, 80.0)
+    gate_I = jnp.where(active, 1.0 / (1.0 + jnp.exp(-exponent)), 1.0)  # no effect if threshold is 0
     return 1.0 - params.epsilon_w * gate_W * gate_I
 
 def calculate_r(p, phi_a, phi_p, mu_a_inv, sigma_inv, mu_s_inv, epsilon_s=0.0):

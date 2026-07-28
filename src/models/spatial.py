@@ -2,23 +2,21 @@
 Spatial metapopulation model with two demes.
 """
 
-import jax
-import jax.numpy as jnp
-
-import numpy as np
-from pyarrow import feather
-import geopandas as gpd
 import datetime
-
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from matplotlib.patches import FancyArrowPatch
-
 from functools import partial
 from typing import NamedTuple
 
+import geopandas as gpd
+import jax
+import jax.numpy as jnp
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.patches import FancyArrowPatch
+from pyarrow import feather
+
+from models.compartmental import _solve, chain_derivative
 from models.parameters import Params, logistic_response_function
-from models.compartmental import chain_derivative, _solve
 
 
 class SpatialParams(NamedTuple):
@@ -43,7 +41,7 @@ class SpatialParams(NamedTuple):
 
 
 def _SEIPAR_spatial(X, prevalence, B_out, ps):
-    S, E, Ia, Ip, Is, R = X
+    S, E, Ia, Ip, Is, _ = X
     prev_a, prev_p, prev_s = prevalence
     lambda_ = B_out * ps.beta * (ps.phi_a * prev_a + ps.phi_p * prev_p + (1.0 - ps.epsilon_s) * prev_s) * S
     become_infectious = E / ps.gamma_inv
@@ -60,7 +58,7 @@ def _SEIPAR_spatial(X, prevalence, B_out, ps):
     ])
 
 def _SEIAR_spatial(X, prevalence, B_out, ps):
-    S, E, Ia, Is, R = X
+    S, E, Ia, Is, _ = X
     prev_a, prev_s = prevalence
     lambda_ = B_out * ps.beta * (ps.phi_a * prev_a + (1.0 - ps.epsilon_s) * prev_s) * S
     become_infectious = E / ps.gamma_inv
@@ -75,7 +73,7 @@ def _SEIAR_spatial(X, prevalence, B_out, ps):
     ])
 
 def _SEIR_spatial(X, prevalence, B_out, ps):
-    S, E, II, R = X
+    S, E, II, _ = X
     (prev_s,) = prevalence
     lambda_ = B_out * ps.beta * (1.0 - ps.epsilon_s) * prev_s * S
     become_infectious = E / ps.gamma_inv
@@ -309,9 +307,9 @@ def _get_pop_sizes(gdf):
 
 def _holiday_ZH_map(d):
     return 'summer' if (
-        (d >= datetime.date(2022,7,16) and d <= datetime.date(2022,8,21) or 
+        d >= datetime.date(2022,7,16) and d <= datetime.date(2022,8,21) or 
         (d >= datetime.date(2023,7,15) and d <= datetime.date(2023,8,20)) or 
-        (d >= datetime.date(2024,7,13) and d <= datetime.date(2024,8,18)))
+        (d >= datetime.date(2024,7,13) and d <= datetime.date(2024,8,18))
     ) else 'christmas' if (
         (d >= datetime.date(2021,12,23) and d <= datetime.date(2022,1,2)) or
         (d >= datetime.date(2022,12,23) and d <= datetime.date(2023,1,8)) or
