@@ -141,3 +141,34 @@ def delay_margin(ps: Params, clip_negative=False):
         return np.inf
     M_D = M_P / omega_c
     return max(M_D, 0.0) if clip_negative else M_D
+
+def damping_summary(ps):
+    """Analytical metrics summary from dominant pole."""
+    s = dominant_pole(ps)
+    if np.isnan(s): return {"period": np.nan, "t_half": np.nan, "n_osc": np.nan, "zeta": np.nan, "stable": True}
+    alpha = -s.real
+    omega = abs(s.imag)
+    return {
+        "period": float(2.0 * np.pi / omega),
+        "t_half": float(np.log(2.0) / alpha) if alpha > 0 else np.inf,
+        "n_osc": float(omega / (2.0 * np.pi * alpha)) if alpha > 0 else np.inf,
+        "zeta": float(alpha / abs(s)), "stable": bool(alpha > 0)}
+
+def critical_loop_gain(tau_W=14.0, tau_B=7.0, n_W=3, n_B=1, sampling_interval=0.0):
+    """Static loop gain at the Hopf boundary: L0 s.t. |L(j w_PC)| = 1 at the phase crossover."""
+    D = float(sampling_interval)
+    def phase(w):
+        return arg_L(w, tau_W, tau_B, n_W, n_B) - w * D / 2.0
+    def magnitude(w):
+        return (1.0 + (w * tau_W / n_W) ** 2) ** (-n_W / 2.0) * (1.0 + (w * tau_B / n_B) ** 2) ** (-n_B / 2.0)
+    return float(1.0 / magnitude(brentq(lambda w: np.pi + phase(w), 1e-10, 1e10)))
+
+def k_crit(L0c, eps_w, R_crit=1.0):
+    """k_crit(eps_w) = 2 * L0_crit * (2 - eps_w) / (eps_w * R_crit)."""
+    eps_w = np.asarray(eps_w, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(eps_w > 0, 2.0 * L0c * (2.0 - eps_w) / (eps_w * R_crit), np.inf)
+
+def eps_w_crit(L0c, k, R_crit=1.0):
+    """eps_w_crit(k) = 4 * L0_crit / (k R_crit + 2 * L0_crit)."""
+    return float(4.0 * L0c / (k * R_crit + 2.0 * L0c))

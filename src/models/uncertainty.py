@@ -8,12 +8,14 @@ import numpy as np
 from scipy.stats import beta, norm
 
 from models.metrics import (
+    contour_boundary,
     growth_rate,
     infectious_fractions,
     mean_warning_multiplier,
     transmission_fractions,
 )
 from models.parameters import Params, calculate_r
+from models.parameters_erlang import ParamsErlang
 
 
 class Marginal(NamedTuple):
@@ -157,14 +159,18 @@ def pushforward(priors: Priors, fn, n: int = 2000, seed: int = 0, quantiles=(0.0
     s = sample_derived(priors, n=n, seed=seed, **kw)
     return np.quantile(np.stack([np.asarray(fn(s, i)) for i in range(n)], axis=0), quantiles, axis=0)
 
-def params_from_priors(pr: Priors):
+def params_from_priors(pr: Priors, model="exponential"):
     """Point-estimate Params from priors."""
     m = {k: pr.marginals[k].central() for k in pr.marginals}
     if not pr.presymptomatic and not pr.asymptomatic:
+        if model == "Erlang":
+            return ParamsErlang.for_SEIR(R_0=m["R_0"], gamma_inv=m["gamma_inv"], mu_s_inv=m["mu_s_inv"])
         return Params.for_SEIR(R_0=m["R_0"], gamma_inv=m["gamma_inv"], mu_s_inv=m["mu_s_inv"])
     mu_a_inv = (m["sigma_inv"] + m["mu_s_inv"]) if pr.asymptomatic else 0.0
     phi_p = (m["RR_p"] * m["mu_s_inv"] / m["sigma_inv"]) if (pr.presymptomatic and m["sigma_inv"] > 0) else 0.0
     phi_a = (m["RR_a"] * m["mu_s_inv"] / mu_a_inv) if (pr.asymptomatic and mu_a_inv > 0) else 0.0
+    if model == "Erlang":
+        return ParamsErlang.for_SEIPAR(R_0=m["R_0"], gamma_inv=m["gamma_inv"], sigma_inv=m["sigma_inv"], mu_s_inv=m["mu_s_inv"], mu_a_inv=mu_a_inv, p=m["p"], phi_a=phi_a, phi_p=phi_p)    
     return Params.for_SEIPAR(R_0=m["R_0"], gamma_inv=m["gamma_inv"], sigma_inv=m["sigma_inv"], mu_s_inv=m["mu_s_inv"], mu_a_inv=mu_a_inv, p=m["p"], phi_a=phi_a, phi_p=phi_p)
 
 def as_uniform(pr):
@@ -191,3 +197,28 @@ def get_epi_characteristics_dict(ps: Params):
         d[f"transmission_frac_{k}"] = trans_f[k]
         d[f"infectious_frac_{k}"] = inf_f[k]
     return d
+
+def probability_uncontrollable(priors: Priors, n: int = 200_000, seed: int = 0):
+    """P(R_a + R_p > 1)."""
+    eq = epi_quantities(cached_sample_derived(priors, n=n, seed=seed))
+    R_ns = (eq["R_a"] + eq["R_p"])
+    lo, med, hi = np.quantile(R_ns, [0.025, 0.5, 0.975])
+    return {"P": float((R_ns > 1.0).mean()), "median": float(med), "lo": float(lo), "hi": float(hi)}
+
+def analytic_boundary(priors: Priors, eps_ww=None, n: int = 200_000, seed: int = 0, quantiles=(0.025, 0.5, 0.975)):
+    """Joint 95% CI on epsilon_s required for Rt = 1."""
+    eps_ww = np.linspace(0.0, 1.0, 100) if eps_ww is None else np.asarray(eps_ww, float)
+    s = cached_sample_derived(priors, n=n, seed=seed)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        eps_s = (1.0 - 1.0 / (s["R_0"][:, None] * mean_warning_multiplier(eps_ww)[None, :])) / (1.0 - epi_quantities(s)["theta"][:, None])
+    return np.nanquantile(np.where(np.isfinite(eps_s), eps_s, np.nan), quantiles, axis=0)
+
+def simulated_boundary(model, priors: Priors, eps_ww, params_fn, n: int = 200, seed: int = 0, quantiles=(0.025, 0.5, 0.975), metric="Itot", t1=100.0, E0=1e-6, **kw):
+    """Pushforward for simulated boundary."""
+    def fn(s, i):
+        return contour_boundary(model, params_fn(s, i), eps_ww, t1=t1, E0=E0, metric=metric, **kw)
+    return pushforward(priors, fn, n=n, seed=seed, quantiles=quantiles)
+
+def params_from_sample(base_params, s: dict, i: int):
+    """Params for a single Monte Carlo draw."""
+    return base_params.update(R_0=float(s["R_0"][i]), gamma_inv=float(s["gamma_inv"][i]), sigma_inv=float(s["sigma_inv"][i]), mu_s_inv=float(s["mu_s_inv"][i]), mu_a_inv=float(s["mu_a_inv"][i]), p=float(s["p"][i]), phi_a=float(s["phi_a"][i]), phi_p=float(s["phi_p"][i]))

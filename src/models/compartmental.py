@@ -9,7 +9,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from diffrax import ODETerm, PIDController, SaveAt, Tsit5, diffeqsolve
+from diffrax import RESULTS, ODETerm, PIDController, SaveAt, Tsit5, diffeqsolve
 
 from models.parameters import Params, logistic_response_function
 
@@ -50,7 +50,7 @@ def _initial_state(E0, n_I, n_W, n_B):
     flow = jnp.concatenate([jnp.stack([1.0 - E0, E0]), jnp.zeros(n_I+1)])
     return jnp.concatenate([flow, jnp.zeros(n_W), jnp.ones(n_B)])
 
-def _solve(diffeq, y0, params, t1, n_ts=5000):
+def _solve(diffeq, y0, params, t1, n_ts=5000, max_steps=MAX_STEPS, throw=True):
     """diffrax ODE solve."""
     solution = diffeqsolve(
         terms=ODETerm(diffeq),
@@ -59,13 +59,15 @@ def _solve(diffeq, y0, params, t1, n_ts=5000):
         y0=y0,
         args=params,
         saveat=SaveAt(ts=jnp.linspace(0.0, t1, n_ts)),
-        stepsize_controller=PIDController(rtol=RTOL, atol=ATOL), max_steps=MAX_STEPS,
+        stepsize_controller=PIDController(rtol=RTOL, atol=ATOL), 
+        max_steps=max_steps, throw=throw,
     )
-    return solution.ts, jnp.maximum(solution.ys, 0.0)
+    ys = jnp.where(solution.result == RESULTS.successful, jnp.maximum(solution.ys, 0.0), jnp.nan)
+    return solution.ts, ys
 
 
-@partial(jax.jit, static_argnames=['n_ts'])
-def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000):
+@partial(jax.jit, static_argnames=['n_ts', 'max_steps', 'throw'])
+def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000, max_steps: int = MAX_STEPS, throw: bool = True):
     """Compartmental model with presymptomatic and asymptomatic transmission."""
     n_W, n_B = params.n_W, params.n_B
     def _SEIPAR_W(t, y, params):
@@ -87,11 +89,11 @@ def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E
         ])
         dW, dB = _delay_ODEs(S, W, B, Is, params)
         return jnp.concatenate([dFlow, dW, dB])
-    return _solve(_SEIPAR_W, _initial_state(E0, n_I=3, n_W=n_W, n_B=n_B), params, t1, n_ts)
+    return _solve(_SEIPAR_W, _initial_state(E0, n_I=3, n_W=n_W, n_B=n_B), params, t1, n_ts, max_steps=max_steps, throw=throw)
 
 
-@partial(jax.jit, static_argnames=['n_ts'])
-def simulate_SEIAR_W(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000):
+@partial(jax.jit, static_argnames=['n_ts', 'max_steps', 'throw'])
+def simulate_SEIAR_W(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000, max_steps: int = MAX_STEPS, throw: bool = True):
     """Compartmental model without presymptomatic transmission."""
     n_W, n_B = params.n_W, params.n_B
     def _SEIAR_W(t, y, params):
@@ -111,11 +113,11 @@ def simulate_SEIAR_W(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0:
         ])
         dW, dB = _delay_ODEs(S, W, B, Is, params)
         return jnp.concatenate([dFlow, dW, dB])
-    return _solve(_SEIAR_W, _initial_state(E0, n_I=2, n_W=n_W, n_B=n_B), params, t1, n_ts)
+    return _solve(_SEIAR_W, _initial_state(E0, n_I=2, n_W=n_W, n_B=n_B), params, t1, n_ts, max_steps=max_steps, throw=throw)
 
 
-@partial(jax.jit, static_argnames=['n_ts'])
-def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000):
+@partial(jax.jit, static_argnames=['n_ts', 'max_steps', 'throw'])
+def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000, max_steps: int = MAX_STEPS, throw: bool = True):
     """Simplified compartmental model without presymptomatic or asymptomatic transmission."""
     n_W, n_B = params.n_W, params.n_B
     def _SEIR_W(t, y, params):
@@ -133,4 +135,4 @@ def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: f
         ])
         dW, dB = _delay_ODEs(S, W, B, II, params)
         return jnp.concatenate([dFlow, dW, dB])
-    return _solve(_SEIR_W, _initial_state(E0, n_I=1, n_W=n_W, n_B=n_B), params, t1, n_ts)
+    return _solve(_SEIR_W, _initial_state(E0, n_I=1, n_W=n_W, n_B=n_B), params, t1, n_ts, max_steps=max_steps, throw=throw)

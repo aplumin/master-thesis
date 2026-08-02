@@ -63,13 +63,12 @@ def _column(yy, index):
 
 def rt_amplitude(tt, rt_true, window: str = "initial"):
     """Maximum Rt amplitude over first 1% or final third."""
-    if window == "initial":
-        initial = rt_true[:max(rt_true.shape[0] // 100, 1)]
-        return jnp.max(initial) - jnp.min(initial)
     if window == "final":
         final = tt >= 2.0 * tt[-1] / 3.0
-        return jnp.max(jnp.where(final, rt_true, -jnp.inf)) - jnp.min(jnp.where(final, rt_true, jnp.inf))
-    raise ValueError(window)
+        lo, hi = jnp.min(rt_true), jnp.max(rt_true)
+        return jnp.max(jnp.where(final, rt_true, lo)) - jnp.min(jnp.where(final, rt_true, hi))
+    initial = rt_true[:max(rt_true.shape[0] // 100, 1)]
+    return jnp.max(initial) - jnp.min(initial)
 
 def _oscillation_period(tt, f, t_a, t_b, T_min=4.0, T_max=200.0, peak_threshold=0.2):
     """First local maximum of the normalised autocorrelation of f - <f> over [t_a, t_b]."""
@@ -128,10 +127,8 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warni
         above = (warning_state >= 0.5).astype(jnp.float32)
     else:
         above = (_column(yy, idx["W_out"]) >= params.R_crit).astype(jnp.float32)
-    dt_array = jnp.diff(tt)
-    total_time_above = jnp.sum(0.5 * (above[1:] + above[:-1]) * dt_array)
+    total_time_above = jnp.sum(0.5 * (above[1:] + above[:-1]) * jnp.diff(tt))
     num_crossings = jnp.sum(jnp.diff(above) > 0.0)
-
     return Rt_final, time_to_below, Itot, peak_Is, extinction_time, amplitude, total_time_above, num_crossings
 
 @partial(jax.jit, static_argnames=['model', 'n_ts'])
@@ -154,8 +151,7 @@ def compute_I_tot_grid(model: Callable, base_params: Params, eps_ww, eps_ss, t1:
         params = base_params.update(epsilon_w=w, epsilon_s=s)
         _, yy, *_ =  model(params=params, t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
-    return I_tot_grid / I_tot(0.0, 0.0)
+    return jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss) / I_tot(0.0, 0.0)
 
 @partial(jax.jit, static_argnames=['model', 'n_ts'])
 def compute_asymptomatic_grid_Rt(model: Callable, base_params: Params, p: float, phi_a: float, t1: float = 50.0, E0: float = 1e-6, n_ts: int = 5000):
@@ -189,10 +185,8 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
     def I_tot(tau_B, I_crit):
         _, yy, *_ = model(params=base_params.update(tau_B=tau_B, I_crit=I_crit), t1=t1, E0=E0)
         return yy[0,0] - yy[-1,0]
-
-    I_tot_grid = jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(taus, I_crit_list)
     _, yy_base, *_ = model(params=base_params.update(epsilon_w=0.0), t1=t1, E0=E0)
-    return I_tot_grid / (yy_base[0,0] - yy_base[-1,0])
+    return jax.vmap(jax.vmap(I_tot, in_axes=(0, None)), in_axes=(None, 0))(taus, I_crit_list) / (yy_base[0,0] - yy_base[-1,0])
 
 @partial(jax.jit, static_argnames=['model', 'n_ts'])
 def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, delta_dep=0.05, n_ts=5000):
@@ -211,14 +205,10 @@ def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level
         params = base_params.update(epsilon_w=float(eps_w), epsilon_s=float(eps_s))
         tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
         Rt, _, Itot, peak = outcome_metrics(tt, yy, params, t1)[:4]
-        if metric == 'Rt':
-            outcome_value = float(Rt)
-        elif metric == 'Itot':
-            outcome_value = float(Itot) / float(baseline_Itot)
-        elif metric == 'peak_Is': 
-            outcome_value = float(peak)
-        else:
-            raise ValueError(metric)
+        if metric == 'Rt': outcome_value = float(Rt)
+        elif metric == 'Itot': outcome_value = float(Itot) / float(baseline_Itot)
+        elif metric == 'peak_Is': outcome_value = float(peak)
+        else: raise ValueError(metric)
         return outcome_value - level
 
     boundary = []
@@ -229,16 +219,16 @@ def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level
             boundary.append(np.nan)
         else:
             boundary.append(brentq(lambda e_s, e_w=eps_w: _fn(e_w, e_s), lo, hi, xtol=1e-6))
-    return np.asarray(eps_ww), np.asarray(boundary)
+    return np.asarray(boundary)
 
-@partial(jax.jit, static_argnames=['model'])
-def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05):
+@partial(jax.jit, static_argnames=['model', 'n_S'])
+def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05, n_S=1):
     """Outcome metrics over a (tau_W, tau_B) grid of reporting and behavioural delays."""
     def wrap_delay_metrics(tau_W, tau_B):
         params = base_params.update(tau_W=tau_W, tau_B=tau_B)
         tt, yy, *_ = model(params=params, t1=t1, E0=E0)
-        Rt_final, time_to_below, Itot, peak_Is, _, amplitude, total_time_above, num_crossings = outcome_metrics(tt, yy, params, t1, delta_dep)
-        return Rt_final, time_to_below, Itot, peak_Is, amplitude, total_time_above, num_crossings
+        Rt_final, time_to_below, Itot, peak_Is, _, amplitude, total_time_above, num_crossings = outcome_metrics(tt, yy, params, t1, delta_dep, n_S=n_S)
+        return Rt_final, time_to_below, Itot, peak_Is, amplitude, total_time_above, num_crossings, tau_W+tau_B
     return jax.lax.map(lambda tau_W: jax.vmap(wrap_delay_metrics, in_axes=(None, 0))(tau_W, taus_B), taus_W)
 
 @partial(jax.jit, static_argnames=['model', 't1', 'sweep_field'])
@@ -307,6 +297,32 @@ def growth_rate(params: Params) -> float:
     """Initial exponential growth rate alpha (dominant eigenvalue of the Jacobian)."""
     J, _ = _infection_jacobian(params)
     return float(np.linalg.eig(J)[0].real.max())
+
+def growth_rate_erlang(ps):
+    """Initial exponential growth rate of the Erlang/LCT SEIPAR model."""
+    rE = ps.nE / ps.gamma_inv
+    rA = ps.nA / ps.mu_a_inv
+    rP = ps.nP / ps.sigma_inv
+    rS = ps.nS / ps.mu_s_inv
+    n = ps.nE + ps.nA + ps.nP + ps.nS
+    iE, iA, iP, iS = 0, ps.nE, ps.nE + ps.nA, ps.nE + ps.nA + ps.nP
+    J = np.zeros((n, n))
+    J[iE, iA:iA + ps.nA] = ps.beta * float(ps.phi_a) * ps.w_a
+    J[iE, iP:iP + ps.nP] = ps.beta * float(ps.phi_p) * ps.w_p
+    J[iE, iS:iS + ps.nS] = ps.beta * (1.0 - ps.epsilon_s) * ps.w_s
+
+    def chain(start, k, rate, inflow_from=None, inflow_rate=0.0, share=1.0):
+        for i in range(k):
+            J[start + i, start + i] -= rate
+            if i > 0:
+                J[start + i, start + i - 1] += rate
+        if inflow_from is not None:
+            J[start, inflow_from] += share * inflow_rate
+    chain(iE, ps.nE, rE)
+    chain(iA, ps.nA, rA, inflow_from=iE + ps.nE - 1, inflow_rate=rE, share=ps.p)
+    chain(iP, ps.nP, rP, inflow_from=iE + ps.nE - 1, inflow_rate=rE, share=1.0 - ps.p)
+    chain(iS, ps.nS, rS, inflow_from=iP + ps.nP - 1, inflow_rate=rP, share=1.0)
+    return float(np.linalg.eigvals(J).real.max())
 
 def infectious_fractions(params: Params) -> dict[str, float]:
     """Fraction of infectious individuals of each type during the initial exponential growth phase."""
