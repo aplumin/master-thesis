@@ -162,7 +162,6 @@ class Params(NamedTuple):
         Parameters for the SEIR model without asymptomatic or presymptomatic transmission.
         Uses Ebola parameters by default.
         """
-        # Same generation-weighted sum as the other constructors, with p = phi_p = sigma_inv = 0.
         r = calculate_r(p=0.0, phi_a=0.0, phi_p=0.0, mu_a_inv=0.0, sigma_inv=0.0, mu_s_inv=mu_s_inv)
         r_eps = calculate_r(p=0.0, phi_a=0.0, phi_p=0.0, mu_a_inv=0.0, sigma_inv=0.0, mu_s_inv=mu_s_inv, epsilon_s=epsilon_s)
         beta = R_0 / r
@@ -214,7 +213,7 @@ def _register_static_pytree(cls, static_fields=("n_W", "n_B")):
 _register_static_pytree(Params)
 
 
-def logistic_response_function(reproductive_number: float, params: Params, number_infected: float):
+def logistic_response_function(reproductive_number: float, params: Params, number_infected: float = 0.0):
     """
     Logistic response function of the reproductive number for the wastewater warning response.
     The response scales the transmission rate by f = 1 - epsilon_w * gate_W * gate_I,
