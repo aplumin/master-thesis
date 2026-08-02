@@ -1,0 +1,54 @@
+<beast version="2.7" namespace="beast.base.inference:beast.base.inference.parameter:remaster">
+
+<!-- Multi-type birth-death-sampling SEIPAR model (only symptomatics are sampled). -->
+  <run spec="Simulator" nSims="100">
+    <simulate spec="SimulatedTree" id="tree">
+
+      <!-- fixed traj length and min number of leaves 
+      N = 10_000
+      S + Ia -> E + Ia    phi_a * beta / N  5.172525e-6
+      S + Ip -> E + Ip    phi_p * beta / N  7.629474e-5
+      S + Is -> E + Is    1     * beta / N  2.050934e-5
+      E      -> Ia        p     * gamma     0.1170000
+      E      -> Ip        (1-p) * gamma     0.2163333
+      Ip     -> Is        sigma             0.4000000
+      Ia     -> R         mu_a              0.0847458
+      Is     -> R         mu_s              0.1075269
+      -->
+      <trajectory spec="StochasticTrajectory" id="traj" maxTime="1000"> <!-- mustHave="samp &gt;= 100" -->
+
+        <population spec="RealParameter" id="S" value="9999"/>
+        <population spec="RealParameter" id="E" value="1"/>
+        <population spec="RealParameter" id="Ia" value="0"/>
+        <population spec="RealParameter" id="Ip" value="0"/>
+        <population spec="RealParameter" id="Is" value="0"/>
+        <samplePopulation spec="RealParameter" id="samp" value="0"/>
+
+        <reaction spec="Reaction" rate="5.172525e-6"> S + Ia:1 -> Ia:1 + E:1 </reaction>
+        <reaction spec="Reaction" rate="7.629474e-5"> S + Ip:1 -> Ip:1 + E:1 </reaction>
+        <reaction spec="Reaction" rate="2.050934e-5"> S + Is:1 -> Is:1 + E:1 </reaction>
+        <reaction spec="Reaction" rate="0.1170000"> E -> Ia </reaction>
+        <reaction spec="Reaction" rate="0.2163333"> E -> Ip </reaction>
+        <reaction spec="Reaction" rate="0.4000000"> Ip -> Is </reaction>
+        <reaction spec="Reaction" rate="0.0847458"> Ia -> 0 </reaction>
+        <reaction spec="Reaction" rate="0.1075269"> Is -> 0 </reaction>
+
+        <reaction spec="Reaction" rate="0.1"> Is:1 -> Is:1 + samp:1 </reaction>
+
+      </trajectory>
+    </simulate>
+
+    <logger spec="Logger" fileName="$(filebase).traj">
+     <log idref="traj"/>
+    </logger>
+
+    <logger fileName="$(filebase).typed.trees" mode="tree">
+     <log spec="TypedTreeLogger" tree="@tree"/>
+    </logger>
+
+    <logger fileName="$(filebase).stats.trees" mode="tree">
+      <log spec="TypedTreeLogger" tree="@tree" removeSingletonNodes="true" noLabels="true"/>
+    </logger>
+    
+  </run>
+</beast>
