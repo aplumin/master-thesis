@@ -9,44 +9,57 @@ from scipy.integrate import solve_ivp
 
 from functools import partial
 import itertools
-import os
+import csv as _csv
 
-import matplotlib as mpl; mpl.use('Agg')
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
-import matplotlib.gridspec as gridspec
-from matplotlib.colors import Normalize, LogNorm, CenteredNorm
+import pandas as pd
 import seaborn as sns
 
-from models.parameters import Params, logistic_response_function
+import matplotlib as mpl; mpl.use('Agg')
+import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+from matplotlib.colors import CenteredNorm, LogNorm, Normalize
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+
 from models.compartmental import linear_chain, simulate_SEIPAR_W, simulate_SEIR_W
+from models.compartmental_erlang import simulate_SEIPAR_W_Erlang, simulate_SEIR_W_Erlang
 from models.compartmental_piecewise import simulate_SEIPAR_W_piecewise, simulate_SEIR_W_piecewise
+from models.gillespie import gillespie_SEIPAR_W, to_uniform_grid
 from models.metrics import (
-    outcome_metrics, compute_metrics, compute_R_grid, compute_asymptomatic_grid_Rt, compute_delay_metrics_grid,
-    calculate_mt_branching_q, calculate_mt_branching_q_with_superspreading, strategy_metrics, strategy_grid, R_boundary, establishment_threshold,
+    R_boundary, calculate_mt_branching_q, calculate_mt_branching_q_with_superspreading,
+    compute_asymptomatic_grid_Rt, compute_delay_metrics_grid, compute_I_tot_grid_delayed_ww,
+    compute_metrics, compute_R_grid, establishment_threshold, growth_rate, growth_rate_erlang, 
+    outcome_metrics, strategy_grid, strategy_metrics,
 )
-from models.spatial import (
-    simulate_SEIPAR_W_spatial, simulate_SEIR_W_spatial, SpatialParams, run_spatial, unpack_spatial,
-    load_and_preprocess_phone_data, plot_flows, get_canton_pair_stats, ALL_ZH_PAIRS,
+from models.parameters import Params, calculate_r, logistic_response_function
+from models.parameters_erlang import ParamsErlang, compute_weights
+from models.plotting import (
+    f_days, f_pct, plot_asymptomatic_effect_for_range_of_intervention_efficacies,
+    plot_extinction_probability_scenario, plot_final_R, plot_heatmap, plot_I_tot,
+    plot_I_tot_delayed_ww, plot_nonlinear_response_analysis, plot_trajectory,
+    table_row_metrics, table_scenario_label,
 )
 from models.sensitivity import (
-    SensitivityResults, run_sensitivity_analysis, partial_rank_residuals, 
-    load_sensitivity_results, export_sensitivity_bounds, param_symbol, ordered_params,
+    DUMMY, ELASTICITY_NAMES, SensitivityResults, Rt_elasticities, 
+    elasticities, elasticity_symbol, export_sensitivity_bounds, 
+    load_sensitivity_results, ordered_params, param_description, param_symbol, 
+    partial_rank_residuals, run_sensitivity_analysis,
 )
-from models.stability import arg_L, dominant_pole, compute_rt_grid, period_and_damping, gain_margin, delay_margin, loop_gain
-from models.gillespie import gillespie_SEIPAR_W, to_uniform_grid
+from models.spatial import (
+    ALL_GE_PAIRS, ALL_ZH_PAIRS, SpatialParams, get_canton_pair_stats, load_and_preprocess_phone_data, 
+    plot_flows, rescale_migration_rate, run_spatial, simulate_SEIPAR_W_spatial, 
+    simulate_SEIR_W_spatial, unpack_spatial,
+)
+from models.stability import (
+    arg_L, compute_rt_grid, critical_loop_gain, damping_summary, delay_margin, 
+    dominant_pole, eps_w_crit, gain_margin, k_crit, loop_gain, 
+    period_and_damping, phase_margin,
+)
 from models.superspreading import gillespie_SEIPAR_W_superspreading, simulate_superspreading_outcomes
-from models.plotting import (
-    plot_heatmap, plot_trajectory, plot_final_R, plot_I_tot, plot_I_tot_delayed_ww, 
-    plot_asymptomatic_effect_for_range_of_intervention_efficacies,
-    plot_extinction_probability_scenario, plot_nonlinear_response_analysis,
-    table_scenario_label, table_row_metrics, f_days, f_pct,
-)
-from models.parameters_erlang import compute_weights
 from models.uncertainty import (
-    Priors, Marginal, sample_derived, epi_quantities, cached_sample_derived, joint_ci, params_from_priors, as_uniform, 
-    get_model_prior_list, get_epi_characteristics_dict, pushforward,
+    Marginal, Priors, analytic_boundary, as_uniform, cached_sample_derived, epi_quantities,
+    get_epi_characteristics_dict, get_model_prior_list, joint_ci, params_from_priors,
+    params_from_sample, probability_uncontrollable, pushforward, sample_derived, simulated_boundary,
 )
 
 ### PARAMETERS ###
@@ -55,65 +68,65 @@ ASYMPTOMATIC_PATHOGENS = ["SARS-CoV-2", "H1N1"]
 PATHOGENS_FULL_LANDSCAPE = ["SARS-CoV-2", "H1N1", "Ebola", "Omicron", "Measles", "Dengue", "Rhino"]
 _zero = Marginal(0.0, 0.0, "uniform", mean=0.0)
 PRIORS = {
-    "SARS-CoV-2": Priors(marginals=dict(
-        R_0=Marginal(2.40, 2.98, "lognormal", mean=2.69),
-        gamma_inv=Marginal(1.5, 4.5, "lognormal", mean=3.0),
-        sigma_inv=Marginal(1.0, 4.0, "lognormal", mean=2.5),
-        mu_s_inv=Marginal(7.8, 10.0, "lognormal", mean=9.3),
-        p=Marginal(0.23, 0.399, "beta", mean=0.351),
-        RR_p=Marginal(0.37, 2.71, "lognormal", mean=1.00),
-        RR_a=Marginal(0.16, 0.64, "lognormal", mean=0.32),
-    ), presymptomatic=True, asymptomatic=True),
-    "H1N1": Priors(marginals=dict(
-        R_0=Marginal(1.30, 1.70, "lognormal", mean=1.46, quant_lo=0.25, quant_hi=0.75), 
-        gamma_inv=Marginal(1.41, 1.89, "lognormal", mean=1.65),
-        sigma_inv=Marginal(1.0, 4.0, "lognormal", mean=2.0),
-        mu_s_inv=Marginal(2.06, 4.69, "lognormal", mean=3.38),
-        p=Marginal(0.32, 0.40, "beta", mean=0.36),
-        RR_p=Marginal(0.04, 0.13, "lognormal", mean=0.08),
-        RR_a=Marginal(0.11, 1.54, "lognormal", mean=0.57),
-    ), presymptomatic=True, asymptomatic=True),
-    "Ebola": Priors(marginals=dict(
-        R_0=Marginal(1.74, 2.15, "lognormal", mean=1.95),
-        gamma_inv=Marginal(7.7, 9.2, "lognormal", mean=8.5),
-        mu_s_inv=Marginal(3.7, 6.3, "lognormal", mean=5.0),
-        sigma_inv=_zero, p=_zero, RR_p=_zero, RR_a=_zero,
-    ), presymptomatic=False, asymptomatic=False),
-    "Omicron": Priors(marginals=dict(
-        R_0=Marginal(3.5, 11.4, "lognormal", mean=7.38), 
-        gamma_inv=Marginal(2.51, 4.6, "lognormal", mean=3.57),
-        sigma_inv=Marginal(0.02, 1.27, "lognormal", mean=0.69), 
-        mu_s_inv=Marginal(3.06, 6.18, "lognormal", mean=4.42),
-        p=Marginal(0.23, 0.399, "beta", mean=0.351),
-        RR_p=Marginal(0.37, 2.71, "lognormal", mean=1.00),
-        RR_a=Marginal(0.16, 0.64, "lognormal", mean=0.32),
-    ), presymptomatic=True, asymptomatic=True),
-    "Measles": Priors(marginals=dict(
-        R_0=Marginal(12.0, 18.0, "lognormal", mean=15.0), 
-        gamma_inv=Marginal(7.0, 10.0, "lognormal", mean=8.5),
-        sigma_inv=Marginal(2.0, 4.0, "lognormal", mean=3.0), 
-        mu_s_inv=Marginal(4.0, 4.0, "uniform", mean=4.0),
-        RR_p=Marginal(0.5, 2.0, "lognormal", mean=1.0), 
-        RR_a=_zero, p=_zero,
-    ), presymptomatic=True, asymptomatic=False),
-    "Dengue": Priors(marginals=dict(
-        R_0=Marginal(2.0, 10.0, "lognormal", mean=6.0), 
-        gamma_inv=Marginal(3.0, 8.0, "uniform", mean=5.0),
-        sigma_inv=Marginal(1.0, 2.0, "lognormal", mean=1.5), 
-        mu_s_inv=Marginal(4.0, 5.0, "lognormal", mean=4.5),
-        p=Marginal(0.4, 0.8, "lognormal", mean=0.6), 
-        RR_a=Marginal(0.1, 1.0, "lognormal", mean=0.5),
-        RR_p=_zero, 
-    ), presymptomatic=False, asymptomatic=True),
-    "Rhino": Priors(marginals=dict(
-        R_0=Marginal(2.3, 3.0, "lognormal", mean=2.8, quant_lo=0.25, quant_hi=0.75), 
-        gamma_inv=Marginal(0.5, 1.0, "lognormal", mean=0.75),
-        sigma_inv=Marginal(0.5, 1.0, "lognormal", mean=0.75), 
-        mu_s_inv=Marginal(8.0, 14.0, "lognormal", mean=11.0),
-        p=Marginal(0.1, 0.7, "beta", mean=0.58), 
-        RR_p=Marginal(0.1, 0.5, "lognormal", mean=0.2),
-        RR_a=Marginal(0.05, 0.2, "lognormal", mean=0.1),
-    ), presymptomatic=True, asymptomatic=True),
+    "SARS-CoV-2": Priors(marginals={
+        "R_0": Marginal(2.40, 2.98, "lognormal", mean=2.69),
+        "gamma_inv": Marginal(1.5, 4.5, "lognormal", mean=3.0),
+        "sigma_inv": Marginal(1.0, 4.0, "lognormal", mean=2.5),
+        "mu_s_inv": Marginal(7.8, 10.0, "lognormal", mean=9.3),
+        "p": Marginal(0.23, 0.399, "beta", mean=0.351),
+        "RR_p": Marginal(0.37, 2.71, "lognormal", mean=1.0),
+        "RR_a": Marginal(0.16, 0.64, "lognormal", mean=0.32),
+    }, presymptomatic=True, asymptomatic=True),
+    "H1N1": Priors(marginals={
+        "R_0": Marginal(1.30, 1.70, "lognormal", mean=1.46, quant_lo=0.25, quant_hi=0.75), 
+        "gamma_inv": Marginal(1.41, 1.89, "lognormal", mean=1.65),
+        "sigma_inv": Marginal(1.0, 4.0, "lognormal", mean=2.0),
+        "mu_s_inv": Marginal(2.06, 4.69, "lognormal", mean=3.38),
+        "p": Marginal(0.32, 0.4, "beta", mean=0.36),
+        "RR_p": Marginal(0.04, 0.13, "lognormal", mean=0.08),
+        "RR_a": Marginal(0.11, 1.54, "lognormal", mean=0.57),
+    }, presymptomatic=True, asymptomatic=True),
+    "Ebola": Priors(marginals={
+        "R_0": Marginal(1.74, 2.15, "lognormal", mean=1.95),
+        "gamma_inv": Marginal(7.7, 9.2, "lognormal", mean=8.5),
+        "mu_s_inv": Marginal(3.7, 6.3, "lognormal", mean=5.0),
+        "sigma_inv": _zero, "p": _zero, "RR_p": _zero, "RR_a": _zero,
+    }, presymptomatic=False, asymptomatic=False),
+    "Omicron": Priors(marginals={
+        "R_0": Marginal(3.5, 11.4, "lognormal", mean=7.38), 
+        "gamma_inv": Marginal(2.51, 4.6, "lognormal", mean=3.57),
+        "sigma_inv": Marginal(0.02, 1.27, "lognormal", mean=0.69), 
+        "mu_s_inv": Marginal(3.06, 6.18, "lognormal", mean=4.42),
+        "p": Marginal(0.23, 0.399, "beta", mean=0.351),
+        "RR_p": Marginal(0.37, 2.71, "lognormal", mean=1.0),
+        "RR_a": Marginal(0.16, 0.64, "lognormal", mean=0.32),
+    }, presymptomatic=True, asymptomatic=True),
+    "Measles": Priors(marginals={
+        "R_0": Marginal(12.0, 18.0, "lognormal", mean=15.0), 
+        "gamma_inv": Marginal(7.0, 10.0, "lognormal", mean=8.5),
+        "sigma_inv": Marginal(2.0, 4.0, "lognormal", mean=3.0), 
+        "mu_s_inv": Marginal(4.0, 4.0, "uniform", mean=4.0),
+        "RR_p": Marginal(0.5, 2.0, "lognormal", mean=1.0), 
+        "RR_a": _zero, "p": _zero,
+    }, presymptomatic=True, asymptomatic=False),
+    "Dengue": Priors(marginals={
+        "R_0": Marginal(2.0, 10.0, "lognormal", mean=6.0), 
+        "gamma_inv": Marginal(3.0, 8.0, "uniform", mean=5.0),
+        "sigma_inv": Marginal(1.0, 2.0, "lognormal", mean=1.5), 
+        "mu_s_inv": Marginal(4.0, 5.0, "lognormal", mean=4.5),
+        "p": Marginal(0.4, 0.8, "lognormal", mean=0.6), 
+        "RR_a": Marginal(0.1, 1.0, "lognormal", mean=0.5),
+        "RR_p": _zero, 
+    }, presymptomatic=False, asymptomatic=True),
+    "Rhino": Priors(marginals={
+        "R_0": Marginal(2.3, 3.0, "lognormal", mean=2.8, quant_lo=0.25, quant_hi=0.75), 
+        "gamma_inv": Marginal(0.5, 1.0, "lognormal", mean=0.75),
+        "sigma_inv": Marginal(0.5, 1.0, "lognormal", mean=0.75), 
+        "mu_s_inv": Marginal(8.0, 14.0, "lognormal", mean=11.0),
+        "p": Marginal(0.1, 0.7, "beta", mean=0.58), 
+        "RR_p": Marginal(0.1, 0.5, "lognormal", mean=0.2),
+        "RR_a": Marginal(0.05, 0.2, "lognormal", mean=0.1),
+    }, presymptomatic=True, asymptomatic=True),
 }
 _joint = {p: joint_ci(PRIORS[p], n=20000, seed=0)[0] for p in ASYMPTOMATIC_PATHOGENS}
 P_CI = {p: _joint[p]["p"][1:] for p in ASYMPTOMATIC_PATHOGENS}
@@ -123,21 +136,20 @@ ALPHA = 0.01
 EPSILON_S = 0.8
 EPSILON_W = 0.8
 E0 = 1e-6
+ICRIT = 1e-6
 T1 = 10_000.0
 PARAMETERS = {p: params_from_priors(PRIORS[p]) for p in PATHOGENS}
 TRAJECTORY_END_TIMES = {"SARS-CoV-2": 530, "H1N1": 874, "Ebola": 1820} # 5x total wave time, rounded to nearest 10
-COLORS = {"SARS-CoV-2": "tab:blue", "H1N1": "tab:orange", "Ebola": "tab:green", "Omicron": "skyblue", "Measles": "pink", "Dengue": "red", "Rhino": "yellow"}
 
-# End times (95% extinction)
-T_BASELINE = {"SARS-CoV-2": 324, "H1N1": 433, "Ebola": 536} # eps_w = eps_s = 0
-T_ISOLATION = {"SARS-CoV-2": 378, "H1N1": 86, "Ebola": 215} # eps_w = 0, eps_s = 0.5
-T_WARNING = {"SARS-CoV-2": 769, "H1N1": 2023, "Ebola": 1823} # eps_w = 0.5, eps_s = 0
-T_STRONG = {"SARS-CoV-2": 1142, "H1N1": 68, "Ebola": 145} # eps_w = eps_s = 0.5
-T_WEAK = {"SARS-CoV-2": 484, "H1N1": 616, "Ebola": 1773} # eps_w = eps_s = 0.25
+# Styling
+plt.rcParams['figure.constrained_layout.use'] = True
+LINESTYLES = ['-','--', '-.', ':']
+MARKERS = ["o", "s", "^", "D", "v", "p", "*", "P"]
+PALETTE = sns.color_palette("colorblind", 1024)
+COLORS = {pathogen: PALETTE[i] for i, pathogen in enumerate(PATHOGENS_FULL_LANDSCAPE)}
 
 # Models
-MODELS = {"SARS-CoV-2": simulate_SEIPAR_W, "H1N1": simulate_SEIPAR_W, "Ebola": simulate_SEIR_W, 
-    "Omicron": simulate_SEIPAR_W, "Measles": simulate_SEIPAR_W, "Dengue": simulate_SEIPAR_W, "Rhino": simulate_SEIPAR_W}
+MODELS = {"SARS-CoV-2": simulate_SEIPAR_W, "H1N1": simulate_SEIPAR_W, "Ebola": simulate_SEIR_W, "Omicron": simulate_SEIPAR_W, "Measles": simulate_SEIPAR_W, "Dengue": simulate_SEIPAR_W, "Rhino": simulate_SEIPAR_W}
 MODELS_PIECEWISE = {"SARS-CoV-2": simulate_SEIPAR_W_piecewise, "H1N1": simulate_SEIPAR_W_piecewise, "Ebola": simulate_SEIR_W_piecewise}
 SPATIAL_MODELS = {"SARS-CoV-2": simulate_SEIPAR_W_spatial, "H1N1": simulate_SEIPAR_W_spatial, "Ebola": simulate_SEIR_W_spatial}
 MODEL_NAMES = {"SARS-CoV-2": "SEIPAR", "H1N1": "SEIPAR", "Ebola": "SEIR"}
@@ -148,116 +160,67 @@ PRCC_SCENARIOS = ['start', 'threshold']
 PRCC_OUTCOMES = ['Rt', 'Itot']
 PRCC_SCENARIO_TITLES = {'start': r'$I_{\text{crit}}=0$', 'threshold': r'$I_{\text{crit}}=10^{-4}$'}
 PRCC_OUTCOME_TITLES = {'Rt': r'$\mathcal{R}_t$', 'Itot': r'$I_\text{tot}$'}
+SENSITIVITY_BLOCKS = ["Pathogen", "Model"]
 
 # Alternative warning systems
 R_OFF = 0.8
 EVAL_INTERVAL = 14.0
 T_LEAD = 7.0
 CHECK_INTERVAL = 0.1
-STRATEGIES = {"baseline": (False, False, 0.0, CHECK_INTERVAL), "lead": (False, False, T_LEAD, CHECK_INTERVAL),
-              "interval": (False, True,  0.0, CHECK_INTERVAL), "asymmetric": (True,  False, 0.0, CHECK_INTERVAL)}
+STRATEGIES = {"baseline": (False, False, 0.0, CHECK_INTERVAL), "lead": (False, False, T_LEAD, CHECK_INTERVAL), "interval": (False, True,  0.0, CHECK_INTERVAL), "asymmetric": (True,  False, 0.0, CHECK_INTERVAL)}
 METRIC_NAMES = ["$\\mathcal{R}_t$", "total number of infections", "symptomatic peak", "steady-state $\\mathcal{R}_t$ amplitude", "time above $\\mathcal{R}_{crit}$", "total contact reduction cost"]
-METRIC_BOUNDS = [(0.0, 3.0), (0.0, 1.25), (0.0, 300.0), (0.0, 175.0), (0.0, 0.0005), (0.0, 0.000025)]
+METRIC_BOUNDS = [(0.0, 3.0), (0.0, 1.25), (0.0, 300.0), (0.0, 175.0), (0.0, 0.005), (0.0, 0.00025)]
 INTERVENTION_SCENARIOS = {
-    "SARS-CoV-2": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
-    "H1N1": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
-    "Ebola": [("baseline", 0.00, 0.00), ("isolation", 0.50, 0.00), ("warning", 0.00, 0.50), ("weak", 0.25, 0.25), ("combined", 0.50, 0.50)],
+    "SARS-CoV-2": {"baseline": (0.0, 0.0), "isolation": (0.5, 0.0), "warning": (0.0, 0.5), "weak": (0.25, 0.25), "combined": (0.5, 0.5)},
+    "H1N1": {"baseline": (0.0, 0.0), "isolation": (0.5, 0.0), "warning": (0.0, 0.5), "weak": (0.25, 0.25), "combined": (0.5, 0.5)},
+    "Ebola": {"baseline": (0.0, 0.0), "isolation": (0.5, 0.0), "warning": (0.0, 0.5), "weak": (0.25, 0.25), "combined": (0.5, 0.5)},
 }
+def get_ew(Rt, ps, eps_s):
+    ps = ps.update(epsilon_s=eps_s)
+    R = calculate_r(ps.p, ps.phi_a, ps.phi_p, ps.mu_a_inv, ps.sigma_inv, ps.mu_s_inv, eps_s) * ps.beta
+    return brentq(lambda ew: R * logistic_response_function(Rt, ps.update(epsilon_w=ew)) - Rt, 0, 1)
 WARNING_SCENARIOS = {
-    "SARS-CoV-2": [("baseline", 0.00, 0.00), ("uncontrolled", 0.80, 0.40), ("barely controlled", 0.80, 0.80), ("controlled", 0.80, 1.00)],
-    "H1N1": [("baseline", 0.00, 0.00), ("uncontrolled", 0.00, 0.40), ("barely controlled", 0.00, 0.80), ("controlled", 0.00, 1.00)],
-    "Ebola": [("baseline", 0.00, 0.00), ("uncontrolled", 0.20, 0.40), ("barely controlled", 0.20, 0.80), ("controlled", 0.20, 1.00)],
+    "SARS-CoV-2": {"baseline": (0.0, 0.0), "uncontrolled": (0.8, get_ew(1.2, PARAMETERS["SARS-CoV-2"], 0.8)), "barely uncontrolled": (0.8, get_ew(1.05, PARAMETERS["SARS-CoV-2"], 0.8)), "critical": (0.8, get_ew(1.0, PARAMETERS["SARS-CoV-2"], 0.8)), "controlled": (1.0, get_ew(0.95, PARAMETERS["SARS-CoV-2"], 1.0))},
+    "H1N1": {"baseline": (0.0, 0.0), "uncontrolled": (0.0, get_ew(1.2, PARAMETERS["H1N1"], 0.0)), "barely uncontrolled": (0.0, get_ew(1.05, PARAMETERS["H1N1"], 0.0)), "critical": (0.0, get_ew(1.0, PARAMETERS["H1N1"], 0.0)), "controlled": (0.6, get_ew(0.8, PARAMETERS["H1N1"], 0.6))},
+    "Ebola": {"baseline": (0.0, 0.0), "uncontrolled": (0.2, get_ew(1.2, PARAMETERS["Ebola"], 0.2)), "barely uncontrolled": (0.2, get_ew(1.05, PARAMETERS["Ebola"], 0.2)), "critical": (0.2, get_ew(1.0, PARAMETERS["Ebola"], 0.2)), "controlled": (0.55, get_ew(0.8, PARAMETERS["Ebola"], 0.55))},
 }
+
+K_RANGE = (3.2, 16.0)
+R_CRITS = [0.9, 1.0, 1.1]
+
+# LCT
+PARAMETERS_LCT = {p: params_from_priors(PRIORS[p], model="Erlang") for p in PATHOGENS}
+MODELS_LCT = {"SARS-CoV-2": simulate_SEIPAR_W_Erlang, "H1N1": simulate_SEIPAR_W_Erlang, "Ebola": simulate_SEIR_W_Erlang, "Omicron": simulate_SEIPAR_W_Erlang, "Measles": simulate_SEIPAR_W_Erlang, "Dengue": simulate_SEIPAR_W_Erlang, "Rhino": simulate_SEIPAR_W_Erlang}
 
 # Spatial
-CANTON_PAIRS = "ZHAG_ZHBS_ZHGR_AGBS"
+CANTON_PAIRS = "ZHAG_ZHBS_ZHGR"
 HOLIDAY_TYPES = ['workday', 'summer', 'christmas']
+MEAN_TRIP_DURATION = 8.0 # hours
 
 # Files
-IMAGE_RESOLUTION = 300
+plt.rcParams['figure.dpi'] = 300
 OUTDIR = "results"
 DATADIR = "data"
-
-LINESTYLES = ['-','--', '-.', ':']
-PALETTE = sns.color_palette("colorblind", 1024)
-MARKERS = ["o", "s", "^", "D", "v", "p", "*", "P"]
 
 
 ###############################################
 # BASELINE
 ###############################################
 
-rule baseline_trajectories:
+rule plot_baseline_trajectories:
     output:
         plot="{outdir}/compartmental/baseline_trajectories_{pathogen}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        peak_Is, time_to_peak, total_time = plot_trajectory(model = MODELS[wildcards.pathogen], params = PARAMETERS[wildcards.pathogen].update(I_crit=1e-4), path = output.plot, title = f"{wildcards.pathogen}", image_resolution = IMAGE_RESOLUTION, plot_total_I = True, t1 = T_BASELINE[wildcards.pathogen])
-
-
-rule plot_response_function:
-    output:
-        plot="{outdir}/compartmental/response_function_{pathogen}.png"
-    run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        
-        # vectorise response function over Rt and Is
-        ps = PARAMETERS[wildcards.pathogen].update(epsilon_w=0.8, epsilon_s=0.8, I_crit=1e-3, k=100)
-        Rt_vals = jnp.linspace(0.0, 3.0, 200)
-        Is_vals = jnp.linspace(0.0, 0.01, 200)
-        def _response(r, i): return logistic_response_function(r, ps, i)
-        Z = jax.vmap(jax.vmap(_response, in_axes=(0, None)), in_axes=(None, 0))(Rt_vals, Is_vals)
-        
-        # layout
-        fig = plt.figure(figsize=(10,10))
-        gs = gridspec.GridSpec(nrows=2, ncols=3, width_ratios=[4, 1, 0.2], height_ratios=[1, 4], wspace=0.05, hspace=0.05)
-        ax_main = fig.add_subplot(gs[1,0])
-        ax_top = fig.add_subplot(gs[0,0], sharex=ax_main)
-        ax_right = fig.add_subplot(gs[1,1], sharey=ax_main)
-        ax_cbar = fig.add_subplot(gs[1,2])
-        
-        # heatmap
-        mesh = ax_main.pcolormesh(Rt_vals, Is_vals, Z, cmap='magma', shading='auto')
-        ax_main.contour(Rt_vals, Is_vals, Z, levels=10, colors='white', alpha=0.3)
-        ax_main.axvline(ps.R_crit, color='red', linestyle='--', alpha=0.8, label=f'$R_{{crit}}={ps.R_crit}$')
-        if ps.I_crit > 0.0:
-            ax_main.axhline(ps.I_crit, color='orange', linestyle='--', alpha=0.8, label=f'$I_{{crit}}={ps.I_crit}$')
-        # ax_main.legend()
-        ax_main.set_xlabel('Delayed wastewater signal ($R_t$)', fontsize=14)
-        ax_main.set_ylabel('Symptomatic population ($I_s$)', fontsize=14)
-        
-        # top marginal
-        ax_top.plot(Rt_vals, Z[-1,:], color='black', lw=2)
-        ax_top.axvline(ps.R_crit, color='red', linestyle='--')
-        ax_top.tick_params(labelbottom=False)
-        ax_top.grid(True, alpha=0.2)
-
-        # right marginal
-        ax_right.plot(Z[:,-1], Is_vals, color='black', lw=2)
-        if ps.I_crit > 0.0:
-            ax_right.axhline(ps.I_crit, color='orange', linestyle='--')
-        ax_right.tick_params(labelleft=False)
-        ax_right.grid(True, alpha=0.2)
-        
-        # colorbar
-        cbar = fig.colorbar(mesh, cax=ax_cbar)
-        cbar.set_label('Logistic response function', fontsize=14, labelpad=10)
-        
-        # save and close
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight')
-        plt.close(fig)
+        peak_Is, time_to_peak, total_time = plot_trajectory(model=MODELS_LCT[wildcards.pathogen], params=PARAMETERS_LCT[wildcards.pathogen], path=output.plot, title=f"{wildcards.pathogen}", plot_total_I=True, t1=T1, icrit=ICRIT)
 
 rule plot_nonlinear_response_analysis:
     output:
         plot="{outdir}/compartmental/nonlinear_response_analysis.png"
     run:
         path = output.plot
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         plot_nonlinear_response_analysis(
-            n_W = 3.0, tau_W = 14.0, n_B = 1.0, tau_B = 7.0,
-            dt = 0.1, eps_w = 1.0, k = 10.0, threshold = 1.0,
-            path=path, res=IMAGE_RESOLUTION, pathogens=PATHOGENS, colors=COLORS,
-            parameters=PARAMETERS, 
+            n_W = 3.0, tau_W = 14.0, n_B = 1.0, tau_B = 7.0, dt = 0.1, eps_w = 1.0, k = 10.0, threshold = 1.0,
+            path=path, pathogens=PATHOGENS, colors=COLORS, parameters=PARAMETERS, 
             R0_lo={pathogen: PRIORS[pathogen].marginals["R_0"].lo for pathogen in PATHOGENS}, 
             R0_hi={pathogen: PRIORS[pathogen].marginals["R_0"].hi for pathogen in PATHOGENS},
         )
@@ -270,32 +233,29 @@ rule plot_trajectory:
     output:
         plot="{outdir}/compartmental/no_decomp_trajectory_{pathogen}_epss{epsilon_s}_epsw{epsilon_w}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         plot_trajectory(
             no_decomp=True, t1=TRAJECTORY_END_TIMES[wildcards.pathogen], model=MODELS[wildcards.pathogen], plot_total_I=True,
             params=PARAMETERS[wildcards.pathogen].update(epsilon_s=float(wildcards.epsilon_s), epsilon_w=float(wildcards.epsilon_w)), 
-            path=output.plot, title=f"{wildcards.pathogen} ($\\varepsilon_s={wildcards.epsilon_s}, \\varepsilon_w={wildcards.epsilon_w}$)", image_resolution=IMAGE_RESOLUTION
+            path=output.plot, title=f"{wildcards.pathogen} ($\\varepsilon_s={wildcards.epsilon_s}, \\varepsilon_w={wildcards.epsilon_w}$)"
         )
 
 rule delayed_ww_intervention:
     output:
         plot="{outdir}/compartmental/delay_grid_ww_intervention_{pathogen}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        fig = plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=PARAMETERS[wildcards.pathogen].update(epsilon_s=0.0, epsilon_w=EPSILON_W))
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        fig = plot_I_tot_delayed_ww(model=simulate_SEIPAR_W_Erlang, parameters=PARAMETERS_LCT[wildcards.pathogen].update(epsilon_s=0.0, epsilon_w=EPSILON_W))
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_main_intervention_grid:
     output:
         plot="{outdir}/compartmental/main_intervention_grid.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         eps_ww = jnp.linspace(0.0, 0.999, 100)
         eps_ss = jnp.linspace(0.0, 0.999, 100)
         t1 = 30000.0
 
         # compute per pathogen
-        Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
+        Rt_g, tRt_g, Itot_g, peakIs_g, Rt_k1 = {}, {}, {}, {}, {}
         for pathogen in PATHOGENS:
             ps = PARAMETERS[pathogen]
             Rt, tRt, It, pk = compute_metrics(model=MODELS[pathogen], base_params=ps, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1, E0=E0)
@@ -305,6 +265,7 @@ rule plot_main_intervention_grid:
             Itot_g[pathogen] = np.array(It) / float(yy0[0,0] - yy0[-1,0])
             Is0 = yy0[:, -(ps.n_W + ps.n_B + 2)]
             peakIs_g[pathogen] = np.array(pk) / float(np.max(Is0))
+            Rt_k1[pathogen], _, _, _ = compute_metrics(model=MODELS[pathogen], base_params=ps.update(k=1), eps_ww=eps_ww, eps_ss=eps_ss, t1=500.0, E0=E0)
 
         # plot
         rows = [ # label, data, cmap, center_at_one, log
@@ -335,7 +296,7 @@ rule plot_main_intervention_grid:
                 meshes.append(mesh)
                 ax.set_aspect('equal')
                 # contours, titles, labels
-                if center_at_one: ax.contour(np.array(eps_ww), np.array(eps_ss), data[pathogen], levels=[1.0], colors='black', linewidths=1.0, linestyles='--')
+                if center_at_one: ax.contour(np.array(eps_ww), np.array(eps_ss), Rt_k1[pathogen], levels=[1.0], colors='black', linewidths=1.0, linestyles='--')
                 if row_idx == 0: ax.set_title(pathogen, fontsize=14)
                 if row_idx == len(rows) - 1: ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=11)
                 if col_idx == 0: ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=11)
@@ -344,52 +305,32 @@ rule plot_main_intervention_grid:
             cbar.set_label(label, fontsize=12, labelpad=8)
             if center_at_one: cbar.ax.axhline(1.0, color='black', linewidth=1.0)
 
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight')
-        plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_R_1_contours:
     output:
-        plot="{outdir}/compartmental/R_1_contours.png"
+        plot="{outdir}/compartmental/R_1_contours.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-
-        n_draws = 200
-        eps_ww = jnp.linspace(0.0, 0.999, 50)
-        eps_ss = jnp.linspace(0.0, 0.999, 50)
-        t1 = 3000.0
+        eps_ww = np.linspace(0.0, 1.0, 100)
 
         fig, ax = plt.subplots(figsize=(6, 6))
         for pathogen in PATHOGENS:
-            model = MODELS[pathogen]
-            mean_params = PARAMETERS[pathogen].update(k=1.0)
-
-            def Rt_grid(s, i, _mp=mean_params, _m=model):
-                ps = _mp.update(
-                    R_0=float(s["R_0"][i]), gamma_inv=float(s["gamma_inv"][i]),
-                    sigma_inv=float(s["sigma_inv"][i]), mu_s_inv=float(s["mu_s_inv"][i]),
-                    mu_a_inv=float(s["mu_a_inv"][i]), p=float(s["p"][i]),
-                    phi_a=float(s["phi_a"][i]), phi_p=float(s["phi_p"][i]),
-                )
-                return np.asarray(compute_R_grid(model=_m, base_params=ps, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1))
-
-            Rt_lo, Rt_med, Rt_hi = pushforward(PRIORS[pathogen], Rt_grid, n=n_draws, seed=0, quantiles=(0.025, 0.5, 0.975))
-            ax.contourf(eps_ww, eps_ss, ((Rt_lo <= 1.0) & (Rt_hi >= 1.0)).astype(float), levels=[0.5, 1.5], colors=[COLORS[pathogen]], alpha=0.2)
-            ax.contour(eps_ww, eps_ss, Rt_med, levels=[1.0], colors=[COLORS[pathogen]], linewidths=2)
-            ax.contour(eps_ww, eps_ss, Rt_lo, levels=[1.0], colors=[COLORS[pathogen]], linestyles='--', linewidths=1)
-            ax.contour(eps_ww, eps_ss, Rt_hi, levels=[1.0], colors=[COLORS[pathogen]], linestyles='--', linewidths=1)
+            lo, med, hi = np.clip(analytic_boundary(PRIORS[pathogen], eps_ww=eps_ww, n=200_000, seed=0), 0.0, 1.0)
+            ax.fill_between(eps_ww, lo, hi, color=COLORS[pathogen], alpha=0.2, lw=0)
+            ax.plot(eps_ww, med, color=COLORS[pathogen], label=pathogen)
 
         ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=12)
         ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=12)
         ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.grid(True, alpha=0.3)
+        ax.set_aspect("equal")
+        ax.set_title(r"$\mathcal{R}_t=1$ boundary")
         ax.legend(handles=[Patch(facecolor=COLORS[p], alpha=0.5, label=p) for p in PATHOGENS], loc='upper right')
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_combined_contour_grid_R1_Itot:
     output:
         plot="{outdir}/compartmental/combined_R1_and_Itot_reduction_contours.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        
         eps_ww = jnp.linspace(0.0, 0.999, 50)
         eps_ss = jnp.linspace(0.0, 0.999, 50)
         t1 = 10000.0
@@ -415,15 +356,12 @@ rule plot_combined_contour_grid_R1_Itot:
         ax_R.grid(True, alpha=0.3); ax_I.grid(True, alpha=0.3)
         ax_R.set_aspect('equal'); ax_I.set_aspect('equal')
         ax_R.legend(handles=[Line2D([0],[0],color=COLORS[p],lw=3,label=p) for p in PATHOGENS] + [Line2D([0],[0],color='gray',lw=2,linestyle=linestyles[i],label=f'$R_{{crit}}={r}$') for i, r in enumerate(R_crits)], loc='upper left', fontsize=11)
-        plt.tight_layout()
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_controllability_boundaries:
     output:
         plot="{outdir}/compartmental/controllability_boundaries.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-
         ps = jnp.linspace(0.0, 0.999, 100)
         phis = jnp.linspace(0.0, 0.999, 100)
         eps_s_levels = [0.0, 0.25, 0.5, 0.75, 1.0]
@@ -433,7 +371,7 @@ rule plot_controllability_boundaries:
         for ax, pathogen in zip(axs, ASYMPTOMATIC_PATHOGENS):
             base = PARAMETERS[pathogen]
             model = MODELS[pathogen]
-            shade_map = {0.0: 'red', 0.25: 'orange', 0.5: 'yellow', 0.75:'lime', 1.0: 'green'}
+            colormap = {0.0: 'red', 0.25: 'orange', 0.5: 'yellow', 0.75:'lime', 1.0: 'green'}
 
             # nonsymptomatic fraction heatmap
             P, PHI = np.meshgrid(np.array(ps), np.array(phis), indexing='xy')
@@ -447,7 +385,7 @@ rule plot_controllability_boundaries:
             for eps_s in eps_s_levels:
                 for eps_w in eps_w_levels:
                     Rt = np.array(compute_asymptomatic_grid_Rt(model=model, base_params=base.update(epsilon_s=eps_s, epsilon_w=eps_w), p=ps, phi_a=phis, t1=T1, E0=E0))
-                    ax.contour(np.array(ps), np.array(phis), Rt, levels=[1.0], colors=[shade_map[eps_s]], linestyles='dotted' if eps_w<0.1 else [(0, (1, 1))] if eps_w<0.3 else 'dashed' if eps_w<0.6 else [(0, (5, 1))] if eps_w<0.8 else '-', linewidths=2.0)
+                    ax.contour(np.array(ps), np.array(phis), Rt, levels=[1.0], colors=[colormap[eps_s]], linestyles='dotted' if eps_w<0.1 else [(0, (1, 1))] if eps_w<0.3 else 'dashed' if eps_w<0.6 else [(0, (5, 1))] if eps_w<0.8 else '-', linewidths=2.0)
 
             # literature estimates
             p_lower, p_upper = P_CI[pathogen]
@@ -479,18 +417,16 @@ rule plot_controllability_boundaries:
         fig.legend(handles=legend_handles, loc='lower center', ncol=4, bbox_to_anchor=(0.5, -0.15), frameon=False, fontsize=10)
 
         # fig.suptitle(r'Controllability boundary ($\mathcal{R}_t=1$) for varying asymptomaticity', fontsize=13, y=1.02)
-        plt.tight_layout()
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 
 rule derived_epi_characteristics:
     output:
         csv="{outdir}/compartmental/derived_epi_characteristics.csv",
     run:
-        os.makedirs(os.path.dirname(output.csv), exist_ok=True)
-        n_samples=5000
-        ci=(2.5, 97.5)
-        seed=0
+        n_samples = 5000
+        ci = (2.5, 97.5)
+        seed = 0
         rows = []
         for pathogen in PATHOGENS:
             base = PARAMETERS[pathogen]
@@ -502,6 +438,8 @@ rule derived_epi_characteristics:
                 arr = np.array([d[p] for d in draws])
                 lo_ci, hi_ci = np.percentile(arr, ci)
                 rows.append((pathogen, p, point[p], float(np.median(arr)), float(lo_ci), float(hi_ci)))
+            pu = probability_uncontrollable(PRIORS[pathogen], n=200_000, seed=0)
+            rows.append((pathogen, "probability uncontrollable", "%.4f"%pu["P"], "%.3f"%pu["median"], "%.3f"%pu["lo"], "%.3f"%pu["hi"]))
 
         with open(output.csv, "w") as f:
             f.write("pathogen,quantity,point,median,ci_lo,ci_hi\n")
@@ -513,15 +451,13 @@ rule baseline_intervention_table:
     output:
         tex="{outdir}/compartmental/baseline_intervention_table.tex",
     run:
-        os.makedirs(os.path.dirname(output.tex), exist_ok=True)
         rows = {p: [] for p in PATHOGENS}
         for pathogen in PATHOGENS:
-            base = table_row_metrics(PARAMETERS[pathogen], MODELS[pathogen], 0.0, 0.0, T_BASELINE[pathogen])
+            ps = PARAMETERS_LCT[pathogen].update(R_crit=0.9)
+            base = table_row_metrics(ps, MODELS_LCT[pathogen], 0.0, 0.0, T1, icrit=ICRIT)
             base["prevented"] = 0.0
-            for name, eps_s, eps_w in INTERVENTION_SCENARIOS[pathogen]:
-                t1 = T_ISOLATION[pathogen] if name=="isolation" else T_WARNING[pathogen] if name=="warning" else T_WEAK[pathogen] if name=="weak" else T_STRONG[pathogen] if name=="combined" else None
-                m = (base if (eps_s == 0.0 and eps_w == 0.0) else table_row_metrics(PARAMETERS[pathogen], MODELS[pathogen], eps_s, eps_w, t1, itot_baseline=base["itot"]))
-                rows[pathogen].append((name, eps_s, eps_w, m))
+            for name, (eps_s, eps_w) in INTERVENTION_SCENARIOS[pathogen].items():
+                rows[pathogen].append((name, eps_s, eps_w, (base if (eps_s==0.0 and eps_w==0.0) else table_row_metrics(ps, MODELS_LCT[pathogen], eps_s, eps_w, T1, itot_baseline=base["itot"], icrit=ICRIT))))
         with open(output.tex, "w") as f:
             f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{lcccccccc}\n\\toprule\n\\textbf{scenario} & $\\mathcal{R}_t$ & \\textbf{peak sympt.} & \\textbf{time to peak} & \\textbf{wave time} & \\textbf{attack rate} & \\textbf{inf. prevented} & \\textbf{isol. cost} & \\textbf{warn cost}\\\\\n\\midrule\n")
             for i, pathogen in enumerate(PATHOGENS):
@@ -537,7 +473,6 @@ rule plot_crossings:
     output:
         plot="{outdir}/compartmental/_crossings.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         pathogen = "SARS-CoV-2"
         model = MODELS[pathogen]
         ps = PARAMETERS[pathogen]
@@ -563,7 +498,7 @@ rule plot_crossings:
             xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
             title='Number of warning threshold crossings'
         )
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 
 ###############################################
@@ -574,21 +509,18 @@ rule plot_asymptomatic_grid_Rt_final:
     output:
         plot="{outdir}/compartmental/asymptomatic_grid_Rt_final_{pathogen}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        plot_asymptomatic_effect_for_range_of_intervention_efficacies(model=MODELS[wildcards.pathogen], params=PARAMETERS[wildcards.pathogen], p_CI=P_CI[wildcards.pathogen], phi_a_CI=PHI_A_CI[wildcards.pathogen], total_infected=False, path=output.plot, image_resolution=IMAGE_RESOLUTION, t1=T1)
+        plot_asymptomatic_effect_for_range_of_intervention_efficacies(model=MODELS[wildcards.pathogen], params=PARAMETERS[wildcards.pathogen], p_CI=P_CI[wildcards.pathogen], phi_a_CI=PHI_A_CI[wildcards.pathogen], total_infected=False, path=output.plot, t1=T1)
 
 rule plot_asymptomatic_grid_Itot_final:
     output:
         plot="{outdir}/compartmental/asymptomatic_grid_Itot_final_{pathogen}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        plot_asymptomatic_effect_for_range_of_intervention_efficacies(t1=600.0, model=MODELS[wildcards.pathogen], params=PARAMETERS[wildcards.pathogen], p_CI=P_CI[wildcards.pathogen], phi_a_CI=PHI_A_CI[wildcards.pathogen], total_infected=True, path=output.plot,image_resolution=IMAGE_RESOLUTION)
+        plot_asymptomatic_effect_for_range_of_intervention_efficacies(t1=600.0, model=MODELS[wildcards.pathogen], params=PARAMETERS[wildcards.pathogen], p_CI=P_CI[wildcards.pathogen], phi_a_CI=PHI_A_CI[wildcards.pathogen], total_infected=True, path=output.plot)
 
 rule plot_asymptomatic_generation_time:
     output:
         plot="{outdir}/compartmental/asymptomatic_generation_time_{pathogen}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         pathogen = wildcards.pathogen
         ps = PARAMETERS[pathogen]
         P = jnp.linspace(0.0, 0.999, 100)
@@ -609,13 +541,12 @@ rule plot_asymptomatic_generation_time:
         yerr = np.array([[ps.phi_a - PHI_A_CI[pathogen][0]], [PHI_A_CI[pathogen][1] - ps.phi_a]])
         ax.errorbar(ps.p, ps.phi_a, xerr=xerr, yerr=yerr, fmt='o', color='white', markeredgecolor='black', ecolor='white', elinewidth=1.5, capsize=3, markersize=5)
         ax.set_ylim([0.0,1.0])
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_asymptomatic_landscape:
     output:
         plot="{outdir}/compartmental/asymptomatic_landscape.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         fig, ax = plt.subplots(figsize=(6,6))
 
         # asymptomatic landscape
@@ -641,8 +572,7 @@ rule plot_asymptomatic_landscape:
         ax.add_artist(ax.legend(handles=[Patch(facecolor=COLORS[p], label=p) for p in PATHOGENS_FULL_LANDSCAPE], loc='upper left', title="Pathogens"))
         ax.legend(loc='upper right', title="Controllability ($\\mathcal{R}_t<1$)")
         ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close()
+        plt.savefig(output.plot); plt.close()
 
 
 ###############################################
@@ -651,9 +581,8 @@ rule plot_asymptomatic_landscape:
 
 rule compute_prcc:
     output:
-        npz="{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz"
+        npz="{outdir}/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz"
     run:
-        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
         t1 = 1000.0
         around_mean = wildcards.bounds=="symmetric"
         results = run_sensitivity_analysis(
@@ -673,9 +602,8 @@ rule plot_prcc_monotonicity:
     input:
         npz=rules.compute_prcc.output.npz
     output:
-        plot="{outdir}/compartmental/prcc/monotonicity_{pathogen}_{scenario}_{outcome}_{bounds}.png"
+        plot="{outdir}/prcc/monotonicity_{pathogen}_{scenario}_{outcome}_{bounds}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         results = load_sensitivity_results(input.npz)
         
         # subplots
@@ -710,20 +638,17 @@ rule plot_prcc_monotonicity:
         fig.supxlabel('partial rank of parameter', fontsize=24)
         fig.supylabel('partial rank of output', fontsize=24)
         fig.suptitle(f'{wildcards.pathogen}, {PRCC_SCENARIO_TITLES[wildcards.scenario]}, {PRCC_OUTCOME_TITLES[wildcards.outcome]}', fontsize=32)
-        plt.tight_layout()
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_prcc_grid:
     input:
-        npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz", outdir=wc.outdir, pathogen=PATHOGENS, scenario=['start', 'threshold'], outcome=PRCC_OUTCOMES, bounds=wc.bounds)
+        npz=lambda wc: expand("{outdir}/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz", outdir=wc.outdir, pathogen=PATHOGENS, scenario=['start', 'threshold'], outcome=PRCC_OUTCOMES, bounds=wc.bounds)
     output:
-        plot="{outdir}/compartmental/prcc/combined_prcc_grid_{bounds}.png"
+        plot="{outdir}/prcc/combined_prcc_grid_{bounds}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        
         # all params for global x axis
         all_params = ordered_params([p for path in input.npz for p in load_sensitivity_results(path).param_names])
-        labels = [param_symbol(n) for n in all_params]
+        all_labels = [param_symbol(n) for n in all_params]
         x = np.arange(len(all_params))
 
         def params_aligned(res, metric, is_err=False, is_abs=False):
@@ -749,12 +674,14 @@ rule plot_prcc_grid:
             color = COLORS[pathogen]
             for c, outcome in enumerate(PRCC_OUTCOMES):
                 ax = axs[r, c]
-                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}_{wildcards.bounds}.npz")
-                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}_{wildcards.bounds}.npz")
+                results_start = load_sensitivity_results(f"{wildcards.outdir}/prcc/data_{pathogen}_start_{outcome}_{wildcards.bounds}.npz")
+                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/prcc/data_{pathogen}_threshold_{outcome}_{wildcards.bounds}.npz")
+                params_threshold_mean = params_aligned(results_threshold, 'prcc_mean', is_abs=False)
+                labels = [label if np.isfinite(params_threshold_mean[i]) else "" for i, label in enumerate(all_labels)]
                 err_kw = dict(ecolor='k', linewidth=0.6, capsize=1.5)
                 edge_kw = dict(edgecolor='k', linewidth=0.3)
                 ax.bar(x - 0.5*w, params_aligned(results_start, 'prcc_mean', is_abs=False), yerr=params_aligned(results_start, 'prcc_err'), width=w, color=color, **edge_kw, error_kw=err_kw)
-                ax.bar(x + 0.5*w, params_aligned(results_threshold, 'prcc_mean', is_abs=False), yerr=params_aligned(results_threshold, 'prcc_err'), width=w, color=color, alpha=0.5, hatch='////', **edge_kw, error_kw=err_kw)                
+                ax.bar(x + 0.5*w, params_threshold_mean, yerr=params_aligned(results_threshold, 'prcc_err'), width=w, color=color, alpha=0.5, hatch='////', **edge_kw, error_kw=err_kw)                
                 ax.set_xticks(x)
                 ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=14)
                 ax.set_ylim(-1.05, 1.05)
@@ -765,17 +692,14 @@ rule plot_prcc_grid:
             handles=[Patch(facecolor='gray', label=r'PRCC ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
                 Patch(facecolor='gray', hatch='////', label=r'PRCC ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3, alpha=0.5)],
             loc='lower center', ncol=6, bbox_to_anchor=(0.5, -0.03), fontsize=14, frameon=True)
-        plt.tight_layout()
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_combined_sensitivity_grid:
     input:
-        npz=lambda wc: expand("{outdir}/compartmental/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz", outdir=wc.outdir, pathogen=PATHOGENS, scenario=['start', 'threshold'], outcome=PRCC_OUTCOMES, bounds=["empirical"])
+        npz=lambda wc: expand("{outdir}/prcc/data_{pathogen}_{scenario}_{outcome}_{bounds}.npz", outdir=wc.outdir, pathogen=PATHOGENS, scenario=['start', 'threshold'], outcome=PRCC_OUTCOMES, bounds=["empirical"])
     output:
-        plot="{outdir}/compartmental/prcc/combined_sensitivity_grid.png"
+        plot="{outdir}/prcc/combined_sensitivity_grid.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-        
         # all params for global x axis
         all_params = ordered_params([p for path in input.npz for p in load_sensitivity_results(path).param_names])
         labels = [param_symbol(n) for n in all_params]
@@ -804,8 +728,8 @@ rule plot_combined_sensitivity_grid:
             color = COLORS[pathogen]
             for c, outcome in enumerate(PRCC_OUTCOMES):
                 ax = axs[r, c]
-                results_start = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_start_{outcome}_empirical.npz")
-                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/compartmental/prcc/data_{pathogen}_threshold_{outcome}_empirical.npz")
+                results_start = load_sensitivity_results(f"{wildcards.outdir}/prcc/data_{pathogen}_start_{outcome}_empirical.npz")
+                results_threshold = load_sensitivity_results(f"{wildcards.outdir}/prcc/data_{pathogen}_threshold_{outcome}_empirical.npz")
                 err_kw = dict(ecolor='k', linewidth=0.6, capsize=1.5)
                 edge_kw = dict(edgecolor='k', linewidth=0.3)
                 ax.bar(x - 2.5*w, params_aligned(results_start, 'prcc_mean', is_abs=True), yerr=params_aligned(results_start, 'prcc_err'), width=w, color=color, **edge_kw, error_kw=err_kw)
@@ -829,18 +753,47 @@ rule plot_combined_sensitivity_grid:
                 Patch(facecolor='gray', alpha=0.35, label=r'$S_T$ ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
                 Patch(facecolor='gray', alpha=0.35, hatch='////', label=r'$S_T$ ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3)], 
             loc='lower center', ncol=6, bbox_to_anchor=(0.5, -0.03), fontsize=16, frameon=True)
-        plt.tight_layout()
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule export_param_bounds:
     input:
         npzs=lambda wc: expand(rules.compute_prcc.output.npz, pathogen=PATHOGENS, scenario="threshold", outcome="Itot", outdir=OUTDIR, bounds=wc.bounds)
     output:
-        tex="{outdir}/compartmental/prcc/sensitivity_bounds_table_{bounds}.tex"
+        tex="{outdir}/prcc/sensitivity_bounds_table_{bounds}.tex"
     run:
-        os.makedirs(os.path.dirname(output.tex), exist_ok=True)
         export_sensitivity_bounds(combinations=list(itertools.product(PATHOGENS, ["threshold"])), path=output.tex, npzs=input.npzs)
-        
+
+rule export_elasticities:
+    output:
+        tex="{outdir}/prcc/elasticities.tex",
+    run:
+        points = {pathogen: [(scenario, WARNING_SCENARIOS[pathogen][scenario]) for scenario in ["uncontrolled", "critical"]] for pathogen in PATHOGENS}
+        all_results = {}
+        for pathogen in PATHOGENS:
+            base = PARAMETERS[pathogen]
+            RR_a = (float(base.phi_a) * float(base.mu_a_inv) / float(base.mu_s_inv) if float(base.mu_a_inv) > 0 else 0.0)
+            RR_p = (float(base.phi_p) * float(base.sigma_inv) / float(base.mu_s_inv) if float(base.sigma_inv) > 0 else 0.0)
+            all_results[pathogen] = {}
+            for label, (eps_s, eps_w) in points[pathogen]:
+                all_results[pathogen][label] = Rt_elasticities(base.R_0, base.p, RR_a, RR_p, eps_s, eps_w, base.k, base.R_crit)
+        order = ["R_0", "p", "RR_a", "RR_p", "epsilon_s", "epsilon_w", "k", "R_crit", "gamma_inv", "sigma_inv", "mu_s_inv", "mu_a_inv", "tau_W", "tau_B"]
+        rows = []
+        for name in order:
+            row_values = []
+            for pathogen in PATHOGENS:
+                for l, _ in points[pathogen]:
+                    val = "%+.3f" % all_results[pathogen][l]["elasticities"][name]
+                    row_values.append("--\\," + val[1:] if val.startswith("-") else val)
+            rows.append("%s & %s & %s \\\\" % (param_description(name), param_symbol(name), " & ".join(row_values)))
+        header = " & & " + " & ".join(["\\multicolumn{%d}{c}{%s}" % (len(points[p]), p) for p in PATHOGENS]) + " \\\\"
+        subheader = "Parameter & Symbol & " + " & ".join(["$\\mathcal{R}_t=%.3f$" % all_results[p][l]["Rt"] for p in PATHOGENS for l, e in points[p]]) + " \\\\"
+        with open(output.tex, "w") as f:
+            f.write("\\begin{table}[H]\n\\centering\n\\small\n\\begin{tabular}{ll%s}\n\\toprule\n" % ("c" * len(PATHOGENS) * len(points["H1N1"])))
+            f.write(header + "\n")
+            f.write(subheader + "\n\\midrule\n")
+            f.write("\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n")
+            f.write("\\caption[Elasticities of the reproductive number]{Elasticities of the reproductive number across all pathogens}\n\\label{tab:elasticities}\n\\end{table}\n")
+
 
 ###############################################
 # STABILITY ANALYSIS
@@ -850,8 +803,6 @@ rule plot_true_vs_reported_Rt_scenarios:
     output:
         plot="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_scenarios.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-
         taus_W = [7.0, 14.0, 21.0]
         taus_B = [3.0, 7.0, 14.0]
         ks = [5.0, 10.0, 50.0]
@@ -907,8 +858,52 @@ rule plot_true_vs_reported_Rt_scenarios:
             ['True $R_t$', 'Reported $R_t$'],
             loc='lower center', ncol=2, bbox_to_anchor=(0.5, 0.02), fontsize=16,
         )
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close()
+        plt.savefig(output.plot); plt.close()
 
+rule plot_true_vs_reported_Rt_scenarios_piecewise:
+    output:
+        plot="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_scenarios_{scenario}.png",
+    run:
+        k = float(wildcards.k)
+        t1 = 300.0
+        tau_W = 14.0
+        tau_B = 7.0
+        eps_w_values = [0.0, 0.4, 0.8, 1.0]
+
+        asymmetric = wildcards.scenario=="asymmetric"
+        discrete_eval = wildcards.scenario=="interval"
+        lead = wildcards.scenario=="lead"
+        T_lead = 7.0 if lead else 0.0
+
+        model = MODELS_PIECEWISE[wildcards.pathogen]
+
+        sns.set_theme(style="white", rc={"axes.grid": False})
+        fig, axs = plt.subplots(nrows=1, ncols=len(eps_w_values), figsize=(16,4), sharex=True, sharey=True)
+
+        for j, eps_w in enumerate(eps_w_values):
+            ps = PARAMETERS[wildcards.pathogen].update(epsilon_s=EPSILON_S, epsilon_w=eps_w, k=k, R_off=0.8, eval_interval=28.0, T_lead=T_lead)
+            tt, yy, mm = model(params=ps, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval)
+            rt_true = ps.R_0 * ps.rho * yy[:, -1] * yy[:, 0]
+            rt_reported = yy[:, -(ps.n_B + 1)]
+            above = (rt_reported >= ps.R_crit).astype(jnp.float32)
+            total_time_above = float(above.mean() * t1)
+            num_crossings = int(jnp.sum(jnp.diff(above) > 0))
+
+            ax = axs[j]
+            ax.set_title(f'$\\varepsilon_w={eps_w:g}$', fontsize=16)
+            if j == 0: ax.set_ylabel('$R_t$', fontsize=16)
+            ax.set_xlabel('time (days)', fontsize=12)
+            ax.plot(tt, rt_true, color='black')
+            ax.plot(tt, rt_reported, color='red')
+            ax.axhline(ps.R_crit, color='grey', linestyle='--')
+            ax.text(0.97, 0.95, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
+        fig.suptitle(f'{wildcards.pathogen}: $k={k:g}$, {wildcards.scenario} ($\\tau_W={ps.tau_W:g}$, $\\tau_B={ps.tau_B:g}$, $\\varepsilon_s={EPSILON_S:g}$)', fontsize=15, y=1.03,)
+        fig.legend(
+            [Line2D([0], [0], color='black', lw=2), Line2D([0], [0], color='red', lw=2)],
+            ['True $R_t$', 'Reported $R_t$'],
+            loc='lower center', ncol=2, bbox_to_anchor=(0.5, -0.12), fontsize=14,
+        )
+        plt.savefig(output.plot); plt.close()
 
 rule plot_true_vs_reported_Rt_heatmaps:
     output:
@@ -920,40 +915,39 @@ rule plot_true_vs_reported_Rt_heatmaps:
         time_above ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_time_above.png",
         crossings ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_crossings.png",
     run:
-        for path in output: os.makedirs(os.path.dirname(path), exist_ok=True)
         pathogen = wildcards.pathogen
         taus_W = jnp.linspace(1.0, 31.0, num=100)
         taus_B = jnp.linspace(1.0, 31.0, num=100)
         t1 = 1000.0
         k = float(wildcards.k)
         epsilon_s = EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0
-        base_params = PARAMETERS[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
+        base_params = PARAMETERS_LCT[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=0.8, k=k)
 
-        Rt_final, time_to_below, Itot, peak_Is, amplitudes, time_above, crossings = compute_delay_metrics_grid(model=MODELS[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
+        Rt_final, time_to_below, Itot, peak_Is, amplitudes, time_above, crossings, delay = compute_delay_metrics_grid(model=MODELS_LCT[wildcards.pathogen], base_params=base_params, taus_W=taus_W, taus_B=taus_B)
 
         plt.figure(figsize=(10,10))
-        plt.scatter(amplitudes, Itot, c='k', alpha=0.2, s=2) # TODO: color for total delay
+        plt.scatter(amplitudes, Itot, c=delay, alpha=0.2, s=2)
         plt.title('Effect of oscillations on the number of infections')
         plt.xlabel('Oscillation amplitudes')
         plt.ylabel('Total fraction infected')
-        plt.savefig(f"{wildcards.outdir}/compartmental/true_vs_reported_Rt_{wildcards.pathogen}_k{wildcards.k}_scatter_amplitudes_vs_fractions.png", dpi=IMAGE_RESOLUTION); plt.close()
+        plt.savefig(f"{wildcards.outdir}/compartmental/true_vs_reported_Rt_{wildcards.pathogen}_k{wildcards.k}_scatter_amplitudes_vs_fractions.png"); plt.close()
 
         kwargs = dict(x_logscale=False, xlabel='Behavioural delay ($\\tau_B$)', ylabel='Reporting delay ($\\tau_W$)')
         scenario = f'({wildcards.pathogen}, $k={k:g}$)'
         fig, _ = plot_heatmap(taus_B, taus_W, amplitudes, cmap='magma', cbar_label='Amplitude of oscillations', title=f'Stability of delayed response {scenario}', **kwargs)
-        fig.savefig(output.amplitudes, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        fig.savefig(output.amplitudes); plt.close(fig)
         fig, _ = plot_heatmap(taus_B, taus_W, time_above, cmap='cividis', cbar_label='Days above warning threshold', title=f'Time above warning threshold {scenario}', **kwargs)
-        fig.savefig(output.time_above, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        fig.savefig(output.time_above); plt.close(fig)
         fig, _ = plot_heatmap(taus_B, taus_W, crossings, cmap='plasma', cbar_label='Total times warned', title=f'Number of warning-threshold crossings {scenario}', **kwargs)
-        fig.savefig(output.crossings, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        fig.savefig(output.crossings); plt.close(fig)
 
         # per pathogen
         Rt_g, tRt_g, Itot_g, peakIs_g = {}, {}, {}, {}
-        ps = PARAMETERS[pathogen]
+        ps = PARAMETERS_LCT[pathogen]
         Rt, tRt, It, pk = Rt_final, time_to_below, Itot, peak_Is
         Rt_g[pathogen] = np.array(Rt)
         tRt_g[pathogen] = np.array(tRt)
-        _, yy0 = MODELS[pathogen](params=ps.update(epsilon_s=0.0, epsilon_w=0.0), t1=t1)
+        _, yy0 = MODELS_LCT[pathogen](params=ps.update(epsilon_s=0.0, epsilon_w=0.0), t1=t1)
         Itot_g[pathogen] = np.array(It) / float(yy0[0,0] - yy0[-1,0])
         Is0 = yy0[:, -(ps.n_W + ps.n_B + 2)]
         peakIs_g[pathogen] = np.array(pk) / float(np.max(Is0))
@@ -975,24 +969,18 @@ rule plot_true_vs_reported_Rt_heatmaps:
             else:
                 norm = Normalize(vmin=vmin, vmax=vmax)
 
-            # cbar_axhlines = [1.0] if center_at_one else []
-            # cbar_axhlines_colors = ['black'] if center_at_one else []
-            # cbar_axhlines=cbar_axhlines, cbar_axhlines_colors=cbar_axhlines_colors, 
-            fig, ax = plot_heatmap(taus_B, taus_W, data[pathogen], cmap=cmap, cbar_label=label, title=f'{label} ({pathogen})', **kwargs)
+            fig, ax = plot_heatmap(taus_B, taus_W, data[pathogen], cmap=cmap, cbar_label=label, title=f'{label} ({pathogen})', norm=norm, **kwargs)
             if center_at_one: ax.contour(np.array(taus_B), np.array(taus_W), data[pathogen], levels=[1.0], colors='black', linewidths=1.0, linestyles='--')
-            if title=='Rt_final': fig.savefig(output.Rt_final, dpi=IMAGE_RESOLUTION, bbox_inches='tight')
-            elif title=='time_to_below': fig.savefig(output.time_to_below, dpi=IMAGE_RESOLUTION, bbox_inches='tight')
-            elif title=='Itot': fig.savefig(output.Itot, dpi=IMAGE_RESOLUTION, bbox_inches='tight')
-            elif title=='peak_Is': fig.savefig(output.peak_Is, dpi=IMAGE_RESOLUTION, bbox_inches='tight')
+            if title=='Rt_final': fig.savefig(output.Rt_final)
+            elif title=='time_to_below': fig.savefig(output.time_to_below)
+            elif title=='Itot': fig.savefig(output.Itot)
+            elif title=='peak_Is': fig.savefig(output.peak_Is)
             plt.close(fig)
 
-
-### CONTROL THEORY ###
 rule plot_gain_margins:
     output:
         plot="{outdir}/compartmental/gain_margins_{pathogen}_vary_{scenario}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         ps = PARAMETERS[wildcards.pathogen].update(epsilon_w=EPSILON_W)
         if wildcards.scenario == "delays":
             xs = np.linspace(1.0, 31.0, 100)
@@ -1009,17 +997,19 @@ rule plot_gain_margins:
             eps_ww = np.linspace(0.0, 0.999, 100)
             MG = np.array([gain_margin(loop_gain(ps.R_0 * ps.rho, ew, ps.k, ps.R_crit), ps.tau_W, ps.tau_B) for ew in eps_ww])
             fig, ax = plt.subplots(figsize=(10, 10))
-            ax.plot(eps_ww, MG)
-            ax.set_xlabel = 'Warning response efficacy $\\varepsilon_w$'
-            ax.set_ylabel = 'Isolation efficacy $\\varepsilon_s$'
-            ax.set_title = 'Gain margin'
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close(fig)
+            ax.plot(eps_ww, MG, c='k')
+            ax.set_xlabel('Warning response efficacy $\\varepsilon_w$')
+            ax.set_ylabel('Gain margin')
+            ax.set_title('Gain margin for varying warning efficacies')
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+            ax.grid(True, alpha=0.2)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_delay_margins:
     output:
         plot="{outdir}/compartmental/delay_margins_{pathogen}_vary_{scenario}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         ps = PARAMETERS[wildcards.pathogen].update(epsilon_w=EPSILON_W)
         if wildcards.scenario == "delays":
             taus_W = np.linspace(1.0, 31.0, 100)
@@ -1036,21 +1026,20 @@ rule plot_delay_margins:
             ax.set_xlabel = 'Warning response efficacy $\\varepsilon_w$'
             ax.set_ylabel = 'Isolation efficacy $\\varepsilon_s$'
             ax.set_title = 'Delay margin'
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_period_and_damping_scatter:
     output:
         period ="{outdir}/compartmental/period_scatter_{pathogen}_k{k}.png",
         damping="{outdir}/compartmental/damping_scatter_{pathogen}_k{k}.png",
     run:
-        for path in output: os.makedirs(os.path.dirname(path), exist_ok=True)
         N = 50
         eps_w = 0.8
         k = float(wildcards.k)
         t1 = 300.0
         epsilon_s = EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0
-        base_params = PARAMETERS[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=eps_w, k=k)
-        model = MODELS[wildcards.pathogen]
+        base_params = PARAMETERS_LCT[wildcards.pathogen].update(epsilon_s=epsilon_s, epsilon_w=eps_w, k=k)
+        model = MODELS_LCT[wildcards.pathogen]
         n_W = base_params.n_W
         n_B = base_params.n_B
         taus_W = jnp.linspace(3.0, 31.0, N)
@@ -1091,8 +1080,7 @@ rule plot_period_and_damping_scatter:
         ax.set_ylabel('simulated')
         ax.set_title(f'Oscillation periods ({wildcards.pathogen}, $k={k:g}$)')
         plt.colorbar(sc, ax=ax, label=r'total delay $\tau_W + \tau_B$ (days)', shrink=0.7)
-        plt.tight_layout()
-        plt.savefig(output.period, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        plt.savefig(output.period); plt.close(fig)
 
         # damping scatterplot
         valid = np.isfinite(simulation_damping) & np.isfinite(analytical_damping)
@@ -1108,8 +1096,47 @@ rule plot_period_and_damping_scatter:
         ax.set_ylabel('simulated')
         ax.set_title(f'Decay rates ({wildcards.pathogen}, $k={k:g}$)')
         plt.colorbar(sc, ax=ax, label=r'total delay $\tau_W + \tau_B$ (days)', shrink=0.7)
-        plt.tight_layout()
-        plt.savefig(output.damping, dpi=IMAGE_RESOLUTION); plt.close(fig)
+        plt.savefig(output.damping); plt.close(fig)
+
+rule plot_hopf_boundary:
+    output:
+        plot="{outdir}/compartmental/hopf_boundary.png",
+    run:
+        ps = PARAMETERS["SARS-CoV-2"].update(epsilon_s=EPSILON_S, epsilon_w=EPSILON_W)
+        eps_w = np.linspace(0.01, 1.0, 400)
+        kc = k_crit(critical_loop_gain(ps.tau_W, ps.tau_B, ps.n_W, ps.n_B), eps_w, ps.R_crit)
+
+        fig, ax = plt.subplots(figsize=(6,6))
+        ax.fill_between(eps_w, kc, 1e3, color="r", alpha=0.1, lw=0)
+        ax.fill_between(eps_w, K_RANGE[0], K_RANGE[1], color="k", alpha=0.1, lw=0)
+        ax.plot(eps_w, kc, "k-")
+        ax.text(0.9, 60, "unstable", ha="right", va="top", color="r", fontsize=10)
+        ax.text(0.3, 20, "stable", ha="left", va="bottom", color="0.3", fontsize=10)
+        ax.text(0.5, 5, r"plausible range $k\in[%g,%g]$" % K_RANGE, ha="center", va="center", color="k", fontsize=10)
+        ax.set_yscale("log")
+        ax.set_ylim(1, 100)
+        ax.set_xlim(0.05, 1.0)
+        ax.set_xlabel(r"Warning response efficacy $\varepsilon_w$", fontsize=12)
+        ax.set_ylabel(r"Response sharpness $k$", fontsize=12)
+        ax.set_title(r"Hopf boundary $M_G=1$", fontsize=14)
+        fig.savefig(output.plot); plt.close(fig)
+
+rule damping_summary_table:
+    output:
+        csv="{outdir}/compartmental/damping_summary.csv",
+    run:
+        with open(output.csv, "w", newline="") as f:
+            w = _csv.writer(f)
+            w.writerow(["pathogen", "eps_w", "k", "M_G", "M_D", "period", "n_osc", "zeta", "k_crit", "t_half"])
+            for pathogen in PATHOGENS:
+                base = PARAMETERS[pathogen]
+                for ew in (0.4, 0.5, 0.8, 1.0):
+                    for kk in (10.0, 30.0):
+                        ps = base.update(epsilon_w=ew, k=kk)
+                        d = damping_summary(ps)
+                        L0 = loop_gain(ps.R_0 * ps.rho, ew, kk, ps.R_crit)
+                        L0c = critical_loop_gain(ps.tau_W, ps.tau_B, ps.n_W, ps.n_B)
+                        w.writerow([pathogen, ew, kk, gain_margin(L0, ps.tau_W, ps.tau_B, ps.n_W, ps.n_B), delay_margin(ps), d["period"], d["n_osc"], d["zeta"], k_crit(L0c, ew, R_crit=float(ps.R_crit)), d["t_half"]])
 
 
 ###############################################
@@ -1120,7 +1147,6 @@ rule plot_stochastic_baseline_trajectories:
     output:
         plot ="{outdir}/gillespie/stochastic_baseline_trajectories_{pathogen}_N{N}.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = int(wildcards.N)
         t1 = 1000.0
         num_simulations = 100
@@ -1148,17 +1174,13 @@ rule plot_stochastic_baseline_trajectories:
         ax_hist.set_title('Extinction times')
         ax_hist.set_xlabel('days')
         fig.suptitle(f'Stochastic susceptible trajectories (N={N})')
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
-
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_linearised_branching_process_extinction_probabilities:
     output:
         plot="{outdir}/gillespie/linearised_branching_process_extinction_probabilities_{pathogen}.png",
         I_establishment="{outdir}/gillespie/I_establishment_{pathogen}.png",
-
     run:
-        for path in output: os.makedirs(os.path.dirname(path), exist_ok=True)
-
         ps = PARAMETERS[wildcards.pathogen]
         eps_ww = np.linspace(0.0, 0.999, 100)
         eps_ss = np.linspace(0.0, 0.999, 100)
@@ -1176,20 +1198,18 @@ rule plot_linearised_branching_process_extinction_probabilities:
             contour_levels=[1.0], contour_colors='white',
             xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
             title='Linearised branching process extinction probabilities')
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close()
+        plt.savefig(output.plot); plt.close()
 
         fig, ax = plot_heatmap(eps_ww, eps_ss, Iest, cmap='plasma', 
             norm=LogNorm(vmin=np.max([float(np.nanmin(Iest)),1]), vmax=np.min([np.max([float(np.nanmax(Iest)),1]), 1e9])),
             xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
             title='$I_\\text{establishment}$')
-        plt.savefig(output.I_establishment, dpi=IMAGE_RESOLUTION); plt.close()
-
+        plt.savefig(output.I_establishment); plt.close()
 
 rule simulate_stochastic_outcomes:
     output:
         npz="{outdir}/gillespie/{scenario}_stochastic_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
     run:
-        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
         num_simulations = int(wildcards.num_simulations)
         N = int(wildcards.N)
         res = int(wildcards.resolution)
@@ -1260,7 +1280,6 @@ rule plot_stochastic_intervention_grid:
     output:
         plot="{outdir}/gillespie/stochastic_{scenario}_pathogen{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = int(wildcards.N)
         res = int(wildcards.resolution)
         metric = wildcards.metric
@@ -1277,13 +1296,12 @@ rule plot_stochastic_intervention_grid:
             xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
             title={"Rt": "Average Final $R_t$", "Rt_var": "Variance of Final $R_t$", "time_to_below": "Average Time to $R_t < 1$", "time_to_below_var": "Variance of Time to $R_t < 1$", "Itot": "Average Proportion Infected", "Itot_var": "Variance of Proportion Infected", "peak_Is": "Average Peak Symptomatic Proportion", "peak_Is_var": "Variance of Peak Symptomatic Proportion", "extinction_time": "95th Percentile Extinction Time", "extinction_time_var": "Variance of Extinction Time"}.get(metric, metric)
         )
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_stochastic_cumulative_extinction_probability:
     output:
         plot ="{outdir}/gillespie/cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}_combined.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = float(wildcards.N)
         eps_s = float(wildcards.eps_s)
         eps_w = float(wildcards.eps_w)
@@ -1318,16 +1336,13 @@ rule plot_stochastic_cumulative_extinction_probability:
         ax2.set_xlabel('days', fontsize=12)
         if len(extinction_times_all) > 0: ax2.set_xlim(-50, max(extinction_times_all))
         plt.suptitle(f'Cumulative Extinction Probability ({wildcards.pathogen}, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$)', fontsize=14, y=0.98)
-        fig.tight_layout()
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close()
-
+        plt.savefig(output.plot); plt.close()
 
 ### SUPERSPREADING ###
 rule plot_superspreading_baseline_trajectories:
     output:
         plot ="{outdir}/gillespie/superspreading_baseline_trajectories_{pathogen}_N{N}.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = int(wildcards.N)
         t1 = 1000.0
         num_simulations = 100
@@ -1358,35 +1373,29 @@ rule plot_superspreading_baseline_trajectories:
         ax_hist.set_title('Extinction times')
         ax_hist.set_xlabel('days')
         fig.suptitle(f'Stochastic susceptible trajectories ({wildcards.pathogen}, N={N})')
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
-
+        fig.savefig(output.plot); plt.close(fig)
 
 rule plot_stochastic_cumulative_extinction_probability_superspreading:
     output:
         plot ="{outdir}/gillespie/superspreading_cumulative_extinction_probability_{pathogen}_N{N}_epsS_{eps_s}_epsW{eps_w}_scenario_{scenario}.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = float(wildcards.N)
         eps_s = float(wildcards.eps_s)
         eps_w = float(wildcards.eps_w)
         t1 = 5000.0
         num_simulations = 1000
         ps = PARAMETERS[wildcards.pathogen].update(epsilon_s=eps_s, epsilon_w=eps_w).concrete()
-
+        # simulations
         initial_fadeout_times = []
         established_extinction_times = []
         Iest = establishment_threshold(q=calculate_mt_branching_q_with_superspreading(DISPERSION_SC2, ps, eps_w, eps_s), alpha=ALPHA)
-
-        # simulations
         for _ in range(num_simulations):
             tt, yy = gillespie_SEIPAR_W_superspreading(params=ps, N=N, t1=t1, k_ss=DISPERSION_SC2, a_ss=True, p_ss=True, s_ss=True)
             I = yy[:,2] + yy[:,3] + yy[:,4]
             if np.max(I) < Iest: initial_fadeout_times.append((tt[-1]))
             else: established_extinction_times.append((tt[-1]))
-
         if wildcards.scenario == 'establishment': extinction_times = established_extinction_times
         else: extinction_times = np.concatenate([established_extinction_times, initial_fadeout_times])
-
         # cumulative extinction times and CIs
         sorted_times = np.sort(extinction_times)
         cumulative_prob = np.arange(1, sorted_times.shape[0]+1) / sorted_times.shape[0]
@@ -1394,38 +1403,32 @@ rule plot_stochastic_cumulative_extinction_probability_superspreading:
         std_error = np.sqrt(cumulative_prob * (1-cumulative_prob) / sorted_times.shape[0])
         ci_lower = np.maximum(0, cumulative_prob - z_score*std_error)
         ci_upper = np.minimum(1, cumulative_prob + z_score*std_error)
-
         # plot
         fig, ax1 = plt.subplots(figsize=(10, 6))
         ax1.step(sorted_times, cumulative_prob, where='post', label='Cumulative extinction probability', color='blue', linewidth=2)
         ax1.fill_between(sorted_times, ci_lower, ci_upper, step='post', color='blue', alpha=0.25)
-
         # median time
         median_time = np.median(extinction_times)
         median_time_ci_lower = sorted_times[np.argmax(ci_upper >= 0.5)]
         median_time_ci_upper = sorted_times[np.argmax(ci_lower >= 0.5)]
         ax1.axvline(median_time, color='red', label=f'Median: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
         ax1.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
-
         # 95% time
         time_95 = np.percentile(extinction_times, 95)
         time_95_ci_lower = sorted_times[np.argmax(ci_upper >= 0.95)]
         time_95_ci_upper = sorted_times[np.argmax(ci_lower >= 0.95)]
         ax1.axvline(time_95, color='orange', label=f'95%: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
         ax1.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
-
         # deterministic susceptible trajectory
         model = MODELS[wildcards.pathogen]
         ps = PARAMETERS[wildcards.pathogen].update(epsilon_s=eps_s, epsilon_w=eps_w)
         tt, yy = model(params=ps, t1=t1, E0=1/N)
         ax1.plot(tt, yy.T[0], color='green', label='Deterministic susceptible trajectory')
-
         # histogram
         ax2 = ax1.twinx()
         ax2.hist(extinction_times, bins=100, density=True, color='gray', alpha=0.3, label='Extinction times histogram')
         ax2.set_ylabel('Density', color='gray', fontsize=12)
         ax2.tick_params(axis='y', labelcolor='gray')
-
         # styling
         plt.title(f'Cumulative extinction probability ({wildcards.pathogen}, $k={DISPERSION_SC2}$, $\\varepsilon_s={eps_s}$, $\\varepsilon_w={eps_w}$, {wildcards.scenario})', fontsize=14)
         ax1.set_xlabel('Days', fontsize=12)
@@ -1435,14 +1438,12 @@ rule plot_stochastic_cumulative_extinction_probability_superspreading:
         lines_2, labels_2 = ax2.get_legend_handles_labels()
         ax1.legend(lines_1+lines_2, labels_1+labels_2, loc='best')
         ax1.grid(True, alpha=0.5)
-        fig.tight_layout()
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION); plt.close()
+        plt.savefig(output.plot); plt.close()
 
 rule simulate_superspreading_outcomes:
     output:
         npz="{outdir}/gillespie/{scenario}_superspreading_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
     run:
-        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
         res = int(wildcards.resolution)
         simulate_superspreading_outcomes(
             eps_ww = np.linspace(0.0, 0.999, res), 
@@ -1461,7 +1462,6 @@ rule plot_superspreading_intervention_grid:
     output:
         plot="{outdir}/gillespie/superspreading_{scenario}_pathogen{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = int(wildcards.N)
         res = int(wildcards.resolution)
         metric = wildcards.metric
@@ -1469,7 +1469,6 @@ rule plot_superspreading_intervention_grid:
         eps_ww = np.linspace(0.0, 0.999, res)
         kk = np.linspace(0.01, 1.0, res)
         data = np.load(input.npz)[f"{metric}_grid"]
-        
         fig, ax = plot_heatmap(
             eps_ww, kk, data.T, 
             cmap='magma' if metric.startswith('extinction_time') else 'RdBu_r' if metric == 'Rt' else 'viridis', 
@@ -1477,14 +1476,12 @@ rule plot_superspreading_intervention_grid:
             xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Dispersion parameter $r$',
             title={"Rt": "Average Final $R_t$", "Rt_var": "Variance of Final $R_t$", "time_to_below": "Average Time to $R_t < 1$", "time_to_below_var": "Variance of Time to $R_t < 1$", "Itot": "Average Proportion Infected", "Itot_var": "Variance of Proportion Infected", "peak_Is": "Average Peak Symptomatic Proportion", "peak_Is_var": "Variance of Peak Symptomatic Proportion", "extinction_time": "95th Percentile Extinction Time", "extinction_time_var": "Variance of Extinction Time"}.get(metric, metric)
         )
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
-
+        fig.savefig(output.plot); plt.close(fig)
 
 rule simulate_superspreading_outcomes_all_superspreading:
     output:
         npz="{outdir}/gillespie/{scenario}_superspreading_all_outcomes_{pathogen}_N{N}_sims{num_simulations}_res{resolution}.npz",
     run:
-        os.makedirs(os.path.dirname(output.npz), exist_ok=True)
         num_simulations = int(wildcards.num_simulations)
         N = int(wildcards.N)
         res = int(wildcards.resolution)
@@ -1550,7 +1547,6 @@ rule plot_superspreading_intervention_grid_all_superspreading:
     output:
         plot="{outdir}/gillespie/ss_all_{scenario}_pathogen{pathogen}_N{N}_sims{num_simulations}_res{resolution}_outcome{metric}.png"
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         N = int(wildcards.N)
         res = int(wildcards.resolution)
         metric = wildcards.metric
@@ -1565,56 +1561,52 @@ rule plot_superspreading_intervention_grid_all_superspreading:
             norm=CenteredNorm(vcenter=1.0) if metric == 'Rt' else None,
             xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Dispersion parameter $r$',
             title={"Rt": "Average Final $R_t$", "Rt_var": "Variance of Final $R_t$", "time_to_below": "Average Time to $R_t < 1$", "time_to_below_var": "Variance of Time to $R_t < 1$", "Itot": "Average Proportion Infected", "Itot_var": "Variance of Proportion Infected", "peak_Is": "Average Peak Symptomatic Proportion", "peak_Is_var": "Variance of Peak Symptomatic Proportion", "extinction_time": "95th Percentile Extinction Time", "extinction_time_var": "Variance of Extinction Time"}.get(metric, metric))
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close(fig)
+        fig.savefig(output.plot); plt.close(fig)
 
 
-### ALTERNATIVE WARNING SYSTEMS
+###############################################
+# ALTERNATIVE WARNING SYSTEMS
+###############################################
 rule plot_alternative_warning_strategies_eps_w:
     output:
         plot="{outdir}/compartmental/alternative_warning_strategies_{pathogen}_epsW.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
-
         pathogen = wildcards.pathogen
         model = MODELS_PIECEWISE[pathogen]
-        t1 = 10000.0
-        eps_ww = np.linspace(0.0, 1.0, 100)
-        eps_s = 0.8 if pathogen=="SARS-CoV-2" else 0.0
-        nE = len(eps_ww)
-        nM = len(METRIC_NAMES)
-        base_params = PARAMETERS[pathogen].update(epsilon_s=eps_s, R_off=R_OFF, eval_interval=EVAL_INTERVAL)
-        baseline_metrics = jnp.unstack(strategy_metrics(tau_W=base_params.tau_W, tau_B=base_params.tau_B, model=model, base_params=base_params, t1=t1, asymmetric=False, discrete_eval=False, check_interval=1.0, T_lead_on=False))
-        baseline = np.array([1.0, baseline_metrics[1], baseline_metrics[2], 1.0, t1, t1])
+        eps_ww = np.linspace(0.0, 1.0, 60)
+        eps_s = EPSILON_S if pathogen=="SARS-CoV-2" else 0.0
+        nM, nR = len(METRIC_NAMES), len(R_CRITS)
 
-        data = {s: np.zeros((nM, nE)) for s in STRATEGIES}
-        for s, (asym, disc, tl, ci) in STRATEGIES.items():
-            for i, ew in enumerate(eps_ww):
-                ps = base_params.update(epsilon_w=float(ew), T_lead=tl)
-                T_lead_on = tl > 1e-3
-                data[s][:, i] = jnp.unstack(strategy_metrics(tau_W=ps.tau_W, tau_B=ps.tau_B, model=model, base_params=ps, t1=t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, T_lead_on=T_lead_on))
+        fig, axs = plt.subplots(nrows=nR, ncols=nM, sharex=True, squeeze=False, figsize=(10, 10*nR/6))
+        for row, rc in enumerate(R_CRITS):
+            base_params = PARAMETERS[pathogen].update(
+                epsilon_s=eps_s, R_crit=rc, R_off=rc - (1.0 - R_OFF),
+                eval_interval=EVAL_INTERVAL)
+            bm = jnp.unstack(strategy_metrics(
+                tau_W=base_params.tau_W, tau_B=base_params.tau_B, model=model,
+                base_params=base_params, t1=T1, asymmetric=False,
+                discrete_eval=False, check_interval=1.0, T_lead_on=False))
+            baseline = np.array([1.0, bm[1], bm[2], 1.0, T1, T1])
 
-        fig, axs = plt.subplots(ncols=nM, nrows=1, figsize=(20, 4), sharex=True)
-        for r in range(nM):
-            ax = axs[r]
-            for i, s in enumerate(STRATEGIES): 
-                y = data[s][r] / baseline[r]
-                ax.plot(eps_ww, y, linestyle=LINESTYLES[i], label=s, color=PALETTE[i], lw=2, alpha=0.8)
-            if r==0: ax.axhline(1.0, c='k', lw=1)
-            ax.set_title(METRIC_NAMES[r], fontsize=12)
-            ax.set_xlim(0.0, 1.0)
-            ax.set_ylim(bottom=0.0)
-            ax.set_xlabel(r"$\varepsilon_w$", fontsize=16)
-        axs[0].legend()
-        fig.suptitle(f"Warning strategies for varying response strengths $\\varepsilon_w$ ({pathogen}, $\\varepsilon_s={eps_s}$)", fontsize=16, y=0.95)
-        fig.tight_layout(rect=(0, 0, 1, 0.98))
-        fig.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight"); plt.close(fig)
-
+            for i, (s, (asym, disc, tl, ci)) in enumerate(STRATEGIES.items()):
+                y = np.zeros((nM, len(eps_ww)))
+                for j, ew in enumerate(eps_ww):
+                    p = base_params.update(epsilon_w=float(ew), T_lead=tl)
+                    y[:, j] = jnp.unstack(strategy_metrics(tau_W=p.tau_W, tau_B=p.tau_B, model=model, base_params=p, t1=T1, asymmetric=asym, discrete_eval=disc, check_interval=ci, T_lead_on=tl > 1e-3))
+                for r in range(nM):
+                    axs[row, r].plot(eps_ww, y[r] / baseline[r], ls=LINESTYLES[i], color=PALETTE[i], lw=1.3, alpha=0.9, label=s)
+            for r in range(nM):
+                axs[row, r].set_ylim(bottom=0.0); axs[row, r].set_xlim(0, 1)
+                if row == 0: axs[row, r].set_title(METRIC_NAMES[r], fontsize=8)
+                if row == nR - 1: axs[row, r].set_xlabel(r"$\varepsilon_w$")
+            axs[row, 0].set_ylabel(r"$\mathcal{R}_\mathrm{crit}=%.1f$" % rc)
+        axs[0, 0].legend(loc="upper left", fontsize=6)
+        fig.savefig(output.plot); plt.close(fig)
 
 rule compute_alternative_warning_strategies_grid:
     output:
         data="{outdir}/compartmental/alternative_warning_strategies_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.npz",
     run:
-        os.makedirs(os.path.dirname(output.data), exist_ok=True)
         pathogen = wildcards.pathogen
         data, taus_W, taus_B = strategy_grid(
             model=MODELS_PIECEWISE[pathogen], base_params=PARAMETERS[pathogen], k=float(wildcards.k), 
@@ -1628,23 +1620,21 @@ rule alternative_warning_strategies_table:
     output:
         tex="{outdir}/compartmental/alternative_warning_strategies_table_{pathogen}.tex",
     run:
-        os.makedirs(os.path.dirname(output.tex), exist_ok=True)
-        pathogen = wildcards.pathogen
-        ps = PARAMETERS[pathogen].update(R_off=R_OFF, eval_interval=EVAL_INTERVAL)
-        model = MODELS_PIECEWISE[pathogen]
-        scenarios = WARNING_SCENARIOS[pathogen]
-        
-        rows = {s: [] for s,_,_ in scenarios}
-        base = table_row_metrics(ps, model, 0.0, 0.0, T1, icrit=1e-6)
+        ps = PARAMETERS[wildcards.pathogen].update(R_off=R_OFF, eval_interval=EVAL_INTERVAL)
+        model = MODELS_PIECEWISE[wildcards.pathogen]
+        scenarios = {key: val for key, val in WARNING_SCENARIOS[wildcards.pathogen].items() if key != "critical"}.items()
+        rows = {s: [] for s, _ in scenarios}
+        base = table_row_metrics(ps, model, 0.0, 0.0, T1, icrit=ICRIT)
         base["prevented"] = 0.0
-        for scenario, eps_s, eps_w in scenarios:
-            for strategy in list(STRATEGIES):
-                strategy_params = ps.update(T_lead=7.0) if strategy=="lead" else ps
-                m = (base if (eps_s == 0.0 and eps_w == 0.0) else table_row_metrics(strategy_params, model, eps_s, eps_w, T1, itot_baseline=base["itot"], strategy=strategy, icrit=1e-6))
+        for scenario, (eps_s, eps_w) in scenarios:
+            for strategy in list(STRATEGIES) + ["lockdown"]:
+                strategy_params = ps.update(**{"lead": dict(T_lead=T_LEAD), "lockdown": dict(k=50.0, R_off=0.8, eval_interval=28.0)}.get(strategy, {}))
+                if eps_s == 0.0 and eps_w == 0.0 and strategy == "baseline": m = base
+                else: m = table_row_metrics(strategy_params, model, eps_s, eps_w, T1 * 5, itot_baseline=base["itot"], strategy=strategy, icrit=ICRIT)
                 rows[scenario].append((strategy, eps_s, eps_w, m))
         with open(output.tex, "w") as f:
             f.write("\\begin{table}[H]\n\\centering\n\\small\n\\resizebox{\\textwidth}{!}{\n\\begin{tabular}{lcccccccc}\n\\toprule\n\\textbf{scenario} & $\\mathcal{R}_t$ & \\textbf{peak sympt.} & \\textbf{time to peak} & \\textbf{wave time} & \\textbf{attack rate} & \\textbf{inf. prevented} & \\textbf{isol. cost} & \\textbf{warn cost}\\\\\n\\midrule\n")
-            for i, (scenario, eps_s, eps_w) in enumerate(scenarios):
+            for i, (scenario, (eps_s, eps_w)) in enumerate(scenarios):
                 f.write(f"\\multicolumn{{9}}{{l}}{{\\textbf{{{table_scenario_label(scenario, eps_s, eps_w, bold=True)}}}}}\\\\\n")
                 for strategy, _, _, m in rows[scenario]:
                     tp, wt = f_days(m)
@@ -1652,14 +1642,12 @@ rule alternative_warning_strategies_table:
                 if i < len(scenarios)-1: f.write("\\midrule\n")
             f.write("\\bottomrule\n\\end{tabular}\n}\n\\caption[Characteristics of epidemic scenarios under different warning strategies]{Characteristics of epidemic scenarios under different warning strategies}\\label{tab:alternative_strategies}\n\\end{table}\n")
 
-
 rule plot_alternative_warning_strategies:
     input:
         data="{outdir}/compartmental/alternative_warning_strategies_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.npz",
     output:
         plot="{outdir}/compartmental/alternative_warning_strategies_{pathogen}_k{k}_epsW{eps_w}_epsS{eps_s}.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         k = float(wildcards.k); eps_w = float(wildcards.eps_w); eps_s = float(wildcards.eps_s)
         t1 = 300.0
 
@@ -1725,55 +1713,12 @@ rule plot_alternative_warning_strategies:
         lax = fig.add_subplot(gs[nrows - 1, nS + 1]); lax.axis("off")
         lax.legend([Line2D([0], [0], color="black", lw=2), Line2D([0], [0], color="red", lw=2)], ["True $R_t$", "Reported $R_t$"], loc="center", ncol=1, fontsize=11, frameon=False)
         fig.suptitle(f"Warning strategy comparison ({wildcards.pathogen}, $\\varepsilon_s={eps_s:g}$, $\\varepsilon_w={eps_w:g}$, $k={k:g}$)", fontsize=18, y=0.94)
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight"); plt.close()
+        plt.savefig(output.plot); plt.close()
 
-rule plot_true_vs_reported_Rt_scenarios_piecewise:
-    output:
-        plot="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_scenarios_{scenario}.png",
-    run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
 
-        k = float(wildcards.k)
-        t1 = 300.0
-        tau_W = 14.0
-        tau_B = 7.0
-        eps_w_values = [0.0, 0.4, 0.8, 1.0]
-
-        asymmetric = wildcards.scenario=="asymmetric"
-        discrete_eval = wildcards.scenario=="interval"
-        lead = wildcards.scenario=="lead"
-        T_lead = 7.0 if lead else 0.0
-
-        model = MODELS_PIECEWISE[wildcards.pathogen]
-
-        sns.set_theme(style="white", rc={"axes.grid": False})
-        fig, axs = plt.subplots(nrows=1, ncols=len(eps_w_values), figsize=(16,4), sharex=True, sharey=True)
-
-        for j, eps_w in enumerate(eps_w_values):
-            ps = PARAMETERS[wildcards.pathogen].update(epsilon_s=EPSILON_S, epsilon_w=eps_w, k=k, R_off=0.8, eval_interval=28.0, T_lead=T_lead)
-            tt, yy, mm = model(params=ps, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval)
-            rt_true = ps.R_0 * ps.rho * yy[:, -1] * yy[:, 0]
-            rt_reported = yy[:, -(ps.n_B + 1)]
-            above = (rt_reported >= ps.R_crit).astype(jnp.float32)
-            total_time_above = float(above.mean() * t1)
-            num_crossings = int(jnp.sum(jnp.diff(above) > 0))
-
-            ax = axs[j]
-            ax.set_title(f'$\\varepsilon_w={eps_w:g}$', fontsize=16)
-            if j == 0: ax.set_ylabel('$R_t$', fontsize=16)
-            ax.set_xlabel('time (days)', fontsize=12)
-            ax.plot(tt, rt_true, color='black')
-            ax.plot(tt, rt_reported, color='red')
-            ax.axhline(ps.R_crit, color='grey', linestyle='--')
-            ax.text(0.97, 0.95, f'{total_time_above:.0f} days above $R_{{crit}}$\n{num_crossings} warnings', transform=ax.transAxes, ha='right', va='top', fontsize=8)
-        fig.suptitle(f'{wildcards.pathogen}: $k={k:g}$, {wildcards.scenario} ($\\tau_W={ps.tau_W:g}$, $\\tau_B={ps.tau_B:g}$, $\\varepsilon_s={EPSILON_S:g}$)', fontsize=15, y=1.03,)
-        fig.legend(
-            [Line2D([0], [0], color='black', lw=2), Line2D([0], [0], color='red', lw=2)],
-            ['True $R_t$', 'Reported $R_t$'],
-            loc='lower center', ncol=2, bbox_to_anchor=(0.5, -0.12), fontsize=14,
-        )
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close()
-
+###############################################
+# SPATIAL
+###############################################
 
 rule plot_spatial_heatmaps:
     output:
@@ -1810,8 +1755,8 @@ rule plot_spatial_heatmaps:
         fig.colorbar(im1, ax=axs[1])
         im2 = heatmap(axs[2], 1.0 - (np.array(total_infections)/itot_baseline), "Total reduction", cmap="RdYlGn", vmin=0.0, vmax=1.0)
         fig.colorbar(im2, ax=axs[2])
-        fig.suptitle(f"Spatial model ({pathogen}, $\\varepsilon_s={epi_params.epsilon_s}$, $\\varepsilon_w={epi_params.epsilon_w}$, $\\tau_W={epi_params.tau_W}$, $\\tau_B={epi_params.tau_B:g}$)", y=1.00, fontsize=16)
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
+        fig.suptitle(f"Spatial model ({pathogen}, $\\varepsilon_s={epi_params.epsilon_s}$, $\\varepsilon_w={epi_params.epsilon_w}$, $\\tau_W={epi_params.tau_W}$, $\\tau_B={epi_params.tau_B:g}$)", y=1.0, fontsize=16)
+        plt.savefig(output.plot)
         plt.close()
 
 rule plot_spatial_trajectories:
@@ -1824,7 +1769,7 @@ rule plot_spatial_trajectories:
         epi_params = PARAMETERS[pathogen].update(epsilon_w=0.4)
 
         # effect of migration rate at fixed 50/50 split
-        m_values = [0.0, 0.001, 0.01, 0.05]
+        m_values = [0.0, 0.01, 0.01, 0.05]
         N_A = 0.5
         fig, axs = plt.subplots(1, len(m_values), figsize=(4*len(m_values), 3.5), sharey=True)
         for ax, m in zip(axs, m_values):
@@ -1838,7 +1783,7 @@ rule plot_spatial_trajectories:
         axs[0].set_ylabel("symptomatic prevalence")
         axs[0].legend(fontsize=8, loc="upper right")
         fig.suptitle(f"Spatial model: effect of migration rate ($N_A=N_B=0.5$)", y=1.04, fontsize=16)
-        plt.savefig(f"{output.migration}", dpi=IMAGE_RESOLUTION, bbox_inches="tight")
+        plt.savefig(f"{output.migration}")
         plt.close()
 
         # effect of population split at fixed migration rate
@@ -1856,7 +1801,7 @@ rule plot_spatial_trajectories:
         axs[0].set_ylabel("symptomatic prevalence")
         axs[0].legend(fontsize=8, loc="upper right")
         fig.suptitle(f"Spatial model: effect of population split (m = {m}/day)", y=1.04, fontsize=16)
-        plt.savefig(f"{output.split}", dpi=IMAGE_RESOLUTION, bbox_inches="tight")
+        plt.savefig(f"{output.split}")
         plt.close()
 
 rule plot_Rt_spatial:
@@ -1866,11 +1811,10 @@ rule plot_Rt_spatial:
     output:
         plot="{outdir}/spatial/Rt_spatial_{canton_pairs}.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         pathogen = "SARS-CoV-2"
         t1 = 700.0
         response_in_B_to_A = True
-        epi_params = PARAMETERS[pathogen].update(epsilon_w=0.4)
+        epi_params = PARAMETERS[pathogen].update(epsilon_w=EPSILON_W)
 
         pair_list = wildcards.canton_pairs.split("_")
         df, _ = load_and_preprocess_phone_data(data_path=input.phones, geo_path=input.geo)
@@ -1905,7 +1849,8 @@ rule plot_Rt_spatial:
             ['True $\\mathcal{R}_t$ in A', 'True $\\mathcal{R}_t$ in B', 'Reported $\\mathcal{R}_t$'],
             loc='lower center', ncol=3, bbox_to_anchor=(0.5, 0.02), fontsize=16,
         )
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches='tight'); plt.close()
+        plt.savefig(output.plot); plt.close()
+
 
 rule plot_Rt_divergence_heatmap:
     input:
@@ -1913,8 +1858,8 @@ rule plot_Rt_divergence_heatmap:
         geo=f'{DATADIR}/map_CH/swissBOUNDARIES3D_1_5_TLM_KANTONSGEBIET.shp'
     output:
         plot="{outdir}/spatial/spatial_heatmap_Rt_divergence_{pathogen}.png",
+        csv="{outdir}/spatial/Rt_divergence_canton_pairs_{pathogen}.csv",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         pathogen = wildcards.pathogen
         epi_params = PARAMETERS[pathogen].update(epsilon_w=0.4)
         t1 = 1000.0
@@ -1932,6 +1877,26 @@ rule plot_Rt_divergence_heatmap:
             rt_B = epi_params.R_0 * epi_params.rho * c["B_B"][:, -1] * c["S_B"] / N_B
             return jnp.mean(jnp.abs(rt_A - rt_B))
 
+        # get canton pairs
+        df, _ = load_and_preprocess_phone_data(data_path=input.phones, geo_path=input.geo)
+        all_zh_pairs = sorted(set(ALL_ZH_PAIRS.split("_")))
+        all_ge_pairs = sorted(set(ALL_GE_PAIRS.split("_")))
+        all_pairs = all_ge_pairs + all_zh_pairs
+        pair_string = "_".join(all_pairs)
+        m_list, N_A_list = get_canton_pair_stats(df, pair_string, "weekday", "workday")
+
+        # create df
+        rows = []
+        for pair, m_raw, N_A in zip(all_pairs, m_list, N_A_list):
+            m_eff = rescale_migration_rate(m_raw, MEAN_TRIP_DURATION)
+            A = pair[:2]
+            B = pair[2:]
+            rows.append((pair, A, B, m_raw, m_eff, N_A, rt_diff(N_A, m_raw), rt_diff(N_A, m_eff)))
+        columns = ["pair", "A", "B", "m_raw", "m_effective", "N_A", "divergence_raw", "divergence_effective"]
+        df = pd.DataFrame(rows, columns=columns)
+        df.to_csv(output.csv)
+
+        # plot
         sns.set_theme(style="white", rc={"axes.grid": False})
         fig, ax = plt.subplots(figsize=(6.5, 5))
         im = ax.pcolormesh(
@@ -1946,11 +1911,7 @@ rule plot_Rt_divergence_heatmap:
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("average $\\mathcal{R}_t$ difference")
 
-        # plot canton pairs
-        df, _ = load_and_preprocess_phone_data(data_path=input.phones, geo_path=input.geo)
-        all_pairs = sorted(set(ALL_ZH_PAIRS.split("_")) - {"ZHZH"})
-        all_pairs.append("AGBS")
-        pair_string = "_".join(pair for pair in all_pairs)
+        df_plot = df.loc[df.groupby("B")["m_effective"].idxmax()]
         selected_pairs = CANTON_PAIRS.split("_")
         colors = []
         j = 0
@@ -1959,18 +1920,19 @@ rule plot_Rt_divergence_heatmap:
                 colors.append(PALETTE[j])
                 j += 1
             else: colors.append("white")
-
-        for j, ht in enumerate(HOLIDAY_TYPES):
-            m_list, N_A_list = get_canton_pair_stats(df, pair_string, 'weekday', ht)
-            for i, (m, N_A) in enumerate(zip(m_list, N_A_list)):
-                plt.scatter(m, N_A, color=colors[i], marker=MARKERS[j], alpha=0.5, sizes=[40 if all_pairs[i] in selected_pairs else 10])
+        # for j, ht in enumerate(HOLIDAY_TYPES):
+        #     m_list, N_A_list = get_canton_pair_stats(df, pair_string, 'weekday', ht)
+        #     for i, (m, N_A) in enumerate(zip(m_list, N_A_list)):
+        #         plt.scatter(m, N_A, color=colors[i], marker=MARKERS[j], alpha=0.5, sizes=[40 if all_pairs[i] in selected_pairs else 10])
         color_handles = []
         for i, pair in enumerate(all_pairs):
             if colors[i]!="white": color_handles.append(Patch(facecolor=colors[i], label=f"{pair[:2]} to {pair[2:]}"))
-        marker_handles = [Line2D([0], [0], marker=MARKERS[j], color="grey", label=ht) for j, ht in enumerate(HOLIDAY_TYPES)]
-        plt.legend(handles=color_handles+marker_handles, loc="lower right")
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
-        plt.close()
+        # marker_handles = [Line2D([0], [0], marker=MARKERS[j], color="grey", label=ht) for j, ht in enumerate(HOLIDAY_TYPES)]
+        
+        sns.scatterplot(data=df_plot, x="m_effective", y="N_A", hue="pair", palette=colors)
+        ax.set_title(pathogen + " ($\\varepsilon_w=0.4$)")
+        plt.legend(handles=color_handles, loc="lower right")
+        fig.savefig(output.plot); plt.close(fig)
 
 
 rule plot_migration:
@@ -1980,25 +1942,26 @@ rule plot_migration:
     output:
         plot="{outdir}/spatial/migration.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         df, gdf = load_and_preprocess_phone_data(data_path=input.phones, geo_path=input.geo)
         fig, ax = plot_flows(df, gdf)
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
-        plt.close()
+        plt.savefig(output.plot); plt.close()
 
+
+###############################################
+# INFECTIOUSNESS DISTRIBUTIONS / GENERATION TIME
+###############################################
 
 rule plot_infectiousness_distributions:
     output:
         plot="{outdir}/compartmental/infectiousness_distributions.png",
     run:
-        os.makedirs(os.path.dirname(output.plot), exist_ok=True)
         ps = PARAMETERS["SARS-CoV-2"]
         nE, nP, nS, nA = 10,10,10,10
         shape = 8
         mean = 5.5
         scale = mean/shape
 
-        def generation_time(nE, nP, nS, w_p=None, w_s=None):
+        def generation_time(nE, nP, nS, phi_p, w_p=None, w_s=None):
             def _infected_subsystem(t, y):
                 E, Ip, Is = y[0:0+nE], y[nE:nE+nP], y[nE+nP:nE+nP+nS]
                 dE, E_out = linear_chain(X=E, inflow=0.0, rate=nE/ps.gamma_inv)
@@ -2009,8 +1972,7 @@ rule plot_infectiousness_distributions:
             sol = solve_ivp(_infected_subsystem, [0, tt[-1]], y0=np.concatenate([[1.0], np.zeros(nE+nP+nS-1)]), t_eval=tt, rtol=1e-10, atol=1e-13)
             Ip, Is = sol.y[nE:nE+nP], sol.y[nE+nP:nE+nP+nS]
 
-            if w_p is None: b = Ip.sum(0) + Is.sum(0)
-            else: b = (w_p[:, None] * Ip).sum(0) + (w_s[:, None] * Is).sum(0)
+            b = phi_p * (w_p[:, None] * Ip).sum(0) + (w_s[:, None] * Is).sum(0)
             gt = b / np.trapezoid(b, tt)
             mean = np.trapezoid(tt*gt, tt)
             return gt, mean
@@ -2020,16 +1982,16 @@ rule plot_infectiousness_distributions:
         plt.figure(figsize=(8, 4))
 
         # Model generation times
-        g_flat, m_flat = generation_time(1, 1, 1, np.full(nP, ps.mu_s_inv), np.full(nS, ps.sigma_inv))
+        g_flat, m_flat = generation_time(1, 1, 1, ps.phi_p, np.full(nP, ps.mu_s_inv), np.full(nS, ps.sigma_inv))
         plt.plot(tt, g_flat, lw=2.2, color=colors[1], label=f'SEIPAR (mean {m_flat:.1f})')
         plt.fill_between(tt, g_flat, color=colors[1], alpha=0.2)
 
-        g_chain_flat, m_chain_flat = generation_time(nE, nP, nS, np.full(nP, ps.mu_s_inv), np.full(nS, ps.sigma_inv))
+        g_chain_flat, m_chain_flat = generation_time(nE, nP, nS, ps.phi_p, np.full(nP, ps.mu_s_inv), np.full(nS, ps.sigma_inv))
         plt.plot(tt, g_chain_flat, lw=2.2, color=colors[2], label=f'SEIPAR-LCT (mean {m_chain_flat:.1f})')
         plt.fill_between(tt, g_chain_flat, color=colors[2], alpha=0.15)
 
         w_p, w_s = compute_weights(ps.gamma_inv, ps.sigma_inv, ps.mu_s_inv, shape, scale, nP, nS, ps.phi_p)
-        g_weighted, m_weighted = generation_time(nE, nP, nS, w_p, w_s)
+        g_weighted, m_weighted = generation_time(nE, nP, nS, ps.phi_p, w_p, w_s)
         plt.plot(tt, g_weighted, lw=2.2, color=colors[0], label=f'SEIPAR-LCT weighted (mean {m_weighted:.1f})')
         plt.fill_between(tt, g_weighted, color=colors[0], alpha=0.2)
 
@@ -2051,8 +2013,35 @@ rule plot_infectiousness_distributions:
         plt.legend()
         plt.xlim(0, 30)
         plt.ylim(bottom=0)
-        plt.savefig(output.plot, dpi=IMAGE_RESOLUTION, bbox_inches="tight")
+        plt.savefig(output.plot)
         plt.close()
+
+rule lct_growth_rate:
+    output:
+        csv="{outdir}/lct/growth_comparison.csv",
+    run:
+        with open(output.csv, "w", newline="") as f:
+            w = _csv.writer(f)
+            w.writerow(["pathogen", "model", "alpha", "doubling_time"])
+            for p in ASYMPTOMATIC_PATHOGENS:
+                for label, ps, gr in [("exponential", PARAMETERS[p], growth_rate), ("LCT", PARAMETERS_LCT[p], growth_rate_erlang)]:
+                    alpha = float(gr(ps))
+                    w.writerow([p, label, alpha, np.log(2)/alpha])
+
+
+###############################################
+# IDENTIFIABILITY
+###############################################
+
+rule run_remaster:
+    input:
+        xml="workflows/remaster.xml"
+    output:
+        traj="{outdir}/beast/remaster.traj",
+        stats_trees="{outdir}/beast/remaster.stats.trees",
+        typed_trees="{outdir}/beast/remaster.typed.trees",
+    shell:
+        "beast -overwrite -prefix {wildcards.outdir}/beast/ {input.xml}"
 
 
 
@@ -2061,18 +2050,45 @@ rule plot_infectiousness_distributions:
 ###############################################
 rule all:
     input:
-        expand(rules.plot_migration.output, outdir=OUTDIR),
-        expand(rules.plot_crossings.output, outdir=OUTDIR),
+        # model
+        expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=OUTDIR),
+        # generation time and infectiousness
         expand(rules.plot_infectiousness_distributions.output, outdir=OUTDIR),
-        expand(rules.alternative_warning_strategies_table.output, outdir=OUTDIR, pathogen=PATHOGENS),
+        expand(rules.lct_growth_rate.output, outdir=OUTDIR),
+        # basic results
         expand(rules.derived_epi_characteristics.output, outdir=OUTDIR),
         expand(rules.baseline_intervention_table.output, outdir=OUTDIR),
-        expand(rules.plot_Rt_divergence_heatmap.output, outdir=OUTDIR, pathogen=PATHOGENS),
-        expand(rules.plot_Rt_spatial.output, outdir=OUTDIR, canton_pairs=CANTON_PAIRS),
-        expand(rules.plot_spatial_heatmaps.output, outdir=OUTDIR),
-        expand(rules.plot_spatial_trajectories.output, outdir=OUTDIR),
-        expand(rules.plot_alternative_warning_strategies_eps_w.output, outdir=OUTDIR, pathogen=PATHOGENS),
-        expand(rules.plot_alternative_warning_strategies.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"], k=[10], eps_s=[0.5], eps_w=[0.0, 0.4, 0.8, 1.0]),
+        expand(rules.plot_baseline_trajectories.output.plot, pathogen=PATHOGENS, outdir=OUTDIR),
+        expand(rules.plot_trajectory.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8]),
+        expand(rules.plot_main_intervention_grid.output.plot, outdir=OUTDIR),
+        expand(rules.plot_R_1_contours.output.plot, outdir=OUTDIR),
+        expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=OUTDIR),
+        expand(rules.delayed_ww_intervention.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"]),
+        expand(rules.plot_controllability_boundaries.output.plot, outdir=OUTDIR),
+        # asymptomaticity
+        expand(rules.plot_asymptomatic_landscape.output.plot, outdir=OUTDIR),
+        expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=OUTDIR, pathogen=ASYMPTOMATIC_PATHOGENS),
+        expand(rules.plot_asymptomatic_grid_Itot_final.output.plot, outdir=OUTDIR, pathogen=ASYMPTOMATIC_PATHOGENS),
+        expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=OUTDIR, pathogen=ASYMPTOMATIC_PATHOGENS),
+        # sensitivity
+        expand(rules.export_param_bounds.output.tex, outdir=OUTDIR, bounds=["empirical", "symmetric"]),
+        expand(rules.plot_prcc_grid.output.plot, outdir=OUTDIR, bounds=["empirical", "symmetric"]),
+        expand(rules.plot_prcc_monotonicity.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=PRCC_SCENARIOS, outcome=PRCC_OUTCOMES, bounds=["empirical", "symmetric"]),
+        expand(rules.plot_combined_sensitivity_grid.output.plot, outdir=OUTDIR),
+        expand(rules.export_elasticities.output, outdir=OUTDIR),
+        # stability
+        expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=PATHOGENS, outdir=OUTDIR),
+        expand(rules.plot_true_vs_reported_Rt_scenarios_piecewise.output, pathogen=["SARS-CoV-2"], outdir=OUTDIR, k=[10], scenario=list(STRATEGIES)),
+        expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=["SARS-CoV-2"], outdir=OUTDIR, k=[10]), #k=[1, 3, 10, 30],),
+        expand(rules.plot_hopf_boundary.output, outdir=OUTDIR),
+        expand(rules.damping_summary_table.output, outdir=OUTDIR),
+        expand(rules.plot_crossings.output, outdir=OUTDIR),
+        expand(rules.plot_gain_margins.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=["delays", "efficacies"]),
+        expand(rules.plot_delay_margins.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=["delays", "efficacies"]),
+        expand(rules.plot_period_and_damping_scatter.output, outdir=OUTDIR, pathogen=PATHOGENS, k=[10, 30]),
+        # stochasticity
+        expand(rules.plot_linearised_branching_process_extinction_probabilities.output, outdir=OUTDIR, pathogen=["SARS-CoV-2"]),
+        expand(rules.plot_stochastic_baseline_trajectories.output, outdir=OUTDIR, pathogen=["SARS-CoV-2"], N=[100, 50_000, 500_000]),
         expand(rules.plot_stochastic_cumulative_extinction_probability.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8]),
         expand(rules.plot_superspreading_baseline_trajectories.output, outdir=OUTDIR, pathogen=["SARS-CoV-2"], N=[100, 50_000, 500_000]),
         expand(rules.plot_stochastic_cumulative_extinction_probability_superspreading.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"], N=[10000], eps_s=[0.4], eps_w=[0.4, 0.8], scenario=['establishment', 'all']),
@@ -2085,28 +2101,15 @@ rule all:
         expand(rules.plot_superspreading_intervention_grid_all_superspreading.output.plot, outdir=OUTDIR,
             pathogen=["SARS-CoV-2"], N=[10000], num_simulations=[1000], resolution=[10], scenario=['establishment', 'all'],
             metric=["Rt", "Rt_var", "time_to_below", "time_to_below_var", "Itot", "Itot_var", "peak_Is", "peak_Is_var", "extinction_time", "extinction_time_var"]),
-        expand(rules.plot_linearised_branching_process_extinction_probabilities.output, outdir=OUTDIR, pathogen=["SARS-CoV-2"]),
-        expand(rules.plot_asymptomatic_grid_Rt_final.output.plot, outdir=OUTDIR, pathogen=ASYMPTOMATIC_PATHOGENS),
-        expand(rules.plot_asymptomatic_grid_Itot_final.output.plot, outdir=OUTDIR, pathogen=ASYMPTOMATIC_PATHOGENS),
-        expand(rules.plot_prcc_monotonicity.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=PRCC_SCENARIOS, outcome=PRCC_OUTCOMES, bounds=["empirical", "symmetric"]),
-        expand(rules.plot_prcc_grid.output.plot, outdir=OUTDIR, bounds=["empirical", "symmetric"]),
-        expand(rules.plot_combined_sensitivity_grid.output.plot, outdir=OUTDIR),
-        expand(rules.plot_stochastic_baseline_trajectories.output, outdir=OUTDIR, pathogen=["SARS-CoV-2"], N=[100, 50_000, 500_000]),
-        expand(rules.plot_trajectory.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8]),
-        expand(rules.delayed_ww_intervention.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"]),
-        expand(rules.baseline_trajectories.output.plot, pathogen=PATHOGENS, outdir=OUTDIR),
-        expand(rules.plot_true_vs_reported_Rt_scenarios.output, pathogen=PATHOGENS, outdir=OUTDIR),
-        expand(rules.plot_true_vs_reported_Rt_scenarios_piecewise.output, pathogen=["SARS-CoV-2"], outdir=OUTDIR, k=[10], scenario=list(STRATEGIES)),
-        expand(rules.plot_true_vs_reported_Rt_heatmaps.output, pathogen=["SARS-CoV-2"], outdir=OUTDIR, k=[10]), #k=[1, 3, 10, 30],),
-        expand(rules.plot_response_function.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"]),
-        expand(rules.plot_main_intervention_grid.output.plot, outdir=OUTDIR),
-        expand(rules.plot_R_1_contours.output.plot, outdir=OUTDIR),
-        expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=OUTDIR),
-        expand(rules.export_param_bounds.output.tex, outdir=OUTDIR, bounds=["empirical", "symmetric"]),
-        expand(rules.plot_controllability_boundaries.output.plot, outdir=OUTDIR),
-        expand(rules.plot_asymptomatic_generation_time.output.plot, outdir=OUTDIR, pathogen=ASYMPTOMATIC_PATHOGENS),
-        expand(rules.plot_nonlinear_response_analysis.output.plot, outdir=OUTDIR),
-        expand(rules.plot_asymptomatic_landscape.output.plot, outdir=OUTDIR),
-        expand(rules.plot_gain_margins.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=["delays", "efficacies"]),
-        expand(rules.plot_delay_margins.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, scenario=["delays", "efficacies"]),
-        expand(rules.plot_period_and_damping_scatter.output, outdir=OUTDIR, pathogen=PATHOGENS, k=[10, 30]),
+        # alternative warning strategies
+        expand(rules.alternative_warning_strategies_table.output, outdir=OUTDIR, pathogen=PATHOGENS),
+        expand(rules.plot_alternative_warning_strategies_eps_w.output, outdir=OUTDIR, pathogen=PATHOGENS),
+        expand(rules.plot_alternative_warning_strategies.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"], k=[10], eps_s=[0.5], eps_w=[0.0, 0.4, 0.8, 1.0]),
+        # spatial model
+        expand(rules.plot_migration.output, outdir=OUTDIR),
+        expand(rules.plot_Rt_divergence_heatmap.output, outdir=OUTDIR, pathogen=PATHOGENS),
+        expand(rules.plot_Rt_spatial.output, outdir=OUTDIR, canton_pairs=CANTON_PAIRS),
+        expand(rules.plot_spatial_heatmaps.output, outdir=OUTDIR),
+        expand(rules.plot_spatial_trajectories.output, outdir=OUTDIR),
+        # identifiability
+        expand(rules.run_remaster.output, outdir=OUTDIR),

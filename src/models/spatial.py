@@ -292,8 +292,9 @@ CANTON_NAME_DICT = {
     'Zurich': 'ZH',
     'Zürich': 'ZH',
 }
-ALL_ZH_PAIRS = "_".join(f"ZH{CANTON_NAME_DICT[name]}" for name in sorted(set(CANTON_NAME_DICT)))
-
+_all_cantons = sorted(set(CANTON_NAME_DICT.values()))
+ALL_ZH_PAIRS = "_".join(f"ZH{name}" for name in _all_cantons)
+ALL_GE_PAIRS = "_".join(f"GE{name}" for name in _all_cantons)
 
 def _load_and_preprocess_map(path):
     """Data from the Federal Office of Topography swisstopo."""
@@ -404,3 +405,6 @@ def get_canton_pair_stats(df, canton_str, weekday_type, holiday_type):
         m_list.append(np.mean(np.concatenate([m_AB, m_BA])))
         N_A_list.append(N_A)
     return m_list, N_A_list
+
+def rescale_migration_rate(m, trip_duration):
+    return m * trip_duration / 24.0

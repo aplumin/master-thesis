@@ -32,15 +32,14 @@ def plot_heatmap(
     X, Y, Z, 
     cmap='viridis', shading='auto', norm=None,
     contour_metric = None, contour_levels=[], contour_colors='black', contour_linestyles=['-'], contour_alpha=1.0,
-    title=None, title_fontsize=18, title_pad=10,
-    xlabel=None, ylabel=None,
-    xlabelsize=14, ylabelsize=14,
+    title=None, title_fontsize=18, title_pad=10, figsize=(10, 10),
+    xlabel=None, ylabel=None, xlabelsize=14, ylabelsize=14,
     x_logscale=False, y_logscale=False, 
     cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=14, cbar_labelpad=10,
     cbar_axhlines=[], cbar_axhlines_colors=[], cbar_axhlines_linestyles=[], cbar_ticks=[],
 ):
     """General heatmap plotting function."""
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=figsize)
     ax.set_box_aspect(1)
 
     mesh = ax.pcolormesh(X, Y, Z, cmap=cmap, shading=shading, norm=norm)
@@ -66,8 +65,6 @@ def plot_heatmap(
     ax.set_title(title, fontsize=title_fontsize, pad=title_pad)
     ax.set_xlabel(xlabel, fontsize=xlabelsize)
     ax.set_ylabel(ylabel, fontsize=ylabelsize)
-    
-    plt.tight_layout()
     return fig, ax
 
 
@@ -118,6 +115,7 @@ def plot_trajectory(
     path: str = "trajectory.png", 
     title: str = "Trajectory",
     t1: float = 600.0, 
+    icrit: float | None = None,
     image_resolution: int = 900,
     plot_S: bool = True,
     plot_E: bool = True,
@@ -128,18 +126,31 @@ def plot_trajectory(
     plot_R: bool = True,
     semilogy: bool = False,
     no_decomp: bool = False,
+    model_type: str = "exponential",
 ) -> None:
     """
     Simulate and plot trajectories.
     Assume compartment order: S, E, [I compartments], R, [W delay compartments], [B delay compartments].
     """
     # run the model
-    tt, yy = model(params=params, t1=t1)
+    tt, yy = model(params=params, t1=t1, n_ts=int(t1))
     compartments = yy.T
     R_idx = -(params.n_W + params.n_B + 1)
     I_compartments = compartments[slice(2, R_idx) if R_idx != -1 else slice(2, None)]
     total_I = np.sum(I_compartments, axis=0)
-    Is = I_compartments[-1]
+    if model_type == "Erlang":
+        if len(I_compartments) > params.nS:
+            Ia = np.sum(I_compartments[:params.nA], axis=0)
+            Ip = np.sum(I_compartments[params.nA:params.nA+params.nP], axis=0)
+            Is = np.sum(I_compartments[params.nA+params.nP:], axis=0)
+        else:
+            Ia, Ip = None, None
+            Is =  np.sum(I_compartments, axis=0)
+    else:
+        Is = I_compartments[-1] if len(I_compartments) > 0 else None
+        Ia = I_compartments[0] if len(I_compartments) > 1 else None
+        Ip = I_compartments[1] if len(I_compartments) > 2 else None
+    end_time = _get_end_time(total_I, icrit)
     
     # plot
     if no_decomp:
@@ -149,11 +160,11 @@ def plot_trajectory(
 
     # trajectories
     if plot_S: ax_main.plot(tt, compartments[0], label='$S$', color='green')
-    if plot_E: ax_main.plot(tt, compartments[1], label='$E$', color='orange')
-    if plot_Is and len(I_compartments) > 0: ax_main.plot(tt, Is, label='$I_s$', color='blue')
-    if plot_Ia and len(I_compartments) > 1: ax_main.plot(tt, I_compartments[0], label='$I_a$', color='purple')
-    if plot_Ip and len(I_compartments) > 2: ax_main.plot(tt, I_compartments[1], label='$I_p$', color='skyblue')
-    if plot_total_I: ax_main.plot(tt, total_I, label='$I_{total}$', color='red', linestyle='--')
+    if plot_Is and Is is not None: ax_main.plot(tt, Is, label='$I_s$', color='blue', linestyle='-')
+    if plot_Ia and Ia is not None: ax_main.plot(tt, Ia, label='$I_a$', color='purple', linestyle='--')
+    if plot_Ip and Ip is not None: ax_main.plot(tt, Ip, label='$I_p$', color='skyblue', linestyle='-.')
+    if plot_E: ax_main.plot(tt, compartments[1], label='$E$', color='orange', linestyle=':')
+    if plot_total_I: ax_main.plot(tt, total_I, label='$I_{total}$', color='red', linestyle='-')
     if plot_R: ax_main.plot(tt, compartments[R_idx], label='$R$', color='black')
 
     # final size
@@ -172,7 +183,7 @@ def plot_trajectory(
     ax_main.set_ylabel("Population", fontsize=16)
     if semilogy: ax_main.set_yscale('log')
     ax_main.legend(loc='upper right', ncol=2, fontsize=12)
-    ax_main.set_xlim(0,t1)
+    ax_main.set_xlim(0, end_time)
 
     # Rt
     rt_true = params.R_0 * params.rho * yy[:,-1] * yy[:,0]
@@ -186,13 +197,13 @@ def plot_trajectory(
     rt_a = rt_true * a_contribution / total_contributions
     rt_p = rt_true * p_contribution / total_contributions
     params_baseline = params.update(epsilon_s=0.0, epsilon_w=0.0)
-    _, yy0 = model(params=params_baseline, t1=t1)
+    _, yy0 = model(params=params_baseline, t1=t1, n_ts=int(t1))
     ax_rt.fill_between(tt, 0, params_baseline.R_0 * params_baseline.rho * yy0[:,-1] * yy0[:,0], color='grey', alpha=0.2)
     ax_rt.fill_between(tt, 0, rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
     if (rt_p > 0).any(): ax_rt.fill_between(tt, rt_s, rt_s + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
     if (rt_a > 0).any(): ax_rt.fill_between(tt, rt_s + rt_p, rt_s + rt_p + rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
     ax_rt.legend(loc='upper right', fontsize=12)
-    ax_rt.set_xlim(0,t1)
+    ax_rt.set_xlim(0, end_time)
 
     # infections vs transmissions
     if not no_decomp:
@@ -220,7 +231,6 @@ def plot_trajectory(
             ax_trans.axis("off")
 
     # save and close
-    plt.tight_layout()
     fig.savefig(path, dpi=image_resolution)
     plt.close(fig)
 
@@ -316,7 +326,7 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     if not total_infected: cbar.ax.axhline(1.0, color='black', linewidth=1.5)
 
     # save and close
-    plt.savefig(path, dpi=image_resolution, bbox_inches='tight')
+    plt.savefig(path, dpi=image_resolution)
     plt.close(g.figure)
 
 def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
@@ -376,7 +386,7 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     lines_2, labels_2 = ax_hist.get_legend_handles_labels()
     ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc='best', fontsize=9)
 
-def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, eps_w, path, res, pathogens, colors, parameters, R0_lo, R0_hi):
+def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, eps_w, path, pathogens, colors, parameters, R0_lo, R0_hi):
     t = np.arange(0, 50, dt)
     fig, axes = plt.subplots(3, 2, figsize=(14, 12), width_ratios=(1,2))
     # Reporting delay
@@ -441,16 +451,13 @@ def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, e
     axes[0, 1].grid(True, alpha=0.3)
     axes[1, 1].set_title(rf'Instantaneous Warning Response ($\epsilon_w={eps_w}$)')
     axes[1, 1].set_ylim(-0.2, 1.2)
-    # axes[1, 1].legend(loc='upper right')
     axes[1, 1].grid(True, alpha=0.3)
     axes[2, 1].set_title('Effective Transmission Modification')
     axes[2, 1].set_xlabel('Days')
     axes[2, 1].set_ylim(-0.2, 1.2)
-    # axes[2, 1].legend(loc='upper right')
     axes[2, 1].grid(True, alpha=0.3)
-    # fig.suptitle("Wastewater Warning Response Analysis", fontsize=16)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-    plt.savefig(path, dpi=res); plt.close(fig)
+    fig.suptitle("Wastewater warning response", fontsize=16)
+    plt.savefig(path); plt.close(fig)
 
 def table_scenario_label(name, eps_s, eps_w, bold=False):
     parts = []
@@ -476,12 +483,8 @@ def _get_end_time(I, icrit):
 
 def table_row_metrics(ps, model, eps_s, eps_w, t1, E0=1e-6, itot_baseline=None, icrit=None, strategy="baseline"):
     ps = ps.update(epsilon_s=eps_s, epsilon_w=eps_w)
-    if strategy=="asymmetric":
-        tt, yy, *_ = model(params=ps, t1=t1, E0=E0, asymmetric=True)
-    elif strategy=="interval":
-        tt, yy, *_ = model(params=ps, t1=t1, E0=E0, discrete_eval=True)
-    else:
-        tt, yy, *_ = model(params=ps, t1=t1, E0=E0)
+    _STRATEGY_KWARGS = {"baseline": {}, "lead": {}, "asymmetric": {"asymmetric": True}, "interval": {"discrete_eval": True}, "lockdown": {"asymmetric": True, "discrete_eval": True}}
+    tt, yy, *_ = model(params=ps, t1=t1, E0=E0, **_STRATEGY_KWARGS[strategy])
     S = yy[:, 0]
     Is = yy[:, -(ps.n_W + ps.n_B + 2)]
     I = Is + yy[:, -(ps.n_W + ps.n_B + 3)] + yy[:, -(ps.n_W + ps.n_B + 4)] if len(yy[0]) > 4 + ps.n_W + ps.n_B else Is
