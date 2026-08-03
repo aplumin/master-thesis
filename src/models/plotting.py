@@ -16,14 +16,17 @@ from scipy.stats import gamma
 
 from models.compartmental import simulate_SEIPAR_W
 from models.metrics import (
-    compute_asymptomatic_grid_Itot,
-    compute_asymptomatic_grid_Rt,
-    compute_I_tot_grid,
-    compute_I_tot_grid_delayed_ww,
-    compute_R_grid,
-    infectious_fractions,
-    outcome_metrics,
-    transmission_fractions,
+     _column,
+     compute_asymptomatic_grid_Itot,
+     compute_asymptomatic_grid_Rt,
+     compute_I_tot_grid,
+     compute_I_tot_grid_delayed_ww,
+     compute_R_grid,
+     infectious_fractions,
+     n_Is_subcompartments,
+     outcome_metrics,
+     trajectory_indices,
+     transmission_fractions,
 )
 from models.parameters import Params
 
@@ -32,10 +35,10 @@ def plot_heatmap(
     X, Y, Z, 
     cmap='viridis', shading='auto', norm=None,
     contour_metric = None, contour_levels=[], contour_colors='black', contour_linestyles=['-'], contour_alpha=1.0,
-    title=None, title_fontsize=18, title_pad=10, figsize=(10, 10),
-    xlabel=None, ylabel=None, xlabelsize=14, ylabelsize=14,
+    title=None, title_fontsize=14, title_pad=10, figsize=(6, 6),
+    xlabel=None, ylabel=None, xlabelsize=12, ylabelsize=12,
     x_logscale=False, y_logscale=False, 
-    cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=14, cbar_labelpad=10,
+    cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=12, cbar_labelpad=10,
     cbar_axhlines=[], cbar_axhlines_colors=[], cbar_axhlines_linestyles=[], cbar_ticks=[],
 ):
     """General heatmap plotting function."""
@@ -101,10 +104,10 @@ def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(
     I_crit_list = jnp.logspace(-6, 0, 100)
     fig, _ = plot_heatmap(
         taus, I_crit_list, compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0),
-        contour_levels=[0.25, 0.5, 0.75], contour_colors='red', contour_linestyles=['--', '-', '--'],
-        cbar_axhlines=[0.25, 0.5, 0.75], cbar_axhlines_colors=['red', 'red', 'red'], cbar_axhlines_linestyles=['--', '-', '--'],
+        # contour_levels=[0.25, 0.5, 0.75], contour_colors='red', contour_linestyles=['--', '-', '--'],
+        # cbar_axhlines=[0.25, 0.5, 0.75], cbar_axhlines_colors=['red', 'red', 'red'], cbar_axhlines_linestyles=['--', '-', '--'],
         title=title, xlabel='Behavioural delay $\\tau_B$', ylabel='Infection threshold',
-        y_logscale=True, cbar_label='Total infections (relative to baseline)',
+        y_logscale=True, cbar_label='Total infections (relative to baseline)', figsize=(6,6),
     )
     return fig
 
@@ -136,8 +139,10 @@ def plot_trajectory(
     tt, yy = model(params=params, t1=t1, n_ts=int(t1))
     compartments = yy.T
     R_idx = -(params.n_W + params.n_B + 1)
-    I_compartments = compartments[slice(2, R_idx) if R_idx != -1 else slice(2, None)]
+    iI = 1 + int(getattr(params, "nE", 1))
+    I_compartments = compartments[slice(iI, R_idx) if R_idx != -1 else slice(iI, None)]
     total_I = np.sum(I_compartments, axis=0)
+    E = np.sum(compartments[1:iI], axis=0)
     if model_type == "Erlang":
         if len(I_compartments) > params.nS:
             Ia = np.sum(I_compartments[:params.nA], axis=0)
@@ -163,7 +168,7 @@ def plot_trajectory(
     if plot_Is and Is is not None: ax_main.plot(tt, Is, label='$I_s$', color='blue', linestyle='-')
     if plot_Ia and Ia is not None: ax_main.plot(tt, Ia, label='$I_a$', color='purple', linestyle='--')
     if plot_Ip and Ip is not None: ax_main.plot(tt, Ip, label='$I_p$', color='skyblue', linestyle='-.')
-    if plot_E: ax_main.plot(tt, compartments[1], label='$E$', color='orange', linestyle=':')
+    if plot_E: ax_main.plot(tt, E, label='$E$', color='orange', linestyle=':')
     if plot_total_I: ax_main.plot(tt, total_I, label='$I_{total}$', color='red', linestyle='-')
     if plot_R: ax_main.plot(tt, compartments[R_idx], label='$R$', color='black')
 
@@ -474,20 +479,22 @@ def f_pct(x, dp=0):
     return "---" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:.{dp}f}\\%"
 
 def _get_end_time(I, icrit):
-    if icrit is None:
-        return -1
-    wave_ended = (I[1:] < icrit) & (np.diff(I) < 0)
-    if wave_ended.any():
-        return np.argmax(wave_ended) + 1
-    return -1
+     if icrit is None:
+         return -1
+     peak = int(np.argmax(I))
+     wave_ended = (I[peak + 1:] < icrit) & (np.diff(I[peak:]) < 0)
+     if wave_ended.any():
+        return peak + 1 + int(np.argmax(wave_ended))
+     return -1
 
 def table_row_metrics(ps, model, eps_s, eps_w, t1, E0=1e-6, itot_baseline=None, icrit=None, strategy="baseline"):
     ps = ps.update(epsilon_s=eps_s, epsilon_w=eps_w)
     _STRATEGY_KWARGS = {"baseline": {}, "lead": {}, "asymmetric": {"asymmetric": True}, "interval": {"discrete_eval": True}, "lockdown": {"asymmetric": True, "discrete_eval": True}}
     tt, yy, *_ = model(params=ps, t1=t1, E0=E0, **_STRATEGY_KWARGS[strategy])
-    S = yy[:, 0]
-    Is = yy[:, -(ps.n_W + ps.n_B + 2)]
-    I = Is + yy[:, -(ps.n_W + ps.n_B + 3)] + yy[:, -(ps.n_W + ps.n_B + 4)] if len(yy[0]) > 4 + ps.n_W + ps.n_B else Is
+    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_subcompartments(ps))
+    S = yy[:, idx["S"]]
+    Is = np.asarray(_column(yy, idx["Is"]))
+    I = np.asarray(yy[:, 1 + int(getattr(ps, "nE", 1)):idx["R"]]).sum(axis=1)
     peak_idx = int(np.argmax(Is))
     end_time = _get_end_time(I, icrit)
     itot = float(S[0] - S[-1])

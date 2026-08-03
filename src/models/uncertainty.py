@@ -9,6 +9,7 @@ from scipy.stats import beta, norm
 
 from models.metrics import (
     contour_boundary,
+    eps_s_boundary,
     growth_rate,
     infectious_fractions,
     mean_warning_multiplier,
@@ -205,13 +206,12 @@ def probability_uncontrollable(priors: Priors, n: int = 200_000, seed: int = 0):
     lo, med, hi = np.quantile(R_ns, [0.025, 0.5, 0.975])
     return {"P": float((R_ns > 1.0).mean()), "median": float(med), "lo": float(lo), "hi": float(hi)}
 
-def analytic_boundary(priors: Priors, eps_ww=None, n: int = 200_000, seed: int = 0, quantiles=(0.025, 0.5, 0.975)):
+def analytic_boundary(priors: Priors, eps_ww=None, n: int = 200_000, seed: int = 0, quantiles=(0.025, 0.5, 0.975), k=None, R_crit: float = 1.0):
     """Joint 95% CI on epsilon_s required for Rt = 1."""
     eps_ww = np.linspace(0.0, 1.0, 100) if eps_ww is None else np.asarray(eps_ww, float)
     s = cached_sample_derived(priors, n=n, seed=seed)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        eps_s = (1.0 - 1.0 / (s["R_0"][:, None] * mean_warning_multiplier(eps_ww)[None, :])) / (1.0 - epi_quantities(s)["theta"][:, None])
-    return np.nanquantile(np.where(np.isfinite(eps_s), eps_s, np.nan), quantiles, axis=0)
+    eps_s = eps_s_boundary(R_0=s["R_0"][:, None], theta=epi_quantities(s)["theta"][:, None], eps_w=eps_ww[None, :], k=k, R_crit=R_crit)
+    return np.nanquantile(eps_s, quantiles, axis=0)
 
 def simulated_boundary(model, priors: Priors, eps_ww, params_fn, n: int = 200, seed: int = 0, quantiles=(0.025, 0.5, 0.975), metric="Itot", t1=100.0, E0=1e-6, **kw):
     """Pushforward for simulated boundary."""

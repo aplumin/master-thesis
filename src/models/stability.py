@@ -142,18 +142,6 @@ def delay_margin(ps: Params, clip_negative=False):
     M_D = M_P / omega_c
     return max(M_D, 0.0) if clip_negative else M_D
 
-def damping_summary(ps):
-    """Analytical metrics summary from dominant pole."""
-    s = dominant_pole(ps)
-    if np.isnan(s): return {"period": np.nan, "t_half": np.nan, "n_osc": np.nan, "zeta": np.nan, "stable": True}
-    alpha = -s.real
-    omega = abs(s.imag)
-    return {
-        "period": float(2.0 * np.pi / omega),
-        "t_half": float(np.log(2.0) / alpha) if alpha > 0 else np.inf,
-        "n_osc": float(omega / (2.0 * np.pi * alpha)) if alpha > 0 else np.inf,
-        "zeta": float(alpha / abs(s)), "stable": bool(alpha > 0)}
-
 def critical_loop_gain(tau_W=14.0, tau_B=7.0, n_W=3, n_B=1, sampling_interval=0.0):
     """Static loop gain at the Hopf boundary: L0 s.t. |L(j w_PC)| = 1 at the phase crossover."""
     D = float(sampling_interval)

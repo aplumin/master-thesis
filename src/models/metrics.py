@@ -51,6 +51,9 @@ def _window_mean(tt, f, t_a, t_b):
     num = _integral_to(tt, f, C, t_b) - _integral_to(tt, f, C, t_a)
     return num / width
 
+def n_Is_subcompartments(params):
+    return int(getattr(params, "nS", 1))
+
 def trajectory_indices(n_W, n_B, n_S: int = 1):
     """Return compartment indices dict."""
     R = -(n_W + n_B + 1)
@@ -101,9 +104,9 @@ def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, max_window=10.0
     t_end = jnp.where(jnp.isfinite(T_osc) & (m >= 1.0), t_0 + m * T_osc, t_1)
     return _window_mean(tt, rt_true, t_0, t_end)
 
-def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window="initial", n_S=1):
+def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window="initial", n_S=None):
     """Compute outcome metrics from model trajectories."""
-    idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B, n_S=n_S)
+    idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B, n_S=n_Is_subcompartments(params) if n_S is None else n_S)
     S = _column(yy, idx["S"]) / population_size
     Is = _column(yy, idx["Is"]) / population_size
     R = _column(yy, idx["R"]) / population_size
@@ -222,7 +225,7 @@ def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level
     return np.asarray(boundary)
 
 @partial(jax.jit, static_argnames=['model', 'n_S'])
-def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05, n_S=1):
+def compute_delay_metrics_grid(model, base_params, taus_W, taus_B, t1=10000.0, E0=1e-6, delta_dep=0.05, n_S=None):
     """Outcome metrics over a (tau_W, tau_B) grid of reporting and behavioural delays."""
     def wrap_delay_metrics(tau_W, tau_B):
         params = base_params.update(tau_W=tau_W, tau_B=tau_B)
@@ -249,13 +252,13 @@ def R0_decomposition(params: Params, include_isolation: bool = False) -> dict[st
     R_s = float(params.beta * (1.0 - params.p) * (1.0 - eps) * params.mu_s_inv)
     return {"a": R_a, "p": R_p, "s": R_s}
 
-def transmission_fractions(params: Params) -> dict[str, float]:
+def transmission_fractions(params: Params):
     """Fraction of all transmission events of each type."""
     R = R0_decomposition(params)
     total = R["a"] + R["p"] + R["s"]
     return {k: (R[k] / total if total > 0 else 0.0) for k in ("a", "p", "s")}
 
-def _infection_jacobian(params: Params) -> tuple[np.ndarray, list[str]]:
+def _infection_jacobian(params: Params):
     """Jacobian of the infection subsystem linearised around the disease-free equilibrium."""
     beta = float(params.beta)
     eps_s = float(params.epsilon_s)
@@ -293,7 +296,7 @@ def _infection_jacobian(params: Params) -> tuple[np.ndarray, list[str]]:
         labels = ["s"]
     return J, labels
 
-def growth_rate(params: Params) -> float:
+def growth_rate(params: Params):
     """Initial exponential growth rate alpha (dominant eigenvalue of the Jacobian)."""
     J, _ = _infection_jacobian(params)
     return float(np.linalg.eig(J)[0].real.max())
@@ -324,7 +327,7 @@ def growth_rate_erlang(ps):
     chain(iS, ps.nS, rS, inflow_from=iP + ps.nP - 1, inflow_rate=rP, share=1.0)
     return float(np.linalg.eigvals(J).real.max())
 
-def infectious_fractions(params: Params) -> dict[str, float]:
+def infectious_fractions(params: Params):
     """Fraction of infectious individuals of each type during the initial exponential growth phase."""
     J, labels = _infection_jacobian(params)
     w, V = np.linalg.eig(J)
@@ -336,9 +339,24 @@ def infectious_fractions(params: Params) -> dict[str, float]:
     infectious_fractions.update({label: float(value) for label, value in zip(labels, fractions)})
     return infectious_fractions
 
-def mean_warning_multiplier(epsilon_w: float) -> float:
+def _logistic(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -80.0, 80.0)))
+
+def eps_s_boundary(R_0, theta, eps_w, k=None, R_crit=1.0):
+    """
+    Isolation efficacy on the R_t = 1 boundary:
+        eps_s = (1 - 1/(R_0 * m(eps_w))) / (1 - theta).
+    """
+    m = np.asarray(mean_warning_multiplier(eps_w, k=k, R_crit=R_crit), dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        eps_s = (1.0 - 1.0 / (R_0 * m)) / (1.0 - theta)
+    return np.where(np.isfinite(eps_s), eps_s, np.nan)
+
+def mean_warning_multiplier(epsilon_w: float, k: float | None = None, R_crit: float = 1.0):
     """1 - epsilon_w/2."""
-    return 1.0 - epsilon_w / 2.0
+    if k is None or R_crit == 1.0:
+        return 1.0 - epsilon_w / 2.0
+    return 1.0 - epsilon_w * _logistic(k * (1.0 - R_crit))
 
 def calculate_mt_branching_q(ps, ew, es):
     """Extinction probability of the multi-type branching process approximation."""
@@ -376,7 +394,7 @@ def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_
     params = base_params.update(tau_W=tau_W, tau_B=tau_B)
     n_W, n_B = params.n_W, params.n_B
     ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
-    idx = trajectory_indices(n_W, n_B)
+    idx = trajectory_indices(n_W, n_B, n_S=n_Is_subcompartments(params))
     S, B_out = ys[:, idx["S"]], ys[:, idx["B_out"]]
     rt_true = params.R_0 * params.rho * B_out * S
 
@@ -393,7 +411,7 @@ def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_
 
     cost = jnp.trapezoid(1.0 - B_out, ts)
     Itot = S[0] - S[-1]
-    Is = ys[:, idx["Is"]]
+    Is = _column(ys, idx["Is"])
     peak_Is = jnp.max(Is)
     Rt_final = calculate_averaged_Rt(params, ts, S, Is, rt_true, 0.05)
     return jnp.stack([Rt_final, Itot, peak_Is, amplitude, time_above, cost])
@@ -404,10 +422,7 @@ def strategy_metric_grid(model, base_params, taus_W, taus_B, t1, asymmetric, dis
     strategy_metrics_vmap = partial(strategy_metrics, model=model, base_params=base_params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval, T_lead_on=T_lead_on)
     return jax.vmap(jax.vmap(strategy_metrics_vmap, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
 
-def strategy_grid(
-    model, base_params, k, eps_w, eps_s, strategies, t1=300.0, 
-    taus_W=None, taus_B=None, R_off=0.8, eval_interval=14.0,
-):
+def strategy_grid(model, base_params, k, eps_w, eps_s, strategies, t1=300.0, taus_W=None, taus_B=None, R_off=0.8, eval_interval=14.0):
     """Delay-grid metrics for multiple warning strategies."""
     taus_W = np.linspace(1.0, 30.0, 100) if taus_W is None else taus_W
     taus_B = np.linspace(1.0, 30.0, 100) if taus_B is None else taus_B
@@ -415,18 +430,21 @@ def strategy_grid(
     taus_W, taus_B = jnp.asarray(taus_W), jnp.asarray(taus_B)
     data = {}
     for s, (asym, disc, tl, ci) in strategies.items():
+        if s=="lockdown":
+            print("lockdown")
+            bp = base_params.update(eval_interval=2 * eval_interval)
         bp = base_params.update(T_lead=tl)
         grid = strategy_metric_grid(model, bp, taus_W, taus_B, t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, T_lead_on=(tl > 0.0))
         data[s] = np.asarray(grid)
     return data, list(np.asarray(taus_W)), list(np.asarray(taus_B))
 
-def R_boundary(theta, eps_s, eps_w):
+def R_boundary(theta, eps_s, eps_w, k=None, R_crit=1.0):
     """
     Boundary R_t = 1 as a function of the non-symptomatic transmission fraction theta 
     and the intervention efficacies:
-        R_0_crit = 1 / ((1 - epsilon_w/2) * (1 - epsilon_s*(1 - theta))).
+        R_0_crit = R_0_crit = 1 / (m(eps_w) * (1 - eps_s*(1 - theta))).
     """
-    return 1.0 / (mean_warning_multiplier(eps_w) * (1.0 - eps_s * (1.0 - theta)))
+    return 1.0 / (mean_warning_multiplier(eps_w, k=k, R_crit=R_crit) * (1.0 - eps_s * (1.0 - theta)))
 
 def establishment_threshold(q, alpha=0.01):
     """Number of infecteds above which extinction probability < alpha."""
