@@ -1,7 +1,9 @@
-results/
-scripts/
 data/
+scripts/
+results/
 *.png
+*.pdf
+*.out.xml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

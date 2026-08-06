@@ -64,7 +64,7 @@ class Params(NamedTuple):
     @classmethod
     def for_SEIPAR(cls, 
             R_0: float = 2.69,
-            phi_a: float = 0.26,
+            phi_a: float = 0.252,
             phi_p: float = 3.72,
             gamma_inv: float = 3.0,
             sigma_inv: float = 2.5,

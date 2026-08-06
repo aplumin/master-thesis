@@ -16,20 +16,21 @@ from scipy.stats import gamma
 
 from models.compartmental import simulate_SEIPAR_W
 from models.metrics import (
-     _column,
-     compute_asymptomatic_grid_Itot,
-     compute_asymptomatic_grid_Rt,
-     compute_I_tot_grid,
-     compute_I_tot_grid_delayed_ww,
-     compute_R_grid,
-     infectious_fractions,
-     n_Is_subcompartments,
-     outcome_metrics,
-     trajectory_indices,
-     transmission_fractions,
+    _column,
+    compute_asymptomatic_grid_Itot,
+    compute_asymptomatic_grid_Rt,
+    compute_I_tot_grid,
+    compute_I_tot_grid_delayed_ww,
+    compute_R_grid,
+    infectious_fractions,
+    n_Is_subcompartments,
+    outcome_metrics,
+    trajectory_indices,
+    transmission_fractions,
 )
 from models.parameters import Params
 
+plt.rcParams['figure.constrained_layout.use'] = True
 
 def plot_heatmap(
     X, Y, Z, 
@@ -44,27 +45,18 @@ def plot_heatmap(
     """General heatmap plotting function."""
     fig, ax = plt.subplots(figsize=figsize)
     ax.set_box_aspect(1)
-
     mesh = ax.pcolormesh(X, Y, Z, cmap=cmap, shading=shading, norm=norm)
-    
     if contour_metric is None: contour_metric = Z
-    if contour_levels:
-        ax.contour(X, Y, contour_metric, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles, alpha=contour_alpha)
-    
+    if contour_levels: ax.contour(X, Y, contour_metric, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles, alpha=contour_alpha)
     if len(cbar_ticks) > 0:
         cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect, ticks=cbar_ticks)
         cbar.ax.set_yticklabels(cbar_ticks)
     else:
         cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect)
     cbar.set_label(cbar_label, fontsize=cbar_labelsize, labelpad=cbar_labelpad)
-    for i, hline in enumerate(cbar_axhlines):
-        cbar.ax.axhline(hline, color=cbar_axhlines_colors[i], linestyle=cbar_axhlines_linestyles[i])
-    
-    if x_logscale: 
-        ax.set_xscale('log')
-    if y_logscale: 
-        ax.set_yscale('log')
-    
+    for i, hline in enumerate(cbar_axhlines): cbar.ax.axhline(hline, color=cbar_axhlines_colors[i], linestyle=cbar_axhlines_linestyles[i])
+    if x_logscale: ax.set_xscale('log')
+    if y_logscale: ax.set_yscale('log')
     ax.set_title(title, fontsize=title_fontsize, pad=title_pad)
     ax.set_xlabel(xlabel, fontsize=xlabelsize)
     ax.set_ylabel(ylabel, fontsize=ylabelsize)
@@ -93,8 +85,7 @@ def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, 
     eps_ss = jnp.linspace(0.0, 0.999, 100)
     fig, _ = plot_heatmap(
         eps_ww, eps_ss, compute_R_grid(model, params, eps_ww, eps_ss, t1, E0), 
-        cmap='RdBu_r', norm=mpl.colors.CenteredNorm(vcenter=1.0),
-        contour_levels=[1.0],
+        cmap='RdBu_r', norm=mpl.colors.CenteredNorm(vcenter=1.0), contour_levels=[1.0],
         title=title, xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
     )
     return fig
@@ -104,8 +95,6 @@ def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(
     I_crit_list = jnp.logspace(-6, 0, 100)
     fig, _ = plot_heatmap(
         taus, I_crit_list, compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0),
-        # contour_levels=[0.25, 0.5, 0.75], contour_colors='red', contour_linestyles=['--', '-', '--'],
-        # cbar_axhlines=[0.25, 0.5, 0.75], cbar_axhlines_colors=['red', 'red', 'red'], cbar_axhlines_linestyles=['--', '-', '--'],
         title=title, xlabel='Behavioural delay $\\tau_B$', ylabel='Infection threshold',
         y_logscale=True, cbar_label='Total infections (relative to baseline)', figsize=(6,6),
     )
@@ -156,6 +145,8 @@ def plot_trajectory(
         Ia = I_compartments[0] if len(I_compartments) > 1 else None
         Ip = I_compartments[1] if len(I_compartments) > 2 else None
     end_time = _get_end_time(total_I, icrit)
+    if end_time <= 0:
+        end_time = tt[-1]
     
     # plot
     if no_decomp:
