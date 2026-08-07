@@ -42,6 +42,7 @@ class ParamsErlang(NamedTuple):
         eval_interval (float): Minimum time the warning state is kept before re-evaluation.
         T_lead (float): Lead time for which the estimated Rt trend is extrapolated.
         w_a, w_p, w_s (jnp array): Infectiousness weights.
+        shape, scale (float): Shape and scale of the Gamma infectiousness profile.
         nE, nP, nS, nA (int): Number of compartments in the respective linear chains.
         weighted (bool): Whether the subcompartments are weighted individually (default False).
     """
@@ -71,6 +72,8 @@ class ParamsErlang(NamedTuple):
     w_a: jnp.ndarray
     w_p: jnp.ndarray
     w_s: jnp.ndarray
+    shape: float
+    scale: float
     nE: int
     nP: int
     nS: int
@@ -108,18 +111,17 @@ class ParamsErlang(NamedTuple):
             nA: int = 10,
             weighted: bool = False,
         ) -> "ParamsErlang":
-        w_p, w_s = (compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS, phi_p) if weighted else (jnp.ones(nP), jnp.ones(nS)))
-        w_a = jnp.ones(nA)
+        w_a, w_p, w_s = compute_weights(gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, phi_a=phi_a, phi_p=phi_p, shape=shape, scale=scale, nP=nP, nS=nS, nA=nA, weighted=weighted)
         r = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
         r_eps = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
         beta = R_0 / r
         rho = r_eps / r
         return cls(
             R_0=R_0, beta=beta, gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv,
-            mu_s_inv=mu_s_inv, p=p, phi_a=phi_a, phi_p=phi_p,
-            epsilon_s=epsilon_s, epsilon_w=epsilon_w, k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B,
-            rho=rho, I_crit=I_crit, k_I=k_I, n_W=int(n_W), n_B=int(n_B), R_off=R_off,
-            eval_interval=eval_interval, T_lead=T_lead, w_a=w_a, w_p=w_p, w_s=w_s,
+            mu_s_inv=mu_s_inv, p=p, phi_a=phi_a, phi_p=phi_p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
+            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I, 
+            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead, 
+            w_a=w_a, w_p=w_p, w_s=w_s, shape=shape, scale=scale, 
             nE=int(nE), nP=int(nP), nS=int(nS), nA=int(nA), weighted=bool(weighted),
         )
     
@@ -149,6 +151,7 @@ class ParamsErlang(NamedTuple):
             nA: int = 10,
             weighted: bool = False,
         ) -> "ParamsErlang":
+        # TODO: this uses flat infectiousness
         w_a, w_p, w_s = jnp.ones(nA), jnp.ones(nA), jnp.ones(nA)
         r = _r_weighted(0.0, 0.0, 0.0, 0.0, 0.0, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
         r_eps = _r_weighted(0.0, 0.0, 0.0, 0.0, 0.0, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
@@ -158,16 +161,22 @@ class ParamsErlang(NamedTuple):
             R_0=R_0, phi_a=0.0, phi_p=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
             mu_a_inv=0.0, mu_s_inv=mu_s_inv, p=0.0, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
             k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead, w_a=w_a, w_p=w_p, w_s=w_s,
+            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead,
+            w_a=w_a, w_p=w_p, w_s=w_s, shape=shape, scale=scale,
             nE=int(nE), nP=int(nP), nS=int(nS), nA=int(nA), weighted=bool(weighted),
         )
 
+    _WEIGHTS_FROM = ["gamma_inv", "sigma_inv", "mu_a_inv", "mu_s_inv", "p", "phi_a", "phi_p", "shape", "scale", "nP", "nS", "nA", "weighted"]
     _DERIVED_FROM = ["R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s", "w_a", "w_p", "w_s", "nP", "nS", "nA"]
     def update(self, **kwargs) -> "ParamsErlang":
         """Update any parameter(s)."""
         for f in _ERLANG_STATIC_FIELDS:
             if f in kwargs:
                 kwargs[f] = bool(kwargs[f]) if f == "weighted" else int(kwargs[f])
+        explicit_weights = {"w_a", "w_p", "w_s"} & kwargs.keys()
+        if (set(self._WEIGHTS_FROM) & kwargs.keys()) and not explicit_weights:
+            v = {f: kwargs.get(f, getattr(self, f)) for f in self._WEIGHTS_FROM}
+            kwargs["w_a"], kwargs["w_p"], kwargs["w_s"] = compute_weights(**v)
         if set(self._DERIVED_FROM) & kwargs.keys():
             v = {f: kwargs.get(f, getattr(self, f)) for f in self._DERIVED_FROM}
             base_params = {
@@ -183,15 +192,23 @@ class ParamsErlang(NamedTuple):
 
 _register_static_pytree(ParamsErlang, _ERLANG_STATIC_FIELDS)
 
-def compute_weights(gamma_inv, sigma_inv, mu_s_inv, shape, scale, nP, nS, phi_p):
+def compute_weights(gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, p, phi_a, phi_p, shape, scale, nP, nS, nA, weighted=True):
     """
-    Infectiousness weights for the Ip and Is subcompartments.
+    Infectiousness weights for the infectious subcompartments.
     Computed from a Gamma pdf with given shape and scale parameters.
     """
+    nP, nS, nA = int(nP), int(nS), int(nA)
+    if not bool(weighted): return jnp.ones(nA), jnp.ones(nP), jnp.ones(nS)
+    w_a = gamma.pdf(_mean_time(gamma_inv, mu_a_inv, nA), a=shape, scale=scale)
     w_p = gamma.pdf(_mean_time(gamma_inv, sigma_inv, nP), a=shape, scale=scale)
     w_s = gamma.pdf(_mean_time(gamma_inv + sigma_inv, mu_s_inv, nS), a=shape, scale=scale)
-    norm = (phi_p * sigma_inv + mu_s_inv) / (phi_p * jnp.sum(w_p) * (sigma_inv / nP) + jnp.sum(w_s) * (mu_s_inv / nS))
-    return norm * w_p, norm * w_s
+    w_a = jnp.where(mu_a_inv > 0, w_a, 1.0)
+    w_p = jnp.where(sigma_inv > 0, w_p, 1.0)
+    w_s = jnp.where(mu_s_inv > 0, w_s, 1.0)
+    nom = p * phi_a * mu_a_inv + (1.0 - p) * (phi_p * sigma_inv + mu_s_inv)
+    denom = (p * phi_a * jnp.sum(w_a) * (mu_a_inv / nA) + (1.0 - p) * (phi_p * jnp.sum(w_p) * (sigma_inv / nP) + jnp.sum(w_s) * (mu_s_inv / nS)))
+    norm = jnp.where(denom > 0, nom / jnp.where(denom > 0, denom, 1.0), 1.0)
+    return norm * w_a, norm * w_p, norm * w_s
 
 def _mean_time(t0, mean, n):
     """
