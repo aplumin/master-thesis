@@ -10,22 +10,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy.integrate import trapezoid
 from scipy.optimize import fsolve
 from scipy.stats import gamma
 
 from models.compartmental import simulate_SEIPAR_W
 from models.metrics import (
-    _column,
     compute_asymptomatic_grid_Itot,
     compute_asymptomatic_grid_Rt,
     compute_I_tot_grid,
     compute_I_tot_grid_delayed_ww,
     compute_R_grid,
     infectious_fractions,
-    n_Is_subcompartments,
-    outcome_metrics,
-    trajectory_indices,
     transmission_fractions,
 )
 from models.parameters import Params
@@ -144,7 +139,7 @@ def plot_trajectory(
         Is = I_compartments[-1] if len(I_compartments) > 0 else None
         Ia = I_compartments[0] if len(I_compartments) > 1 else None
         Ip = I_compartments[1] if len(I_compartments) > 2 else None
-    end_time = _get_end_time(total_I, icrit)
+    end_time = _wave_end_time(tt, total_I, icrit)
     if end_time <= 0:
         end_time = tt[-1]
     
@@ -463,39 +458,11 @@ def table_scenario_label(name, eps_s, eps_w, bold=False):
         parts.append("\\mathbf{\\varepsilon_w="+f"{eps_w:g}"+"}") if bold else parts.append(f"\\varepsilon_w={eps_w:g}")
     return name if not parts else f"{name} (${', '.join(parts)}$)"
 
-def f_days(m): 
-    return "---" if np.isnan(m["time_to_peak"]) else f"{m['time_to_peak']:.1f} d", "---" if np.isnan(m["wave_time"]) else f"{m['wave_time']:.0f} d"
-
-def f_pct(x, dp=0):
-    return "---" if (x is None or (isinstance(x, float) and np.isnan(x))) else f"{100*x:.{dp}f}\\%"
-
-def _get_end_time(I, icrit):
-     if icrit is None:
-         return -1
-     peak = int(np.argmax(I))
-     wave_ended = (I[peak + 1:] < icrit) & (np.diff(I[peak:]) < 0)
-     if wave_ended.any():
-        return peak + 1 + int(np.argmax(wave_ended))
-     return -1
-
-def table_row_metrics(ps, model, eps_s, eps_w, t1, E0=1e-6, itot_baseline=None, icrit=None, strategy="baseline"):
-    ps = ps.update(epsilon_s=eps_s, epsilon_w=eps_w)
-    _STRATEGY_KWARGS = {"baseline": {}, "lead": {}, "asymmetric": {"asymmetric": True}, "interval": {"discrete_eval": True}, "lockdown": {"asymmetric": True, "discrete_eval": True}}
-    tt, yy, *_ = model(params=ps, t1=t1, E0=E0, **_STRATEGY_KWARGS[strategy])
-    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_subcompartments(ps))
-    S = yy[:, idx["S"]]
-    Is = np.asarray(_column(yy, idx["Is"]))
-    I = np.asarray(yy[:, 1 + int(getattr(ps, "nE", 1)):idx["R"]]).sum(axis=1)
-    peak_idx = int(np.argmax(Is))
-    end_time = _get_end_time(I, icrit)
-    itot = float(S[0] - S[-1])
-    return {
-        'Rt': float(outcome_metrics(tt, yy, ps, t1)[0]), 
-        'wave_time': float(tt[end_time]),
-        'peak_Is': float(Is[peak_idx]), 
-        'time_to_peak': float(tt[peak_idx]), 
-        'itot': itot, 
-        'prevented': np.nan if itot_baseline in (None, 0.0) else 1.0 - itot / itot_baseline, 
-        'warning_cost': float(trapezoid(1.0 - yy[:end_time,-1], tt[:end_time])),
-        'isolation_cost': float(trapezoid(eps_s * Is[:end_time], tt[:end_time])),
-    }
+def _wave_end_time(tt, infected, wave_floor):
+    """First time after peak at which wave drops below wave_floor."""
+    peak = int(np.argmax(infected))
+    tail = infected[peak:]
+    below = np.flatnonzero(tail < wave_floor)
+    if below.size == 0:
+        return float("inf")
+    return float(tt[peak + int(below[0])])
