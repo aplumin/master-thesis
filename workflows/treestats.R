@@ -15,7 +15,7 @@ read_remaster <- function(filepath, min_tips = 3) {
   newick <- sub("^[^=]*=\\s*", "", tree_lines)
   keep <- lengths(regmatches(newick, gregexpr(",", newick, fixed = TRUE))) + 1 >= min_tips
   trees <- lapply(newick[keep], function(t) ape::read.tree(text = t))
-  names(trees) <- 1:length(keep)
+  names(trees) <- seq_along(trees)
   class(trees) <- "multiPhylo"
   return(trees)
 }
@@ -52,7 +52,7 @@ ggplot(df_long, aes(x = group, y = val, fill = group)) +
 ggsave(file.path(outdir, "boxplots.png"), width = 8, height = 4)
 
 # treespace
-space = treespace::treespace(all_trees, nf=3)
+space = treespace::treespace(all_trees, nf=3, lambda=0.5)
 g <- plotGroves(
   space$pco, groups = stats_df$group, type = "ellipse", 
   starSize = 0, point.cex = 0.5, plabels.cex = 0, plegend.size = 1, 

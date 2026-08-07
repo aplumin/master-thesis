@@ -1,7 +1,7 @@
 <beast version="2.7" namespace="beast.base.inference:beast.base.inference.parameter:remaster">
 
 <!-- Multi-type birth-death-sampling SEIPAR model (only symptomatics are sampled). -->
-  <run spec="Simulator" nSims="100">
+  <run spec="Simulator" nSims="$(nSims)">
     <simulate spec="SimulatedTree" id="tree">
 
       <!-- fixed traj length and min number of leaves 
@@ -9,11 +9,11 @@
       S + Ia -> E + Ia    phi_a * beta / N
       S + Ip -> E + Ip    phi_p * beta / N
       S + Is -> E + Is    1     * beta / N
-      E      -> Ia        p     * gamma   
-      E      -> Ip        (1-p) * gamma   
-      Ip     -> Is        sigma           
-      Ia     -> R         mu_a            
-      Is     -> R         mu_s            
+      E      -> Ia        p     * gamma
+      E      -> Ip        (1-p) * gamma
+      Ip     -> Is        sigma
+      Ia     -> R         mu_a
+      Is     -> R         mu_s
       -->
       <trajectory spec="StochasticTrajectory" id="traj" maxTime="$(maxTime)" mustHave="sample &gt;= $(minSamples)" endsWhen="sample==$(maxSamples)">
 
@@ -33,7 +33,7 @@
         <reaction spec="Reaction" rate="$(ia_to_r)"> Ia -> 0 </reaction>
         <reaction spec="Reaction" rate="$(is_to_r)"> Is -> 0 </reaction>
 
-        <reaction spec="Reaction" rate="$(psi)"> Is -> sample </reaction>
+        <reaction spec="Reaction" rate="0 $(psi)" changeTimes="$(startSampling)"> Is -> sample </reaction>
 
       </trajectory>
     </simulate>
