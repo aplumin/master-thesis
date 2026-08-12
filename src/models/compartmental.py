@@ -1,7 +1,6 @@
 """
 Deterministic compartmental models:
     - SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
-    - SEIAR_W with presymptomatic transmission and wastewater feedback
     - SEIR_W with no presymptomatic or asymptomatic transmission and wastewater feedback
 """
 
@@ -90,31 +89,6 @@ def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E
         dW, dB = _delay_ODEs(S, W, B, Is, params)
         return jnp.concatenate([dFlow, dW, dB])
     return _solve(_SEIPAR_W, _initial_state(E0, n_I=3, n_W=n_W, n_B=n_B), params, t1, n_ts, max_steps=max_steps, throw=throw)
-
-
-@partial(jax.jit, static_argnames=['n_ts', 'max_steps', 'throw'])
-def simulate_SEIAR_W(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000, max_steps: int = MAX_STEPS, throw: bool = True):
-    """Compartmental model without presymptomatic transmission."""
-    n_W, n_B = params.n_W, params.n_B
-    def _SEIAR_W(t, y, params):
-        S, E, Ia, Is, _ = y[:5]
-        W = y[5:5 + n_W]
-        B = y[5 + n_W:]
-        lambda_S = B[-1] * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * S
-        become_infectious = E / params.gamma_inv
-        recover_asyx = Ia / params.mu_a_inv
-        recover_syx = Is / params.mu_s_inv
-        dFlow = jnp.stack([
-            -lambda_S,
-            lambda_S - become_infectious,
-            params.p * become_infectious - recover_asyx,
-            (1.0 - params.p) * become_infectious - recover_syx,
-            recover_asyx + recover_syx,
-        ])
-        dW, dB = _delay_ODEs(S, W, B, Is, params)
-        return jnp.concatenate([dFlow, dW, dB])
-    return _solve(_SEIAR_W, _initial_state(E0, n_I=2, n_W=n_W, n_B=n_B), params, t1, n_ts, max_steps=max_steps, throw=throw)
-
 
 @partial(jax.jit, static_argnames=['n_ts', 'max_steps', 'throw'])
 def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000, max_steps: int = MAX_STEPS, throw: bool = True):

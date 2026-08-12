@@ -195,12 +195,11 @@ def compute_I_tot_grid_delayed_ww(model: Callable, base_params: Params, taus, I_
 def compute_metrics(model, base_params, eps_ww, eps_ss, t1, E0, delta_dep=0.05, n_ts=5000):
     """Grid of (Rt, time_to_below, Itot, peak_Is)."""
     def wrap_metrics(w, s):
-            params = base_params.update(epsilon_w=w, epsilon_s=s)
-            tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
-            Rt_final, time_to_below, Itot, peak_Is, _, _, _, _ = outcome_metrics(tt, yy, params, t1, delta_dep)
-            return Rt_final, time_to_below, Itot, peak_Is
+        params = base_params.update(epsilon_w=w, epsilon_s=s)
+        tt, yy, *_ = model(params=params, t1=t1, E0=E0, n_ts=n_ts)
+        Rt_final, time_to_below, Itot, peak_Is, _, _, _, _ = outcome_metrics(tt, yy, params, t1, delta_dep)
+        return Rt_final, time_to_below, Itot, peak_Is
     return jax.vmap(jax.vmap(wrap_metrics, in_axes=(0, None)), in_axes=(None, 0))(eps_ww, eps_ss)
-
 
 def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level=1.0, metric='Rt', baseline_Itot=None, n_ts=5000):
     """For each eps_w, find eps_s at which the outcome Rt, relative Itot, or peak equals level."""
@@ -213,7 +212,6 @@ def contour_boundary(model, base_params, eps_ww, t1, E0, lo=0.0, hi=0.999, level
         elif metric == 'peak_Is': outcome_value = float(peak)
         else: raise ValueError(metric)
         return outcome_value - level
-
     boundary = []
     for eps_w in np.asarray(eps_ww):
         lower_contour = _fn(eps_w, lo)
@@ -280,14 +278,6 @@ def _infection_jacobian(params: Params):
             [0.0,           0.0,          sigma,        -mu_s ],
         ])
         labels = ["a", "p", "s"]
-    elif has_asymptomatic: # SEIAR
-        mu_a = 1.0 / float(params.mu_a_inv)
-        J = np.array([
-            [-gamma,          beta * phi_a, beta_s],
-            [p * gamma,       -mu_a,        0.0   ],
-            [(1 - p) * gamma, 0.0,          -mu_s ],
-        ])
-        labels = ["a", "s"]
     else: # SEIR
         J = np.array([
             [-gamma, beta_s],
@@ -343,10 +333,7 @@ def _logistic(x):
     return 1.0 / (1.0 + np.exp(-np.clip(x, -80.0, 80.0)))
 
 def eps_s_boundary(R_0, theta, eps_w, k=None, R_crit=1.0):
-    """
-    Isolation efficacy on the R_t = 1 boundary:
-        eps_s = (1 - 1/(R_0 * m(eps_w))) / (1 - theta).
-    """
+    """eps_s = (1 - 1/(R_0 * m(eps_w))) / (1 - theta)."""
     m = np.asarray(mean_warning_multiplier(eps_w, k=k, R_crit=R_crit), dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
         eps_s = (1.0 - 1.0 / (R_0 * m)) / (1.0 - theta)
@@ -386,64 +373,8 @@ def calculate_mt_branching_q_with_superspreading(k, ps, ew, es):
     except ValueError:
         return 1.0
 
-def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
-    """
-    Summary metrics for one piecewise warning strategy given delays (tau_W, tau_B).
-    Returns [Rt_final, Itot, peak_Is, amplitude, time_above, cost].
-    """
-    params = base_params.update(tau_W=tau_W, tau_B=tau_B)
-    n_W, n_B = params.n_W, params.n_B
-    ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
-    idx = trajectory_indices(n_W, n_B, n_S=n_Is_subcompartments(params))
-    S, B_out = ys[:, idx["S"]], ys[:, idx["B_out"]]
-    rt_true = params.R_0 * params.rho * B_out * S
-
-    amplitude = rt_amplitude(ts, rt_true, window="final")
-    if asymmetric or discrete_eval:
-        time_above = ms.mean() * t1
-    else:
-        W_out = ys[:, idx["W_out"]]
-        if T_lead_on:
-            R_est = W_out + base_params.T_lead * (n_W / params.tau_W) * (ys[:, idx["W_out"] - 1] - W_out)
-        else:
-            R_est = W_out
-        time_above = (R_est >= params.R_crit).mean() * t1
-
-    cost = jnp.trapezoid(1.0 - B_out, ts)
-    Itot = S[0] - S[-1]
-    Is = _column(ys, idx["Is"])
-    peak_Is = jnp.max(Is)
-    Rt_final = calculate_averaged_Rt(params, ts, S, Is, rt_true, 0.05)
-    return jnp.stack([Rt_final, Itot, peak_Is, amplitude, time_above, cost])
-
-@partial(jax.jit, static_argnames=['model', 't1', 'asymmetric', 'discrete_eval', 'check_interval', 'T_lead_on'])
-def strategy_metric_grid(model, base_params, taus_W, taus_B, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
-    """strategy_metrics over the full (tau_W, tau_B) grid."""
-    strategy_metrics_vmap = partial(strategy_metrics, model=model, base_params=base_params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval, T_lead_on=T_lead_on)
-    return jax.vmap(jax.vmap(strategy_metrics_vmap, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
-
-def strategy_grid(model, base_params, k, eps_w, eps_s, strategies, t1=300.0, taus_W=None, taus_B=None, R_off=0.8, eval_interval=14.0):
-    """Delay-grid metrics for multiple warning strategies."""
-    taus_W = np.linspace(1.0, 30.0, 100) if taus_W is None else taus_W
-    taus_B = np.linspace(1.0, 30.0, 100) if taus_B is None else taus_B
-    base_params = base_params.update(epsilon_s=eps_s, epsilon_w=eps_w, k=k, R_off=R_off, eval_interval=eval_interval)
-    taus_W, taus_B = jnp.asarray(taus_W), jnp.asarray(taus_B)
-    data = {}
-    for s, (asym, disc, tl, ci) in strategies.items():
-        if s=="lockdown":
-            print("lockdown")
-            bp = base_params.update(eval_interval=2 * eval_interval)
-        bp = base_params.update(T_lead=tl)
-        grid = strategy_metric_grid(model, bp, taus_W, taus_B, t1, asymmetric=asym, discrete_eval=disc, check_interval=ci, T_lead_on=(tl > 0.0))
-        data[s] = np.asarray(grid)
-    return data, list(np.asarray(taus_W)), list(np.asarray(taus_B))
-
 def R_boundary(theta, eps_s, eps_w, k=None, R_crit=1.0):
-    """
-    Boundary R_t = 1 as a function of the non-symptomatic transmission fraction theta 
-    and the intervention efficacies:
-        R_0_crit = R_0_crit = 1 / (m(eps_w) * (1 - eps_s*(1 - theta))).
-    """
+    """R_0_crit = 1 / (m(eps_w) * (1 - eps_s*(1 - theta)))."""
     return 1.0 / (mean_warning_multiplier(eps_w, k=k, R_crit=R_crit) * (1.0 - eps_s * (1.0 - theta)))
 
 def establishment_threshold(q, alpha=0.01):

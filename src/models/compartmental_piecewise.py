@@ -54,21 +54,6 @@ def _SEIPAR(y, params, B_out):
     ])
     return dFlow, S, Is
 
-def _SEIAR(y, params, B_out):
-    S, E, Ia, Is, _ = y[:5]
-    lambda_S = B_out * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * S
-    become_infectious = E / params.gamma_inv
-    recover_asyx = Ia / params.mu_a_inv
-    recover_syx = Is / params.mu_s_inv
-    dFlow = jnp.stack([
-        -lambda_S,
-        lambda_S - become_infectious,
-        params.p * become_infectious - recover_asyx,
-        (1.0 - params.p) * become_infectious - recover_syx,
-        recover_asyx + recover_syx,
-    ])
-    return dFlow, S, Is
-
 def _SEIR(y, params, B_out):
     S, E, II, _ = y[:4]
     lambda_S = B_out * params.beta * (1.0 - params.epsilon_s) * II * S
@@ -83,7 +68,7 @@ def _SEIR(y, params, B_out):
     return dFlow, S, II
 
 # model name -> ODE function, number of population flow compartments
-_MODELS = {"SEIPAR": (_SEIPAR, 6), "SEIAR": (_SEIAR, 5), "SEIR": (_SEIR, 4)}
+_MODELS = {"SEIPAR": (_SEIPAR, 6), "SEIR": (_SEIR, 4)}
 
 
 def _solve_piecewise(
@@ -178,11 +163,6 @@ _PIECEWISE_STATIC = ['t1', 'asymmetric', 'discrete_eval', 'check_interval', 'sav
 def simulate_SEIPAR_W_piecewise(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6,
         asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1):
     return _simulate_piecewise("SEIPAR", params, t1, E0, asymmetric, discrete_eval, check_interval, save_per_seg)
-
-@partial(jax.jit, static_argnames=_PIECEWISE_STATIC)
-def simulate_SEIAR_W_piecewise(params: Params = Params.for_SEIAR(), t1: float = 100.0, E0: float = 1e-6,
-        asymmetric: bool = False, discrete_eval: bool = False, check_interval: float = 0.1, save_per_seg: int = 1):
-    return _simulate_piecewise("SEIAR", params, t1, E0, asymmetric, discrete_eval, check_interval, save_per_seg)
 
 @partial(jax.jit, static_argnames=_PIECEWISE_STATIC)
 def simulate_SEIR_W_piecewise(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6,

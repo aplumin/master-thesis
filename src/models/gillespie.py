@@ -60,7 +60,7 @@ def _response(W_out, Is_frac, epsilon_w, k, R_crit, k_I, I_crit):
 
 @njit(cache=True)
 def _run(params: Params, N, t1, num_mass, num_reactions, model, seed):
-    """Run Gillespie simulation. model: 0 = SEIPAR, 1 = SEIAR, 2 = SEIR (S,E,I,R)."""
+    """Run Gillespie simulation. model: 0 = SEIPAR, 1 = SEIR (S,E,I,R)."""
     if seed >= 0:
         np.random.seed(seed)
 
@@ -108,14 +108,6 @@ def _run(params: Params, N, t1, num_mass, num_reactions, model, seed):
             a[3] = Ip / params.sigma_inv # Ip -> Is
             a[4] = Ia / params.mu_a_inv # Ia -> R
             a[5] = Is / params.mu_s_inv # Is -> R
-        elif model == 1: # SEIAR
-            Ia = current_state[2]
-            Is = current_state[3]
-            a[0] = B_out * params.beta * (params.phi_a * Ia + (1.0 - params.epsilon_s) * Is) * (S / N)
-            a[1] = params.p * E / params.gamma_inv
-            a[2] = (1.0 - params.p) * E / params.gamma_inv
-            a[3] = Ia / params.mu_a_inv
-            a[4] = Is / params.mu_s_inv
         else: # SEIR
             Is = current_state[2]
             a[0] = B_out * params.beta * (1.0 - params.epsilon_s) * Is * (S / N)
@@ -143,12 +135,6 @@ def _run(params: Params, N, t1, num_mass, num_reactions, model, seed):
             elif event_idx == 3: current_state[3] -= 1.0; current_state[4] += 1.0 # Ip -> Is
             elif event_idx == 4: current_state[2] -= 1.0; current_state[5] += 1.0 # Ia -> R
             else:                current_state[4] -= 1.0; current_state[5] += 1.0 # Is -> R
-        elif model == 1: # SEIAR
-            if   event_idx == 0: current_state[0] -= 1.0; current_state[1] += 1.0 # S  -> E
-            elif event_idx == 1: current_state[1] -= 1.0; current_state[2] += 1.0 # E  -> Ia
-            elif event_idx == 2: current_state[1] -= 1.0; current_state[3] += 1.0 # E  -> Is
-            elif event_idx == 3: current_state[2] -= 1.0; current_state[4] += 1.0 # Ia -> R
-            else:                current_state[3] -= 1.0; current_state[4] += 1.0 # Is -> R
         else: # SEIR
             if   event_idx == 0: current_state[0] -= 1.0; current_state[1] += 1.0 # S -> E
             elif event_idx == 1: current_state[1] -= 1.0; current_state[2] += 1.0 # E -> I
@@ -168,14 +154,9 @@ def gillespie_SEIPAR_W(params: Params, N: int, t1: float, seed: int = -1):
     return _run(params=params, N=N, t1=t1, num_mass=6, num_reactions=6, model=0, seed=seed)
 
 @njit(cache=True)
-def gillespie_SEIAR_W(params: Params, N: int, t1: float, seed: int = -1):
-    """Gillespie SEIAR algorithm with exact integration of the delay compartments between events."""
-    return _run(params=params, N=N, t1=t1, num_mass=5, num_reactions=5, model=1, seed=seed)
-
-@njit(cache=True)
 def gillespie_SEIR_W(params: Params, N: int, t1: float, seed: int = -1):
     """Gillespie SEIR algorithm with exact integration of the delay compartments between events."""
-    return _run(params=params, N=N, t1=t1, num_mass=4, num_reactions=3, model=2, seed=seed)
+    return _run(params=params, N=N, t1=t1, num_mass=4, num_reactions=3, model=1, seed=seed)
 
 def to_uniform_grid(tt, yy, t1, n_ts=5000):
     """Gillespie traces to uniform dt grid."""

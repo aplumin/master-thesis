@@ -44,19 +44,7 @@ METRIC_BOUNDS = [(0.0, 2.5), (0.0, 1.0), (0.0, 0.02), (0.0, 1.0), (0.0, 300.0), 
 R_CRITS = [0.9, 1.0, 1.1]
 LINESTYLES = ["-", "--", "-.", ":", (0, (1, 2))]
 PALETTE = sns.color_palette("colorblind", 1024)
-CAPTION_NOTE = (
-    r"$\mathcal{R}_t$ is the effective reproductive number after interventions, averaged "
-    r"over whole oscillation periods once interventions have taken effect and before "
-    r"susceptible depletion. Peak symptomatic is the maximum total $I_s$ fraction."
-    r"Wave time is the first time after the prevalence peak at which total infected "
-    r"prevalence falls back below $E_0$. Attack rate and infections prevented "
-    rf"are evaluated at $T={T_END:.0f}$ d, infections prevented relative to the "
-    r"no-intervention baseline. Both costs are the contact reduction in population-days "
-    r"per capita integrated over the wave time, "
-    r"$\int_0^{T_\text{wave}}\varepsilon_s I_s\,\mathrm{d}t$ for isolation and "
-    r"$\int_0^{T_\text{wave}}(1-B_{n_B})\,\mathrm{d}t$ for warnings. "
-    r"\textsuperscript{$\dagger$}rounded and not exactly zero density infected."
-)
+CAPTION = r"\mathcal{R}_t$ is the effective reproductive number after interventions, averaged over whole oscillation periods once interventions have taken effect and before susceptible depletion. Peak symptomatic is the maximum total $I_s$ fraction. Wave time is the first time after the prevalence peak at which total infected prevalence falls back below $E_0$. Attack rate and infections prevented are evaluated at 6000 days, infections prevented relative to the no-intervention baseline. Both costs are the total contact reduction in contacts$\times$days integrated over the whole wave time, $\int_0^{T_\text{wave}}\varepsilon_s I_s\,\mathrm{d}t$ for isolation and $\int_0^{T_\text{wave}}(1-B_{n_B})\,\mathrm{d}t$ for warnings.\textsuperscript{$\dagger$}rounded and not exactly zero density infected."
 
 
 def asymmetric_R_off(R_crit, R_off=R_OFF):
@@ -192,7 +180,7 @@ def write_strategy_table(path, pathogen, base_params, model, scenarios, drop=("c
     with open(path, "w") as f:
         f.write(render_table(
             groups,
-            caption=f"Characteristics of {pathogen} scenarios under different warning strategies. " + CAPTION_NOTE,
+            caption=f"Characteristics of {pathogen} scenarios under different warning strategies. " + CAPTION,
             short_caption=f"Characteristics of {pathogen} scenarios under different warning strategies",
             label=f"tab:alternative_strategies_{pathogen}",
             horizon=t1,

@@ -4,17 +4,6 @@
   <run spec="Simulator" nSims="$(nSims)">
     <simulate spec="SimulatedTree" id="tree">
 
-      <!-- fixed traj length and min number of leaves 
-      N = 10_000
-      S + Ia -> E + Ia    phi_a * beta / N
-      S + Ip -> E + Ip    phi_p * beta / N
-      S + Is -> E + Is    1     * beta / N
-      E      -> Ia        p     * gamma
-      E      -> Ip        (1-p) * gamma
-      Ip     -> Is        sigma
-      Ia     -> R         mu_a
-      Is     -> R         mu_s
-      -->
       <trajectory spec="StochasticTrajectory" id="traj" maxTime="$(maxTime)" mustHave="sample &gt;= $(minSamples)" endsWhen="sample==$(maxSamples)">
 
         <population spec="RealParameter" id="S" value="$(S0)"/>

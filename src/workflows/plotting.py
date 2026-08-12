@@ -31,7 +31,7 @@ def plot_heatmap(
     X, Y, Z, 
     cmap='viridis', shading='auto', norm=None,
     contour_metric = None, contour_levels=[], contour_colors='black', contour_linestyles=['-'], contour_alpha=1.0,
-    title=None, title_fontsize=14, title_pad=10, figsize=(6, 6),
+    title=None, title_fontsize=14, title_pad=None, figsize=(6, 6),
     xlabel=None, ylabel=None, xlabelsize=12, ylabelsize=12,
     x_logscale=False, y_logscale=False, 
     cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=12, cbar_labelpad=10,
@@ -57,7 +57,6 @@ def plot_heatmap(
     ax.set_ylabel(ylabel, fontsize=ylabelsize)
     return fig, ax
 
-
 def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
     """
     Plot a grid of the total proportion infected after interventions (compared to baseline without interventions).
@@ -67,8 +66,7 @@ def plot_I_tot(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), title=None, 
     eps_ss = jnp.linspace(0.0, 0.999, 100)
     fig, _ = plot_heatmap(
         eps_ww, eps_ss, compute_I_tot_grid(model, params, eps_ww, eps_ss, t1, E0), 
-        title=title, xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
-    )
+        title=title, xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$')
     return fig
 
 def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, E0=1e-6, title=None):
@@ -81,8 +79,7 @@ def plot_final_R(model=simulate_SEIPAR_W, params=Params.for_SEIPAR(), t1=100.0, 
     fig, _ = plot_heatmap(
         eps_ww, eps_ss, compute_R_grid(model, params, eps_ww, eps_ss, t1, E0), 
         cmap='RdBu_r', norm=mpl.colors.CenteredNorm(vcenter=1.0), contour_levels=[1.0],
-        title=title, xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
-    )
+        title=title, xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$')
     return fig
 
 def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(), title=None, t1=600.0, E0=1e-6):
@@ -90,31 +87,16 @@ def plot_I_tot_delayed_ww(model=simulate_SEIPAR_W, parameters=Params.for_SEIPAR(
     I_crit_list = jnp.logspace(-6, 0, 100)
     fig, _ = plot_heatmap(
         taus, I_crit_list, compute_I_tot_grid_delayed_ww(model=model, base_params=parameters, taus=taus, I_crit_list=I_crit_list, t1=t1, E0=E0),
-        title=title, xlabel='Behavioural delay $\\tau_B$', ylabel='Infection threshold',
-        y_logscale=True, cbar_label='Total infections (relative to baseline)', figsize=(6,6),
-    )
+        title=title, xlabel='Behavioural delay $\\tau_B$', ylabel='Infection threshold', cbar_shrink=0.7,
+        y_logscale=True, cbar_label='Total infections (relative to baseline)', figsize=(6,6))
     return fig
 
 
 def plot_trajectory(
-    model: Callable = simulate_SEIPAR_W, 
-    params: Params = Params.for_SEIPAR(), 
-    path: str = "trajectory.png", 
-    title: str = "Trajectory",
-    t1: float = 600.0, 
-    icrit: float | None = None,
-    image_resolution: int = 900,
-    plot_S: bool = True,
-    plot_E: bool = True,
-    plot_Ia: bool = True,
-    plot_Ip: bool = True,
-    plot_Is: bool = True,
-    plot_total_I: bool = False,
-    plot_R: bool = True,
-    semilogy: bool = False,
-    no_decomp: bool = False,
-    model_type: str = "exponential",
-) -> None:
+    model: Callable = simulate_SEIPAR_W, params: Params = Params.for_SEIPAR(), 
+    path = "trajectory.png", title = "Trajectory", t1 = 600.0, icrit = None, image_resolution = 900,
+    plot_S = True, plot_E = True, plot_Ia = True, plot_Ip = True, plot_Is = True, plot_total_I = False,
+    plot_R = True, semilogy = False, no_decomp = False, model_type = "exponential"):
     """
     Simulate and plot trajectories.
     Assume compartment order: S, E, [I compartments], R, [W delay compartments], [B delay compartments].
@@ -140,7 +122,7 @@ def plot_trajectory(
         Ia = I_compartments[0] if len(I_compartments) > 1 else None
         Ip = I_compartments[1] if len(I_compartments) > 2 else None
     end_time = _wave_end_time(tt, total_I, icrit)
-    if end_time <= 0:
+    if end_time <= 0 or not np.isfinite(end_time):
         end_time = tt[-1]
     
     # plot
@@ -341,10 +323,10 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     if idx_med_upper < n_events and ci_upper[-1] >= 0.5:
         median_time_ci_lower = sorted_times[idx_med_upper]
         median_time_ci_upper = sorted_times[idx_med_lower] if ci_lower[-1] >= 0.5 else sorted_times[-1]
-        ax.axvline(median_time, color='red', label=f'Median: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
+        ax.axvline(median_time, color='red', label=f'Median') #: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
         ax.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
     else:
-        ax.axvline(median_time, color='red', label=f'Median: {median_time:.2f}')
+        ax.axvline(median_time, color='red', label=f'Median') #: {median_time:.2f}')
     
     # 95% time
     time_95 = np.percentile(times, 95)
@@ -353,10 +335,10 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     if idx_95_upper < n_events and ci_upper[-1] >= 0.95:
         time_95_ci_lower = sorted_times[idx_95_upper]
         time_95_ci_upper = sorted_times[idx_95_lower] if ci_lower[-1] >= 0.95 else sorted_times[-1]
-        ax.axvline(time_95, color='orange', label=f'95%: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
+        ax.axvline(time_95, color='orange', label=f'95%') #: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
         ax.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
     else:
-        ax.axvline(time_95, color='orange', label=f'95%: {time_95:.2f}')
+        ax.axvline(time_95, color='orange', label=f'95%') #: {time_95:.2f}')
     
     # deterministic susceptible trajectory
     ax.plot(tt_det, S_det, color='green', label='Deterministic susceptible trajectory')
@@ -364,7 +346,7 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     # histogram
     ax_hist = ax.twinx()
     ax_hist.hist(times, bins=100, density=True, color='gray', alpha=0.3, label='Extinction times histogram')
-    ax_hist.set_ylabel('Density', color='gray', fontsize=11)
+    ax_hist.set_ylabel('Density', color='gray', fontsize=12)
     ax_hist.tick_params(axis='y', labelcolor='gray')
     
     # styling
@@ -375,7 +357,7 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     # legends
     lines_1, labels_1 = ax.get_legend_handles_labels()
     lines_2, labels_2 = ax_hist.get_legend_handles_labels()
-    ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc='best', fontsize=9)
+    return (lines_1 + lines_2, labels_1 + labels_2)
 
 def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, eps_w, path, pathogens, colors, parameters, R0_lo, R0_hi):
     t = np.arange(0, 50, dt)

@@ -103,43 +103,6 @@ class Params(NamedTuple):
         )
 
     @classmethod
-    def for_SEIAR(cls,
-            R_0: float = 1.46,
-            phi_a: float = 0.57,
-            gamma_inv: float = 1.65,
-            mu_a_inv: float = 3.38,
-            mu_s_inv: float = 3.38,
-            p: float = 0.36,
-            epsilon_s: float = 0.0,
-            epsilon_w: float = 0.0,
-            k: float = 10.0,
-            R_crit: float = 1.0,
-            tau_W: float = 14.0,
-            tau_B: float = 7.0,
-            I_crit: float = 0.0, 
-            k_I: float = 1e6,
-            n_W: int = 3,
-            n_B: int = 1,
-            R_off: float = 1.0,
-            eval_interval: float = 14.0,
-            T_lead: float = 0.0
-        ) -> "Params":
-        """
-        Parameters for the SEIAR model with asymptomatic but no presymptomatic transmission.
-        Uses H1N1-like parameters without presymptomatic transmission by default.
-        """
-        r = calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, mu_s_inv=mu_s_inv)
-        r_eps = calculate_r(p=p, phi_a=phi_a, phi_p=0.0, mu_a_inv=mu_a_inv, sigma_inv=0.0, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
-        beta = R_0 / r
-        rho = r_eps / r
-        return cls(
-            R_0=R_0, phi_a=phi_a, phi_p=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
-            mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead
-        )
-
-    @classmethod
     def for_SEIR(cls, 
             R_0: float = 1.95,
             gamma_inv: float = 8.5,

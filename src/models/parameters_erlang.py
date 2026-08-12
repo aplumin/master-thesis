@@ -152,7 +152,7 @@ class ParamsErlang(NamedTuple):
             weighted: bool = False,
         ) -> "ParamsErlang":
         # TODO: this uses flat infectiousness
-        w_a, w_p, w_s = jnp.ones(nA), jnp.ones(nA), jnp.ones(nA)
+        w_a, w_p, w_s = jnp.ones(nA), jnp.ones(nP), jnp.ones(nS)
         r = _r_weighted(0.0, 0.0, 0.0, 0.0, 0.0, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
         r_eps = _r_weighted(0.0, 0.0, 0.0, 0.0, 0.0, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
         beta = R_0 / r
@@ -166,7 +166,7 @@ class ParamsErlang(NamedTuple):
             nE=int(nE), nP=int(nP), nS=int(nS), nA=int(nA), weighted=bool(weighted),
         )
 
-    _WEIGHTS_FROM = ["gamma_inv", "sigma_inv", "mu_a_inv", "mu_s_inv", "p", "phi_a", "phi_p", "shape", "scale", "nP", "nS", "nA", "weighted"]
+    _WEIGHTS_FROM = ["gamma_inv", "sigma_inv", "mu_a_inv", "mu_s_inv", "shape", "scale", "nP", "nS", "nA", "weighted"]
     _DERIVED_FROM = ["R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s", "w_a", "w_p", "w_s", "nP", "nS", "nA"]
     def update(self, **kwargs) -> "ParamsErlang":
         """Update any parameter(s)."""
@@ -198,17 +198,12 @@ def compute_weights(gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, p, phi_a, phi_p, s
     Computed from a Gamma pdf with given shape and scale parameters.
     """
     nP, nS, nA = int(nP), int(nS), int(nA)
-    if not bool(weighted): return jnp.ones(nA), jnp.ones(nP), jnp.ones(nS)
+    if not bool(weighted):
+        return jnp.ones(nA), jnp.ones(nP), jnp.ones(nS)
     w_a = gamma.pdf(_mean_time(gamma_inv, mu_a_inv, nA), a=shape, scale=scale)
     w_p = gamma.pdf(_mean_time(gamma_inv, sigma_inv, nP), a=shape, scale=scale)
     w_s = gamma.pdf(_mean_time(gamma_inv + sigma_inv, mu_s_inv, nS), a=shape, scale=scale)
-    w_a = jnp.where(mu_a_inv > 0, w_a, 1.0)
-    w_p = jnp.where(sigma_inv > 0, w_p, 1.0)
-    w_s = jnp.where(mu_s_inv > 0, w_s, 1.0)
-    nom = p * phi_a * mu_a_inv + (1.0 - p) * (phi_p * sigma_inv + mu_s_inv)
-    denom = (p * phi_a * jnp.sum(w_a) * (mu_a_inv / nA) + (1.0 - p) * (phi_p * jnp.sum(w_p) * (sigma_inv / nP) + jnp.sum(w_s) * (mu_s_inv / nS)))
-    norm = jnp.where(denom > 0, nom / jnp.where(denom > 0, denom, 1.0), 1.0)
-    return norm * w_a, norm * w_p, norm * w_s
+    return (w_a / jnp.mean(w_a), w_p / jnp.mean(w_p), w_s / jnp.mean(w_s))
 
 def _mean_time(t0, mean, n):
     """

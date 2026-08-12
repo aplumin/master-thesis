@@ -142,14 +142,11 @@ def delay_margin(ps: Params, clip_negative=False):
     M_D = M_P / omega_c
     return max(M_D, 0.0) if clip_negative else M_D
 
-def critical_loop_gain(tau_W=14.0, tau_B=7.0, n_W=3, n_B=1, sampling_interval=0.0):
+def critical_loop_gain(tau_W=14.0, tau_B=7.0, n_W=3, n_B=1):
     """Static loop gain at the Hopf boundary: L0 s.t. |L(j w_PC)| = 1 at the phase crossover."""
-    D = float(sampling_interval)
-    def phase(w):
-        return arg_L(w, tau_W, tau_B, n_W, n_B) - w * D / 2.0
     def magnitude(w):
         return (1.0 + (w * tau_W / n_W) ** 2) ** (-n_W / 2.0) * (1.0 + (w * tau_B / n_B) ** 2) ** (-n_B / 2.0)
-    return float(1.0 / magnitude(brentq(lambda w: np.pi + phase(w), 1e-10, 1e10)))
+    return float(1.0 / magnitude(brentq(lambda w: np.pi + arg_L(w, tau_W, tau_B, n_W, n_B), 1e-10, 1e10)))
 
 def k_crit(L0c, eps_w, R_crit=1.0):
     """k_crit(eps_w) = 2 * L0_crit * (2 - eps_w) / (eps_w * R_crit)."""

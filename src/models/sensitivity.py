@@ -5,7 +5,7 @@ Global sensitivity analysis of outcomes to parameters.
     and the output after linearly regressing out all other inputs.
   - Sobol indices: decompose the output variance into contributions from each input 
     (first-order S1) and each input including all its interactions (total-order ST).
-  - Elasticites around an operating point (% change in outcome per 1% change in parameter).
+  - Elasticites around an operating point (relative change in outcome for a relative change in parameter).
 """
 
 from functools import cache, partial
@@ -20,7 +20,7 @@ from scipy.optimize import brentq
 from scipy.stats import norm, qmc, rankdata
 
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIR_W
-from models.metrics import outcome_metrics, rt_amplitude, trajectory_indices
+from models.metrics import outcome_metrics, trajectory_indices
 from models.parameters import Params
 from models.stability import _logistic
 from models.uncertainty import Priors
@@ -320,42 +320,6 @@ def export_sensitivity_bounds(combinations, path, npzs):
 # ELASTICITIES
 def elasticity_symbol(name):
     return {"log_k": r"$k$", "log_I_crit": r"$I_{\text{crit}}$", "log_kI": r"$k_I$"}.get(name, param_symbol(name))
-
-def _default_values(params: Params, names=ELASTICITY_NAMES):
-    values = {
-        "R_0": float(params.R_0), "gamma_inv": float(params.gamma_inv), "sigma_inv": float(params.sigma_inv), 
-        "mu_s_inv": float(params.mu_s_inv), "mu_a_inv": float(params.mu_a_inv), "p": float(params.p),
-        "epsilon_s": float(params.epsilon_s), "epsilon_w": float(params.epsilon_w), "tau_W": float(params.tau_W), "tau_B": float(params.tau_B),
-        "log_k": float(params.k), "R_crit": float(params.R_crit), "log_I_crit": float(params.I_crit), "log_kI": float(params.k_I),
-        "RR_a": float(params.phi_a) * float(params.mu_a_inv) / float(params.mu_s_inv) if float(params.mu_a_inv) > 0 else 0.0,
-        "RR_p": float(params.phi_p) * float(params.sigma_inv) / float(params.mu_s_inv),
-    }
-    return {n: values[n] for n in names if n != DUMMY}
-
-def _outcome_fn(model, names, outcome, t1, E0):
-    make_params = _make_params(MODEL_NAMES[model], tuple(names))
-    def _get_names(z, names):
-        theta = jnp.exp(z)
-        return jnp.stack([z[i] / float(np.log(10.0)) if n.startswith("log_") else theta[i] for i, n in enumerate(names)])
-    def _y(z, base_params):
-        params = make_params(base_params, _get_names(z, names))
-        tt, yy = model(params=params, t1=t1, E0=E0)
-        if outcome == "Rt": return _Rt(tt, yy, params)
-        if outcome == "Itot": return outcome_metrics(tt, yy, params, t1)[2]
-        if outcome == "peak_Is": return outcome_metrics(tt, yy, params, t1)[3]
-        if outcome in ("amplitude", "amplitude_final"): return rt_amplitude(tt, params.R_0 * params.rho * yy[:, -1] * yy[:, 0], window=outcome.split("_")[-1])
-        raise ValueError(outcome)
-    return _y
-
-def elasticities(model, base_params: Params, names=ELASTICITY_NAMES, outcome="Rt", t1=1000.0, E0=1e-6):
-    """Local elasticities d log(outcome) / d log(theta)."""
-    names = tuple(n for n in names if n != DUMMY)
-    values = _default_values(base_params, names)
-    z0 = jnp.log(jnp.array([values[n] for n in names]))
-    f = _outcome_fn(model, names, outcome, t1, E0)
-    y0, grad = jax.value_and_grad(f)(z0, base_params)
-    y0 = float(y0)
-    return list(names), np.asarray(grad) / y0, y0
 
 def _closed_loop_Rt(R_eps, epsilon_w, k, R_crit=1.0):
     return brentq(lambda r: R_eps * (1.0 - epsilon_w * _logistic(k * (r - R_crit))) - r, 1e-9, max(10.0, 2.0 * R_eps))

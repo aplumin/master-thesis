@@ -57,21 +57,6 @@ def _SEIPAR_spatial(X, prevalence, B_out, ps):
         recover_asyx + recover_syx,
     ])
 
-def _SEIAR_spatial(X, prevalence, B_out, ps):
-    S, E, Ia, Is, _ = X
-    prev_a, prev_s = prevalence
-    lambda_ = B_out * ps.beta * (ps.phi_a * prev_a + (1.0 - ps.epsilon_s) * prev_s) * S
-    become_infectious = E / ps.gamma_inv
-    recover_asyx = Ia / ps.mu_a_inv
-    recover_syx = Is / ps.mu_s_inv
-    return jnp.stack([
-        -lambda_,
-        lambda_ - become_infectious,
-        ps.p * become_infectious - recover_asyx,
-        (1.0 - ps.p) * become_infectious - recover_syx,
-        recover_asyx + recover_syx,
-    ])
-
 def _SEIR_spatial(X, prevalence, B_out, ps):
     S, E, II, _ = X
     (prev_s,) = prevalence
@@ -93,12 +78,11 @@ def _div(num, denom, fill=0.0):
 
 _MODELS = { # (function, labels, indices of infectious compartments, index of symptomatics)
     "SEIPAR": (_SEIPAR_spatial, ("S", "E", "Ia", "Ip", "Is", "R"), [2, 3, 4], 4),
-    "SEIAR": (_SEIAR_spatial, ("S", "E", "Ia", "Is", "R"), [2, 3], 3),
     "SEIR": (_SEIR_spatial, ("S", "E", "I", "R"), [2], 2),
 }
 
 def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww_in_B, response_in_B_to_A):
-    local_fn, labels, infectious_idx, syx_idx = _MODELS[model_name]
+    fn, labels, infectious_idx, syx_idx = _MODELS[model_name]
     syx_pos = infectious_idx.index(syx_idx)
     n_flow = len(labels)
     ps = spatial_params.epi_params
@@ -110,7 +94,7 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
     # back migration s.t. pop sizes stay constant: m_BA = m_AB * N_A / N_B
     m_BA = _div(spatial_params.m * N_A, N_B)
 
-    def _rhs(t, y, args):
+    def _diffeq(t, y, args):
         X_A = y[:n_flow]
         X_B = y[n_flow:2 * n_flow]
         i = 2 * n_flow
@@ -132,8 +116,8 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
         prev_B = tuple(_div(X_B[j], N_B) for j in infectious_idx)
 
         migration = m_BA * X_B - m_AB * X_A # net migration into A
-        dX_A = local_fn(X_A, prev_A, B_out_A, ps) + migration
-        dX_B = local_fn(X_B, prev_B, B_out_B, ps) - migration
+        dX_A = fn(X_A, prev_A, B_out_A, ps) + migration
+        dX_B = fn(X_B, prev_B, B_out_B, ps) - migration
         dFlow = jnp.concatenate([dX_A, dX_B])
 
         Rt_A = ps.R_0 * ps.rho * B_out_A * _div(X_A[0], N_A)
@@ -160,7 +144,7 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
         chains += [jnp.zeros(n_W), jnp.ones(n_B)]
     y0 = jnp.concatenate([y0_flow] + chains)
 
-    return _solve(_rhs, y0, ps, t1, n_ts)
+    return _solve(_diffeq, y0, ps, t1, n_ts)
 
 
 _SPATIAL_STATIC = ['n_ts', 'ww_in_B', 'response_in_B_to_A', 'primary_in_A']
@@ -178,20 +162,6 @@ def simulate_SEIPAR_W_spatial(
     With response_in_B_to_A=True, deme B has the same response as deme A.
     """
     return _simulate_spatial("SEIPAR", spatial_params, t1, E0, n_ts, primary_in_A, ww_in_B, response_in_B_to_A)
-
-@partial(jax.jit, static_argnames=_SPATIAL_STATIC)
-def simulate_SEIAR_W_spatial(
-    spatial_params: SpatialParams = SpatialParams(epi_params=Params.for_SEIAR(), N_A=1.0, m=0.0),
-    t1: float = 200.0, E0: float = 1e-6, n_ts: int = 5000,
-    primary_in_A: bool = True, ww_in_B: bool = False, response_in_B_to_A: bool = False,
-):
-    """
-    Two-deme SEIAR model with migration.
-    States: S_A, E_A, Ia_A, Is_A, R_A, S_B, E_B, Ia_B, Is_B, R_B, W_A(n_W), B_A(n_B), [W_B(n_W), B_B(n_B)].
-    The W_B/B_B chains are included only if ww_in_B=True. 
-    With response_in_B_to_A=True, deme B has the same response as deme A.
-    """
-    return _simulate_spatial("SEIAR", spatial_params, t1, E0, n_ts, primary_in_A, ww_in_B, response_in_B_to_A)
 
 
 @partial(jax.jit, static_argnames=_SPATIAL_STATIC)
@@ -231,8 +201,8 @@ def unpack_spatial(ys, epi_params: Params, model: str = "SEIR", ww_in_B: bool = 
     return out
 
 
-_RUN_FUNCTIONS = {"SEIR": simulate_SEIR_W_spatial, "SEIAR": simulate_SEIAR_W_spatial, "SEIPAR": simulate_SEIPAR_W_spatial}
-_DEFAULT_PARAMS = {"SEIR": Params.for_SEIR, "SEIAR": Params.for_SEIAR, "SEIPAR": Params.for_SEIPAR}
+_RUN_FUNCTIONS = {"SEIR": simulate_SEIR_W_spatial, "SEIPAR": simulate_SEIPAR_W_spatial}
+_DEFAULT_PARAMS = {"SEIR": Params.for_SEIR, "SEIPAR": Params.for_SEIPAR}
 
 def run_spatial(N_A, m, epi_params: Params = None, response_in_B_to_A=False, model="SEIPAR", t1=1000.0, E0=1e-6, ww_in_B=False):
     """
