@@ -1,9 +1,10 @@
 """
-Deterministic compartmental models:
-    - SEIPAR_W with presymptomatic and asymptomatic transmission and wastewater feedback
-    - SEIR_W with no presymptomatic or asymptomatic transmission and wastewater feedback
+Deterministic compartmental models with wastewater feedback:
+    - SEIPAR_W with presymptomatic and asymptomatic transmission
+    - SEIR_W with no presymptomatic or asymptomatic transmission
 """
 
+import math
 from functools import partial
 
 import jax
@@ -18,95 +19,107 @@ MAX_STEPS = 50_000
 DT0 = 0.1
 
 
-def linear_chain(X, inflow, rate):
-    """
-    Linear compartment chain.
-    Returns a tuple (updated subcompartment densities (jnp array), density flowing out of the chain (float)).
+### POPULATION FLOW EQUATIONS
+def _rate(X, period):
+    """X / period, or 0 when the compartment period is 0."""
+    is_compartment = period > 0.0
+    return jnp.where(is_compartment, X / jnp.where(is_compartment, period, 1.0), 0.0)
 
-    Attributes:
-        X (jnp array): Current subcompartment densities.
-        inflow (float): Density flow into the chain.
-        rate (float): Transition rate between the subcompartments.
-    """
-    outflow = rate * X
-    dx = jnp.concatenate([jnp.reshape(inflow, (1,)), outflow[:-1]]) - outflow
-    return dx, outflow[-1]
+def seipar_flow(y, params, B_out):
+    """(S, E, Ia, Ip, Is, R)."""
+    S, E, Ia, Ip, Is, _ = y[:6]
+    lambda_S = B_out * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * S
+    become_infectious = _rate(E, params.gamma_inv)
+    become_symptomatic = _rate(Ip, params.sigma_inv)
+    recover_asyx = _rate(Ia, params.mu_a_inv)
+    recover_syx = _rate(Is, params.mu_s_inv)
+    dFlow = jnp.stack([
+        -lambda_S,
+        lambda_S - become_infectious,
+        params.p * become_infectious - recover_asyx,
+        (1.0 - params.p) * become_infectious - become_symptomatic,
+        become_symptomatic - recover_syx,
+        recover_asyx + recover_syx,
+    ])
+    return dFlow, S, Is
+
+def seir_flow(y, params, B_out):
+    """(S, E, I, R)."""
+    S, E, II, _ = y[:4]
+    lambda_S = B_out * params.beta * (1.0 - params.epsilon_s) * II * S
+    become_infectious = _rate(E, params.gamma_inv)
+    recover = _rate(II, params.mu_s_inv)
+    dFlow = jnp.stack([
+        -lambda_S,
+        lambda_S - become_infectious,
+        become_infectious - recover,
+        recover,
+    ])
+    return dFlow, S, II
+
+
+FLOW_MODELS = { # name: (model function, number population compartments)
+    "SEIPAR": (seipar_flow, 6), "SEIR": (seir_flow, 4)}
 
 def chain_derivative(X, inflow, rate):
     """dX = rate * (X_in - X)."""
     return rate * (jnp.concatenate([jnp.reshape(inflow, (1,)), X[:-1]]) - X)
 
 def _delay_ODEs(S, W, B, prevalence, params):
-    """Wastewater reporting and behavioural adaptation delay compartments. Uses current Rt as input to the linear W chain."""
+    """Wastewater reporting and behavioural adaptation delay compartments."""
     Rt = params.R_0 * params.rho * B[-1] * S
     dW = chain_derivative(W, Rt, W.shape[0] / params.tau_W)
     reported = logistic_response_function(W[-1], params, prevalence)
     dB = chain_derivative(B, reported, B.shape[0] / params.tau_B)
     return dW, dB
 
-def _initial_state(E0, n_I, n_W, n_B):
-    """Initial state [1-E0, E0, n_I zeros, 0, nW zeros, nB ones]."""
-    flow = jnp.concatenate([jnp.stack([1.0 - E0, E0]), jnp.zeros(n_I+1)])
-    return jnp.concatenate([flow, jnp.zeros(n_W), jnp.ones(n_B)])
+def initial_state(E0, n_flow, n_W, n_B):
+    """Initial state [1-E0, E0, (n_flow - 2) zeros, n_W zeros, n_B ones]."""
+    return jnp.concatenate([jnp.stack([1.0 - E0, E0]), jnp.zeros(n_flow - 2), jnp.zeros(n_W), jnp.ones(n_B)])
 
-def _solve(diffeq, y0, params, t1, n_ts=5000, max_steps=MAX_STEPS, throw=True):
+def get_n_ts(t1, n_ts=None):
+    """Number of saved time points."""
+    if n_ts is None or math.isnan(n_ts):
+        # default 0.1 days
+        return int(t1 / DT0) + 1
+    return int(n_ts)
+
+def solve(diffeq, y0, params, t1, n_ts=None, max_steps=MAX_STEPS, throw=True):
     """diffrax ODE solve."""
     solution = diffeqsolve(
         terms=ODETerm(diffeq),
         solver=Tsit5(),
         t0=0.0, t1=t1, dt0=DT0,
-        y0=y0,
-        args=params,
-        saveat=SaveAt(ts=jnp.linspace(0.0, t1, n_ts)),
-        stepsize_controller=PIDController(rtol=RTOL, atol=ATOL), 
+        y0=y0, args=params,
+        saveat=SaveAt(ts=jnp.linspace(0.0, t1, get_n_ts(t1, n_ts))),
+        stepsize_controller=PIDController(rtol=RTOL, atol=ATOL),
         max_steps=max_steps, throw=throw,
     )
     ys = jnp.where(solution.result == RESULTS.successful, jnp.maximum(solution.ys, 0.0), jnp.nan)
     return solution.ts, ys
 
 
-@partial(jax.jit, static_argnames=['n_ts', 'max_steps', 'throw'])
-def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000, max_steps: int = MAX_STEPS, throw: bool = True):
-    """Compartmental model with presymptomatic and asymptomatic transmission."""
+def _simulate(model_name, params, t1, E0, n_ts, max_steps, throw):
+    flow_fn, n_flow = FLOW_MODELS[model_name]
     n_W, n_B = params.n_W, params.n_B
-    def _SEIPAR_W(t, y, params):
-        S, E, Ia, Ip, Is, _ = y[:6]
-        W = y[6:6+n_W]
-        B = y[6+n_W:]
-        lambda_S = B[-1] * params.beta * (params.phi_a * Ia + params.phi_p * Ip + (1.0 - params.epsilon_s) * Is) * S
-        become_infectious = E / params.gamma_inv
-        become_symptomatic = Ip / params.sigma_inv
-        recover_asyx = Ia / params.mu_a_inv
-        recover_syx = Is / params.mu_s_inv
-        dFlow = jnp.stack([
-            -lambda_S,
-            lambda_S - become_infectious,
-            params.p * become_infectious - recover_asyx,
-            (1.0 - params.p) * become_infectious - become_symptomatic,
-            become_symptomatic - recover_syx,
-            recover_asyx + recover_syx,
-        ])
-        dW, dB = _delay_ODEs(S, W, B, Is, params)
-        return jnp.concatenate([dFlow, dW, dB])
-    return _solve(_SEIPAR_W, _initial_state(E0, n_I=3, n_W=n_W, n_B=n_B), params, t1, n_ts, max_steps=max_steps, throw=throw)
 
-@partial(jax.jit, static_argnames=['n_ts', 'max_steps', 'throw'])
-def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6, n_ts: int = 5000, max_steps: int = MAX_STEPS, throw: bool = True):
-    """Simplified compartmental model without presymptomatic or asymptomatic transmission."""
-    n_W, n_B = params.n_W, params.n_B
-    def _SEIR_W(t, y, params):
-        S, E, II, _ = y[:4]
-        W = y[4:4 + n_W]
-        B = y[4 + n_W:]
-        lambda_S = B[-1] * params.beta * (1.0 - params.epsilon_s) * II * S
-        become_infectious = E / params.gamma_inv
-        recover = II / params.mu_s_inv
-        dFlow = jnp.stack([
-            -lambda_S,
-            lambda_S - become_infectious,
-            become_infectious - recover,
-            recover,
-        ])
-        dW, dB = _delay_ODEs(S, W, B, II, params)
+    def _rhs(t, y, params):
+        W = y[n_flow:n_flow + n_W]
+        B = y[n_flow + n_W:]
+        dFlow, S, prevalence = flow_fn(y, params, B[-1])
+        dW, dB = _delay_ODEs(S, W, B, prevalence, params)
         return jnp.concatenate([dFlow, dW, dB])
-    return _solve(_SEIR_W, _initial_state(E0, n_I=1, n_W=n_W, n_B=n_B), params, t1, n_ts, max_steps=max_steps, throw=throw)
+
+    y0 = initial_state(E0, n_flow, n_W, n_B)
+    return solve(_rhs, y0, params, t1, n_ts, max_steps=max_steps, throw=throw)
+
+
+@partial(jax.jit, static_argnames=['t1', 'n_ts', 'max_steps', 'throw'])
+def simulate_SEIPAR_W(params: Params = Params.for_SEIPAR(), t1: float = 100.0, E0: float = 1e-6, n_ts=None, max_steps: int = MAX_STEPS, throw: bool = True):
+    """Compartmental model with presymptomatic and asymptomatic transmission."""
+    return _simulate("SEIPAR", params, t1, E0, n_ts, max_steps, throw)
+
+@partial(jax.jit, static_argnames=['t1', 'n_ts', 'max_steps', 'throw'])
+def simulate_SEIR_W(params: Params = Params.for_SEIR(), t1: float = 100.0, E0: float = 1e-6, n_ts=None, max_steps: int = MAX_STEPS, throw: bool = True):
+    """Simplified compartmental model without presymptomatic or asymptomatic transmission."""
+    return _simulate("SEIR", params, t1, E0, n_ts, max_steps, throw)

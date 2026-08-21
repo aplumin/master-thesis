@@ -1,18 +1,20 @@
 """
-Prior specification and Monte Carlo uncertainty handling.
+Prior parameters and Monte Carlo draws.
 """
-
 from typing import NamedTuple
 
 import numpy as np
 from scipy.stats import beta, norm
 
 from models.metrics import (
-    contour_boundary,
+    critical_isolation_efficacy,
+    critical_warning_efficacy,
     eps_s_boundary,
+    generation_time,
     growth_rate,
     infectious_fractions,
     mean_warning_multiplier,
+    theta_from_type_R_values,
     transmission_fractions,
 )
 from models.parameters import Params, calculate_r
@@ -20,9 +22,7 @@ from models.parameters_erlang import ParamsErlang
 
 
 class Marginal(NamedTuple):
-    """
-    Marginal fitted to quantiles.
-    """
+    """Marginal fitted to quantiles."""
     lo: float
     hi: float
     family: str = "lognormal"
@@ -37,16 +37,14 @@ class Marginal(NamedTuple):
             return float(self.lo)
         return float(_ppf(self, np.array([0.5]))[0])
 
-def _ppf(m: Marginal, u: np.ndarray):
+def _ppf(m, u):
     """
-    Inverse-CDF of a Marginal at uniform draws u in (0, 1):
-      - uniform:   linear between lo and hi.
-      - normal:    mean + s*Phi^{-1}(u) 
-                   with scale s = (hi - lo)/(z_hi - z_lo) and mean = lo - s*z_lo.
-      - lognormal: same as normal in logspace.
-      - beta:      fit to mean and concentration mean*(1-mean)/sd^2 - 1.
+    Inverse CDF of a Marginal at uniform draws u in (0, 1):
+      - uniform: linear between lo and hi.
+      - normal: mean + s*Phi^{-1}(u) with scale s = (hi - lo)/(z_hi - z_lo) and mean = lo - s*z_lo.
+      - lognormal: as normal but in logspace.
+      - beta: fit to mean and concentration mean*(1-mean)/sd^2 - 1.
     """
-    u = np.asarray(u, dtype=float)
     if m.lo == m.hi:
         return np.full(u.shape, float(m.lo))
     if m.family == "uniform":
@@ -65,7 +63,7 @@ def _ppf(m: Marginal, u: np.ndarray):
         sd = (m.hi - m.lo) / (z_hi - z_lo)
         conc = mean * (1.0 - mean) / sd**2 - 1.0
         if conc <= 0.0:
-            raise ValueError()
+            raise ValueError(conc)
         return beta.ppf(u, mean * conc, (1.0 - mean) * conc)
     raise ValueError(m.family)
 
@@ -87,10 +85,10 @@ def sample_primitives(priors: Priors, n: int, seed: int = 0):
     rng = np.random.default_rng(seed)
     names = priors.names
     Z = rng.standard_normal((n, len(names)))
-    if priors.corr is not None:
+    if priors.corr is not None: # apply correlation
         corr = np.asarray(priors.corr, float)
         if corr.shape != (len(names), len(names)):
-            raise ValueError()
+            raise ValueError(corr.shape)
         Z = Z @ np.linalg.cholesky(corr).T
     U = norm.cdf(Z)
     return {name: _ppf(priors.marginals[name], U[:, i]) for i, name in enumerate(names)}
@@ -109,17 +107,6 @@ def sample_derived(priors: Priors, n: int = 20000, seed: int = 0):
     s["beta"] = np.divide(s["R_0"], r, out=np.zeros(n), where=r > 0)
     return s
 
-_SAMPLE_CACHE: dict[tuple, tuple] = {}
-
-def cached_sample_derived(priors: Priors, n: int = 20000, seed: int = 0):
-    key = (id(priors), n, seed)
-    val = _SAMPLE_CACHE.get(key)
-    if val is not None and val[0] is priors:
-        return val[1]
-    result = sample_derived(priors, n=n, seed=seed)
-    _SAMPLE_CACHE[key] = (priors, result)
-    return result
-
 def epi_quantities(s: dict[str, np.ndarray], epsilon_s: float = 0.0, epsilon_w: float = 0.0):
     """Derived epidemiological quantities."""
     R0 = s["R_0"]
@@ -128,26 +115,20 @@ def epi_quantities(s: dict[str, np.ndarray], epsilon_s: float = 0.0, epsilon_w: 
     rp = (1.0 - s["p"]) * s["phi_p"] * s["sigma_inv"]
     rs = (1.0 - s["p"]) * s["mu_s_inv"]
     r = ra + rp + rs
-    with np.errstate(divide="ignore", invalid="ignore"):
-        R_a = np.where(r > 0, R0 * ra/r, 0.0)
-        R_p = np.where(r > 0, R0 * rp/r, 0.0)
-        R_s = np.where(r > 0, R0 * rs/r, 0.0)
-        # nonsymptomatic fraction
-        theta = np.where(R0 > 0, (R_a + R_p) / np.where(R0 > 0, R0, 1.0), 0.0)
-        # mean generation time
-        T_g = s["gamma_inv"] + np.where(r > 0, (s["p"] * s["phi_a"] * s["mu_a_inv"]**2 + (1.0 - s["p"]) * (s["phi_p"] * s["sigma_inv"]**2 + s["mu_s_inv"]**2 + s["sigma_inv"] * s["mu_s_inv"])) / np.where(r > 0, r, 1.0), 0.0)
-        # isolation efficacy needed for R_t = 1 (eps_w = 0)
-        eps_s_crit = np.where(R_s > 0, 1.0 - (1.0 - (R_a + R_p)) / np.where(R_s > 0, R_s, 1.0), np.nan)
-        # warning efficacy needed for R_t = 1 (eps_s = 0)
-        eps_w_crit = 2.0 * (1.0 - 1.0 / np.where(R0 > 0, R0, np.nan)) # assuming R_crit=1
-    R_t = (R_a + R_p + (1.0 - epsilon_s) * R_s) * mean_warning_multiplier(epsilon_w)
-    return {"R_a": R_a, "R_p": R_p, "R_s": R_s, "theta": theta, "T_g": T_g, "eps_s_crit": eps_s_crit, "eps_w_crit": eps_w_crit, "R_t": R_t}
-
-_DEFAULT_CI_NAMES = ("R_0", "gamma_inv", "sigma_inv", "mu_s_inv", "mu_a_inv", "p", "phi_p", "phi_a", "beta")
+    R_a = np.where(r > 0, R0 * ra/r, 0.0)
+    R_p = np.where(r > 0, R0 * rp/r, 0.0)
+    R_s = np.where(r > 0, R0 * rs/r, 0.0)
+    theta = theta_from_type_R_values(R0, R_a, R_p)
+    T_g = generation_time(r, s["p"], s["phi_a"], s["phi_p"], s["gamma_inv"], s["sigma_inv"], s["mu_a_inv"], s["mu_s_inv"])
+    eps_s_crit = critical_isolation_efficacy(R_s, R_a, R_p)
+    R_eps = R_a + R_p + (1.0 - epsilon_s) * R_s
+    eps_w_crit = critical_warning_efficacy(R_eps)
+    R_t = R_eps * mean_warning_multiplier(epsilon_w)
+    return {"R_a": R_a, "R_p": R_p, "R_s": R_s, "theta": theta, "T_g": T_g, "R_eps": R_eps, "eps_s_crit": eps_s_crit, "eps_w_crit": eps_w_crit, "R_t": R_t}
 
 def joint_ci(priors: Priors, names=None, n: int = 20000, seed: int = 0, quantiles: tuple[float, float, float] = (0.025, 0.5, 0.975), **kw):
     """Return CI {name: (median, lo, hi)} and sample dict."""
-    names = list(_DEFAULT_CI_NAMES) if names is None else list(names)
+    names = ["R_0", "gamma_inv", "sigma_inv", "mu_s_inv", "mu_a_inv", "p", "phi_p", "phi_a", "beta"] if names is None else list(names)
     s = sample_derived(priors, n=n, seed=seed, **kw)
     ci = {}
     for name, arr in {**{k: s[k] for k in names if k in s}, **epi_quantities(s)}.items():
@@ -156,12 +137,12 @@ def joint_ci(priors: Priors, names=None, n: int = 20000, seed: int = 0, quantile
     return ci, s
 
 def pushforward(priors: Priors, fn, n: int = 2000, seed: int = 0, quantiles=(0.025, 0.5, 0.975), **kw):
-    """Pointwise joint uncertainty band for given function."""
+    """Pointwise joint uncertainty for function fn."""
     s = sample_derived(priors, n=n, seed=seed, **kw)
     return np.quantile(np.stack([np.asarray(fn(s, i)) for i in range(n)], axis=0), quantiles, axis=0)
 
-def params_from_priors(pr: Priors, model="exponential"):
-    """Point-estimate Params from priors."""
+def params_from_priors(pr: Priors, model="exponential", weighted=True):
+    """Point estimate Params from priors."""
     m = {k: pr.marginals[k].central() for k in pr.marginals}
     if not pr.presymptomatic and not pr.asymptomatic:
         if model == "Erlang":
@@ -171,12 +152,8 @@ def params_from_priors(pr: Priors, model="exponential"):
     phi_p = (m["RR_p"] * m["mu_s_inv"] / m["sigma_inv"]) if (pr.presymptomatic and m["sigma_inv"] > 0) else 0.0
     phi_a = (m["RR_a"] * m["mu_s_inv"] / mu_a_inv) if (pr.asymptomatic and mu_a_inv > 0) else 0.0
     if model == "Erlang":
-        return ParamsErlang.for_SEIPAR(R_0=m["R_0"], gamma_inv=m["gamma_inv"], sigma_inv=m["sigma_inv"], mu_s_inv=m["mu_s_inv"], mu_a_inv=mu_a_inv, p=m["p"], phi_a=phi_a, phi_p=phi_p)    
+        return ParamsErlang.for_SEIPAR(R_0=m["R_0"], gamma_inv=m["gamma_inv"], sigma_inv=m["sigma_inv"], mu_s_inv=m["mu_s_inv"], mu_a_inv=mu_a_inv, p=m["p"], phi_a=phi_a, phi_p=phi_p, weighted=weighted)
     return Params.for_SEIPAR(R_0=m["R_0"], gamma_inv=m["gamma_inv"], sigma_inv=m["sigma_inv"], mu_s_inv=m["mu_s_inv"], mu_a_inv=mu_a_inv, p=m["p"], phi_a=phi_a, phi_p=phi_p)
-
-def as_uniform(pr):
-    marg = {k: Marginal(v.lo, v.hi, "uniform", mean=v.mean) for k, v in pr.marginals.items()}
-    return Priors(marginals=marg, presymptomatic=pr.presymptomatic, asymptomatic=pr.asymptomatic)
 
 def get_model_prior_list(pr):
     if not pr.presymptomatic and not pr.asymptomatic:
@@ -185,12 +162,8 @@ def get_model_prior_list(pr):
 
 def get_epi_characteristics_dict(ps: Params):
     """Return dict of epi characteristics from parameters."""
-    eq = {q: float(v[0]) for q, v in epi_quantities({
-            p: np.array([float(getattr(ps, p))]) for p in [
-                "R_0", "gamma_inv", "sigma_inv", "mu_s_inv", "mu_a_inv", "p", "phi_a", "phi_p"
-        ]}).items()}
-    d = {"R_0": float(ps.R_0), "beta": float(ps.beta), "generation_time": eq["T_g"], "growth_rate": growth_rate(ps), 
-        "theta": eq["theta"], "eps_s_crit": eq["eps_s_crit"], "eps_w_crit": eq["eps_w_crit"]}
+    eq = {q: float(v[0]) for q, v in epi_quantities({p: np.array([float(getattr(ps, p))]) for p in ["R_0", "gamma_inv", "sigma_inv", "mu_s_inv", "mu_a_inv", "p", "phi_a", "phi_p"]}).items()}
+    d = {"R_0": float(ps.R_0), "beta": float(ps.beta), "generation_time": eq["T_g"], "growth_rate": growth_rate(ps), "theta": eq["theta"], "eps_s_crit": eq["eps_s_crit"], "eps_w_crit": eq["eps_w_crit"]}
     trans_f = transmission_fractions(ps)
     inf_f = infectious_fractions(ps)
     for k in ("a", "p", "s"):
@@ -201,24 +174,15 @@ def get_epi_characteristics_dict(ps: Params):
 
 def probability_uncontrollable(priors: Priors, n: int = 200_000, seed: int = 0):
     """P(R_a + R_p > 1)."""
-    eq = epi_quantities(cached_sample_derived(priors, n=n, seed=seed))
+    s = sample_derived(priors, n=n, seed=seed)
+    eq = epi_quantities(s)
     R_ns = (eq["R_a"] + eq["R_p"])
     lo, med, hi = np.quantile(R_ns, [0.025, 0.5, 0.975])
     return {"P": float((R_ns > 1.0).mean()), "median": float(med), "lo": float(lo), "hi": float(hi)}
 
 def analytic_boundary(priors: Priors, eps_ww=None, n: int = 200_000, seed: int = 0, quantiles=(0.025, 0.5, 0.975), k=None, R_crit: float = 1.0):
-    """Joint 95% CI on epsilon_s required for Rt = 1."""
+    """95% CI on epsilon_s required for Rt = 1."""
     eps_ww = np.linspace(0.0, 1.0, 100) if eps_ww is None else np.asarray(eps_ww, float)
-    s = cached_sample_derived(priors, n=n, seed=seed)
+    s = sample_derived(priors, n=n, seed=seed)
     eps_s = eps_s_boundary(R_0=s["R_0"][:, None], theta=epi_quantities(s)["theta"][:, None], eps_w=eps_ww[None, :], k=k, R_crit=R_crit)
     return np.nanquantile(eps_s, quantiles, axis=0)
-
-def simulated_boundary(model, priors: Priors, eps_ww, params_fn, n: int = 200, seed: int = 0, quantiles=(0.025, 0.5, 0.975), metric="Itot", t1=100.0, E0=1e-6, **kw):
-    """Pushforward for simulated boundary."""
-    def fn(s, i):
-        return contour_boundary(model, params_fn(s, i), eps_ww, t1=t1, E0=E0, metric=metric, **kw)
-    return pushforward(priors, fn, n=n, seed=seed, quantiles=quantiles)
-
-def params_from_sample(base_params, s: dict, i: int):
-    """Params for a single Monte Carlo draw."""
-    return base_params.update(R_0=float(s["R_0"][i]), gamma_inv=float(s["gamma_inv"][i]), sigma_inv=float(s["sigma_inv"][i]), mu_s_inv=float(s["mu_s_inv"][i]), mu_a_inv=float(s["mu_a_inv"][i]), p=float(s["p"][i]), phi_a=float(s["phi_a"][i]), phi_p=float(s["phi_p"][i]))

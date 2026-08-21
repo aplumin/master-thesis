@@ -15,41 +15,45 @@ from scipy.stats import gamma
 
 from models.compartmental import simulate_SEIPAR_W
 from models.metrics import (
+    infectious_fractions,
+    transmission_fractions,
+)
+from models.parameters import Params
+from workflows.jax_grids import (
     compute_asymptomatic_grid_Itot,
     compute_asymptomatic_grid_Rt,
     compute_I_tot_grid,
     compute_I_tot_grid_delayed_ww,
     compute_R_grid,
-    infectious_fractions,
-    transmission_fractions,
 )
-from models.parameters import Params
 
 plt.rcParams['figure.constrained_layout.use'] = True
 
 def plot_heatmap(
     X, Y, Z, 
     cmap='viridis', shading='auto', norm=None,
-    contour_metric = None, contour_levels=[], contour_colors='black', contour_linestyles=['-'], contour_alpha=1.0,
+    contour_metric=None, contour_levels=None, contour_colors='black', contour_linestyles=('-',), contour_alpha=1.0,
     title=None, title_fontsize=14, title_pad=None, figsize=(6, 6),
     xlabel=None, ylabel=None, xlabelsize=12, ylabelsize=12,
     x_logscale=False, y_logscale=False, 
     cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=12, cbar_labelpad=10,
-    cbar_axhlines=[], cbar_axhlines_colors=[], cbar_axhlines_linestyles=[], cbar_ticks=[],
+    cbar_axhlines=(), cbar_axhlines_colors=(), cbar_axhlines_linestyles=(), cbar_ticks=(),
 ):
     """General heatmap plotting function."""
+    contour_levels = contour_levels or []
     fig, ax = plt.subplots(figsize=figsize)
     ax.set_box_aspect(1)
     mesh = ax.pcolormesh(X, Y, Z, cmap=cmap, shading=shading, norm=norm)
     if contour_metric is None: contour_metric = Z
-    if contour_levels: ax.contour(X, Y, contour_metric, levels=contour_levels, colors=contour_colors, linestyles=contour_linestyles, alpha=contour_alpha)
+    if contour_levels: ax.contour(X, Y, contour_metric, levels=contour_levels, colors=contour_colors, linestyles=list(contour_linestyles), alpha=contour_alpha)
     if len(cbar_ticks) > 0:
-        cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect, ticks=cbar_ticks)
+        cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect, ticks=list(cbar_ticks))
         cbar.ax.set_yticklabels(cbar_ticks)
     else:
         cbar = fig.colorbar(mesh, ax=ax, shrink=cbar_shrink, aspect=cbar_aspect)
     cbar.set_label(cbar_label, fontsize=cbar_labelsize, labelpad=cbar_labelpad)
-    for i, hline in enumerate(cbar_axhlines): cbar.ax.axhline(hline, color=cbar_axhlines_colors[i], linestyle=cbar_axhlines_linestyles[i])
+    for hline, color, ls in zip(cbar_axhlines, cbar_axhlines_colors, cbar_axhlines_linestyles, strict=True):
+        cbar.ax.axhline(hline, color=color, linestyle=ls)
     if x_logscale: ax.set_xscale('log')
     if y_logscale: ax.set_yscale('log')
     ax.set_title(title, fontsize=title_fontsize, pad=title_pad)
@@ -117,10 +121,11 @@ def plot_trajectory(
         else:
             Ia, Ip = None, None
             Is =  np.sum(I_compartments, axis=0)
-    else:
+    else: # exponential
         Is = I_compartments[-1] if len(I_compartments) > 0 else None
         Ia = I_compartments[0] if len(I_compartments) > 1 else None
         Ip = I_compartments[1] if len(I_compartments) > 2 else None
+    # end time
     end_time = _wave_end_time(tt, total_I, icrit)
     if end_time <= 0 or not np.isfinite(end_time):
         end_time = tt[-1]
@@ -169,9 +174,12 @@ def plot_trajectory(
     rt_s = rt_true * s_contribution / total_contributions
     rt_a = rt_true * a_contribution / total_contributions
     rt_p = rt_true * p_contribution / total_contributions
+    # baseline
     params_baseline = params.update(epsilon_s=0.0, epsilon_w=0.0)
     _, yy0 = model(params=params_baseline, t1=t1, n_ts=int(t1))
-    ax_rt.fill_between(tt, 0, params_baseline.R_0 * params_baseline.rho * yy0[:,-1] * yy0[:,0], color='grey', alpha=0.2)
+    rt_baseline = params_baseline.R_0 * params_baseline.rho * yy0[:,-1] * yy0[:,0]
+    # styling
+    ax_rt.fill_between(tt, 0, rt_baseline, color='grey', alpha=0.2)
     ax_rt.fill_between(tt, 0, rt_s, color='blue', alpha=0.5, label=r'$\mathcal{R}_s$')
     if (rt_p > 0).any(): ax_rt.fill_between(tt, rt_s, rt_s + rt_p, color='skyblue', alpha=0.5, label=r'$\mathcal{R}_p$')
     if (rt_a > 0).any(): ax_rt.fill_between(tt, rt_s + rt_p, rt_s + rt_p + rt_a, color='purple', alpha=0.5, label=r'$\mathcal{R}_a$')
@@ -209,6 +217,8 @@ def plot_trajectory(
 
     ### metrics ##
     # Is peak size, time to peak, and total wave time
+    if Is is None:
+        return float("nan"), float("nan"), float("nan")
     idx_peak = np.argmax(Is)
     peak_Is = Is[idx_peak]
     t_peak = tt[idx_peak]
@@ -230,27 +240,28 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     phi_as = jnp.linspace(0.0, 0.999, 100),
     p_CI = (None, None),
     phi_a_CI = (None, None),
-    epsilon_s = [0.0, 0.4, 0.8],
-    epsilon_w = [0.0, 0.4, 0.8],
+    epsilon_s = (0.0, 0.4, 0.8),
+    epsilon_w = (0.0, 0.4, 0.8),
     E0: float = 1e-6,
     t1: float | None = None, 
+    n_ts: int | None = None,
     image_resolution: int = 900,
     path: str = "asymptomatic_effect.png",
 ) -> None:
     
     # end time
-    if t1 is None: t1 = 600.0 if total_infected else 50.0
+    if t1 is None: t1 = 600.0 # if total_infected else 50.0
 
     # build dataframe
-    p_grid, phi_a_grid = jnp.meshgrid(ps, phi_as, indexing="ij")
+    p_grid, phi_a_grid = jnp.meshgrid(ps, phi_as, indexing="xy")
     df_list = []
     for eps_s in epsilon_s:
         for eps_w in epsilon_w:
             base_params = params.update(epsilon_s=float(eps_s), epsilon_w=float(eps_w))
             if total_infected:
-                Z = compute_asymptomatic_grid_Itot(model=model, base_params=base_params, p=ps, phi_a=phi_as, t1=t1, E0=E0)
+                Z = compute_asymptomatic_grid_Itot(model=model, base_params=base_params, p=ps, phi_a=phi_as, t1=t1, E0=E0, n_ts=n_ts)
             else:
-                Z = compute_asymptomatic_grid_Rt(model=model, base_params=base_params, p=ps, phi_a=phi_as, t1=t1, E0=E0)
+                Z = compute_asymptomatic_grid_Rt(model=model, base_params=base_params, p=ps, phi_a=phi_as, t1=t1, E0=E0, n_ts=n_ts)
             df_list.append(pd.DataFrame({'p': np.array(p_grid.flatten()), 'phi_a': np.array(phi_a_grid.flatten()), 'Z': np.array(Z.flatten()), 'eps_s': eps_s, 'eps_w': eps_w}))
     df = pd.concat(df_list, ignore_index=True)
 
@@ -270,7 +281,7 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     # mapping function
     def _meshmap(data, **kwargs):
         ax = plt.gca()
-        Z_matrix = data.pivot(index='p', columns='phi_a', values='Z').values
+        Z_matrix = data.pivot(index='phi_a', columns='p', values='Z').values
         mesh = ax.pcolormesh(p_grid, phi_a_grid, Z_matrix, linewidth=0, edgecolors='none', rasterized=True, **kwargs)
         if not total_infected: # R=1 contour
             ax.contour(p_grid, phi_a_grid, Z_matrix, levels=[1.0], colors='black', linewidths=1.5, linestyles='dashed')
@@ -290,8 +301,9 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     # labels and title
     g.set_titles(row_template=r"$\varepsilon_s = {row_name}$", col_template=r"$\varepsilon_w = {col_name}$")
     g.set(xlabel=None, ylabel=None, aspect='equal')
-    g.figure.supxlabel("Proportion asymptomatic", fontsize=14, y=0.02)
-    g.figure.supylabel("Relative infectiousness", fontsize=14, x=-0.04)
+    g.figure.supxlabel("Proportion asymptomatic", fontsize=14)
+    g.figure.supylabel("Relative infectiousness", fontsize=14)
+    g.figure.subplots_adjust(left=0.1)
 
     # colorbar
     mesh = g.axes[-1, -1].collections[0] 
@@ -303,7 +315,8 @@ def plot_asymptomatic_effect_for_range_of_intervention_efficacies(
     plt.close(g.figure)
 
 def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
-    if len(times) == 0: return
+    if len(times) == 0:
+        return
     
     sorted_times = np.sort(times)
     n_events = sorted_times.shape[0]
@@ -323,10 +336,10 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     if idx_med_upper < n_events and ci_upper[-1] >= 0.5:
         median_time_ci_lower = sorted_times[idx_med_upper]
         median_time_ci_upper = sorted_times[idx_med_lower] if ci_lower[-1] >= 0.5 else sorted_times[-1]
-        ax.axvline(median_time, color='red', label=f'Median') #: {median_time:.2f} [{median_time_ci_lower:.2f}, {median_time_ci_upper:.2f}]')
+        ax.axvline(median_time, color='red', label='Median')
         ax.axvspan(median_time_ci_lower, median_time_ci_upper, color='red', alpha=0.2)
     else:
-        ax.axvline(median_time, color='red', label=f'Median') #: {median_time:.2f}')
+        ax.axvline(median_time, color='red', label='Median')
     
     # 95% time
     time_95 = np.percentile(times, 95)
@@ -335,10 +348,10 @@ def plot_extinction_probability_scenario(ax, times, title_label, tt_det, S_det):
     if idx_95_upper < n_events and ci_upper[-1] >= 0.95:
         time_95_ci_lower = sorted_times[idx_95_upper]
         time_95_ci_upper = sorted_times[idx_95_lower] if ci_lower[-1] >= 0.95 else sorted_times[-1]
-        ax.axvline(time_95, color='orange', label=f'95%') #: {time_95:.2f} [{time_95_ci_lower:.2f}, {time_95_ci_upper:.2f}]')
+        ax.axvline(time_95, color='orange', label='95%')
         ax.axvspan(time_95_ci_lower, time_95_ci_upper, color='orange', alpha=0.2)
     else:
-        ax.axvline(time_95, color='orange', label=f'95%') #: {time_95:.2f}')
+        ax.axvline(time_95, color='orange', label='95%')
     
     # deterministic susceptible trajectory
     ax.plot(tt_det, S_det, color='green', label='Deterministic susceptible trajectory')
@@ -431,14 +444,6 @@ def plot_nonlinear_response_analysis(dt, n_W, tau_W, n_B, tau_B, k, threshold, e
     axes[2, 1].grid(True, alpha=0.3)
     fig.suptitle("Wastewater warning response", fontsize=16)
     plt.savefig(path); plt.close(fig)
-
-def table_scenario_label(name, eps_s, eps_w, bold=False):
-    parts = []
-    if eps_s > 0: 
-        parts.append("\\mathbf{\\varepsilon_s="+f"{eps_s:g}"+"}") if bold else parts.append(f"\\varepsilon_s={eps_s:g}")
-    if eps_w > 0: 
-        parts.append("\\mathbf{\\varepsilon_w="+f"{eps_w:g}"+"}") if bold else parts.append(f"\\varepsilon_w={eps_w:g}")
-    return name if not parts else f"{name} (${', '.join(parts)}$)"
 
 def _wave_end_time(tt, infected, wave_floor):
     """First time after peak at which wave drops below wave_floor."""

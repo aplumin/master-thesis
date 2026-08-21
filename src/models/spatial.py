@@ -6,16 +6,11 @@ import datetime
 from functools import partial
 from typing import NamedTuple
 
-import geopandas as gpd
 import jax
 import jax.numpy as jnp
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import FancyArrowPatch
-from pyarrow import feather
 
-from models.compartmental import _solve, chain_derivative
+from models.compartmental import chain_derivative, solve
 from models.parameters import Params, logistic_response_function
 
 
@@ -41,7 +36,7 @@ class SpatialParams(NamedTuple):
 
 
 def _SEIPAR_spatial(X, prevalence, B_out, ps):
-    S, E, Ia, Ip, Is, _ = X
+    S, E, Ia, Ip, Is, R = X
     prev_a, prev_p, prev_s = prevalence
     lambda_ = B_out * ps.beta * (ps.phi_a * prev_a + ps.phi_p * prev_p + (1.0 - ps.epsilon_s) * prev_s) * S
     become_infectious = E / ps.gamma_inv
@@ -58,7 +53,7 @@ def _SEIPAR_spatial(X, prevalence, B_out, ps):
     ])
 
 def _SEIR_spatial(X, prevalence, B_out, ps):
-    S, E, II, _ = X
+    S, E, II, R = X
     (prev_s,) = prevalence
     lambda_ = B_out * ps.beta * (1.0 - ps.epsilon_s) * prev_s * S
     become_infectious = E / ps.gamma_inv
@@ -133,8 +128,8 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
 
         return jnp.concatenate(parts)
 
-    E0_A = jnp.where(primary_in_A, E0 * N_A, 0.0)
-    E0_B = jnp.where(primary_in_A, 0.0, E0 * N_B)
+    E0_A = E0 * N_A if primary_in_A else 0.0
+    E0_B = 0.0 if primary_in_A else E0 * N_B
     y0_flow = jnp.concatenate([
         jnp.stack([N_A - E0_A, E0_A]), jnp.zeros(n_flow - 2),
         jnp.stack([N_B - E0_B, E0_B]), jnp.zeros(n_flow - 2),
@@ -144,16 +139,14 @@ def _simulate_spatial(model_name, spatial_params, t1, E0, n_ts, primary_in_A, ww
         chains += [jnp.zeros(n_W), jnp.ones(n_B)]
     y0 = jnp.concatenate([y0_flow] + chains)
 
-    return _solve(_diffeq, y0, ps, t1, n_ts)
+    return solve(_diffeq, y0, ps, t1, n_ts)
 
 
-_SPATIAL_STATIC = ['n_ts', 'ww_in_B', 'response_in_B_to_A', 'primary_in_A']
-
-@partial(jax.jit, static_argnames=_SPATIAL_STATIC)
+@partial(jax.jit, static_argnames=['t1', 'n_ts', 'ww_in_B', 'response_in_B_to_A', 'primary_in_A'])
 def simulate_SEIPAR_W_spatial(
     spatial_params: SpatialParams = SpatialParams(epi_params=Params.for_SEIPAR(), N_A=1.0, m=0.0),
-    t1: float = 200.0, E0: float = 1e-6, n_ts: int = 5000,
-    primary_in_A: bool = True, ww_in_B: bool = False, response_in_B_to_A: bool = False,
+    t1: float = 200.0, E0: float = 1e-6, n_ts=None,
+    primary_in_A: bool = False, ww_in_B: bool = False, response_in_B_to_A: bool = False,
 ):
     """
     Two-deme SEIPAR model with migration.
@@ -164,11 +157,11 @@ def simulate_SEIPAR_W_spatial(
     return _simulate_spatial("SEIPAR", spatial_params, t1, E0, n_ts, primary_in_A, ww_in_B, response_in_B_to_A)
 
 
-@partial(jax.jit, static_argnames=_SPATIAL_STATIC)
+@partial(jax.jit, static_argnames=['t1', 'n_ts', 'ww_in_B', 'response_in_B_to_A', 'primary_in_A'])
 def simulate_SEIR_W_spatial(
     spatial_params: SpatialParams = SpatialParams(epi_params=Params.for_SEIR(), N_A=1.0, m=0.0),
-    t1: float = 200.0, E0: float = 1e-6, n_ts: int = 5000,
-    primary_in_A: bool = True, ww_in_B: bool = False, response_in_B_to_A: bool = False,
+    t1: float = 200.0, E0: float = 1e-6, n_ts=None,
+    primary_in_A: bool = False, ww_in_B: bool = False, response_in_B_to_A: bool = False,
 ):
     """
     Two-deme SEIR model with migration.
@@ -179,7 +172,7 @@ def simulate_SEIR_W_spatial(
     return _simulate_spatial("SEIR", spatial_params, t1, E0, n_ts, primary_in_A, ww_in_B, response_in_B_to_A)
 
 
-def unpack_spatial(ys, epi_params: Params, model: str = "SEIR", ww_in_B: bool = False, response_in_B_to_A: bool = False):
+def unpack_spatial(ys, epi_params: Params, model: str = "SEIPAR", ww_in_B: bool = False, response_in_B_to_A: bool = False):
     """Unpack a trajectory into compartment dictionary."""
     if model not in _MODELS:
         raise ValueError(model)
@@ -204,7 +197,7 @@ def unpack_spatial(ys, epi_params: Params, model: str = "SEIR", ww_in_B: bool = 
 _RUN_FUNCTIONS = {"SEIR": simulate_SEIR_W_spatial, "SEIPAR": simulate_SEIPAR_W_spatial}
 _DEFAULT_PARAMS = {"SEIR": Params.for_SEIR, "SEIPAR": Params.for_SEIPAR}
 
-def run_spatial(N_A, m, epi_params: Params = None, response_in_B_to_A=False, model="SEIPAR", t1=1000.0, E0=1e-6, ww_in_B=False):
+def run_spatial(N_A, m, epi_params: Params = None, response_in_B_to_A=False, model="SEIPAR", t1=1000.0, E0=1e-6, ww_in_B=False, primary_in_A=False):
     """
     Run spatial simulation.
     Returns (Itot_A, Itot_B, peak_I_A, peak_I_B, total_infections).
@@ -215,7 +208,7 @@ def run_spatial(N_A, m, epi_params: Params = None, response_in_B_to_A=False, mod
         epi_params = _DEFAULT_PARAMS[model]()
     _, labels, infectious_idx, _ = _MODELS[model]
     sp = SpatialParams(epi_params=epi_params, N_A=N_A, m=m)
-    _, ys = _RUN_FUNCTIONS[model](sp, primary_in_A=False, response_in_B_to_A=response_in_B_to_A, ww_in_B=ww_in_B, t1=t1, E0=E0)
+    _, ys = _RUN_FUNCTIONS[model](sp, primary_in_A=primary_in_A, response_in_B_to_A=response_in_B_to_A, ww_in_B=ww_in_B, t1=t1, E0=E0)
     d = unpack_spatial(ys, epi_params, model=model, ww_in_B=ww_in_B, response_in_B_to_A=response_in_B_to_A)
     N_B = 1.0 - N_A
     inf_A = sum(d[f"{labels[j]}_A"] for j in infectious_idx)
@@ -268,6 +261,7 @@ ALL_GE_PAIRS = "_".join(f"GE{name}" for name in _all_cantons)
 
 def _load_and_preprocess_map(path):
     """Data from the Federal Office of Topography swisstopo."""
+    import geopandas as gpd
     gdf = gpd.read_file(path)
     gdf.NAME = gdf.NAME.map(CANTON_NAME_DICT)
     gdf['midpoint'] = gdf.geometry.centroid
@@ -278,8 +272,8 @@ def _get_pop_sizes(gdf):
 
 def _holiday_ZH_map(d):
     return 'summer' if (
-        d >= datetime.date(2022,7,16) and d <= datetime.date(2022,8,21) or 
-        (d >= datetime.date(2023,7,15) and d <= datetime.date(2023,8,20)) or 
+        (d >= datetime.date(2022,7,16) and d <= datetime.date(2022,8,21)) or
+        (d >= datetime.date(2023,7,15) and d <= datetime.date(2023,8,20)) or
         (d >= datetime.date(2024,7,13) and d <= datetime.date(2024,8,18))
     ) else 'christmas' if (
         (d >= datetime.date(2021,12,23) and d <= datetime.date(2022,1,2)) or
@@ -292,6 +286,9 @@ def _holiday_ZH_map(d):
     ) else 'workday'
 
 def load_and_preprocess_phone_data(data_path, geo_path):
+    import geopandas as gpd
+    from pyarrow import feather
+
     df = feather.read_feather(data_path)
     gdf = _load_and_preprocess_map(geo_path)
 
@@ -305,9 +302,7 @@ def load_and_preprocess_phone_data(data_path, geo_path):
     df['m'] = df.total_travellers / df.pop_origin
     df['weekday_type'] = np.where(df.day_type == 'WK Day', 'weekday', 'weekend')
 
-    final_df = df.groupby(
-        ['origin_name', 'destination_name', 'weekday_type', 'holiday_type'], as_index=False
-    ).agg(m=('m', 'mean'), count=('day_type', 'count'))
+    final_df = df.groupby(['origin_name', 'destination_name', 'weekday_type', 'holiday_type'], as_index=False).agg(m=('m', 'mean'), count=('day_type', 'count'))
     pivot_df = final_df.pivot(index=['origin_name', 'destination_name', 'holiday_type'], columns='weekday_type', values='m').reset_index()
     pivot_df['ratio'] = (pivot_df['weekday'] / pivot_df['weekend'].replace(0, np.nan)).fillna(1.0)
     final_df = final_df.merge(pivot_df[['origin_name', 'destination_name', 'holiday_type', 'ratio']], on=['origin_name', 'destination_name', 'holiday_type'], how='left')
@@ -333,11 +328,15 @@ def plot_flows(df, gdf):
     The arrow colour is the ratio of weekday/weekend migration.
     The background is the internal migration rate.
     """
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
     fig, ax = plt.subplots(figsize=(12, 8))
     df = df[df.weekday_type=='weekday']
     df = df[df.holiday_type=='workday']
     internal_flows = df[df['origin_name'] == df['destination_name']]
-    gdf['internal_m'] = gdf['NAME'].map(dict(zip(internal_flows['origin_name'], internal_flows['m'])))
+    gdf['internal_m'] = gdf['NAME'].map(dict(zip(internal_flows['origin_name'], internal_flows['m'], strict=True)))
     gdf.plot(ax=ax, column='internal_m', cmap='Greys')
 
     vmin = df['ratio'].min()
@@ -347,7 +346,7 @@ def plot_flows(df, gdf):
 
     max_magnitude = df['m'].max()
     max_linewidth = 20.0
-    for i, row in df.iterrows():
+    for _, row in df.iterrows():
         lw = (row['m'] / max_magnitude) * max_linewidth 
         posA = [row['start_x'], row['start_y']]
         posB = [row['end_x'], row['end_y']]
@@ -376,5 +375,5 @@ def get_canton_pair_stats(df, canton_str, weekday_type, holiday_type):
         N_A_list.append(N_A)
     return m_list, N_A_list
 
-def rescale_migration_rate(m, trip_duration):
-    return m * trip_duration / 24.0
+def rescale_migration_rate(m, trip_duration, norm=24.0):
+    return m * trip_duration / norm

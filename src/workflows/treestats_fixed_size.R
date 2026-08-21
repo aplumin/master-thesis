@@ -1,4 +1,5 @@
 library(ape)
+library(treeio)
 library(treestats)
 library(treespace)
 library(optparse)
@@ -9,28 +10,14 @@ outdir <- parse_args(OptionParser(option_list = list(make_option(c("--path", typ
 tree_files <- list.files(path = outdir, pattern = "sim_fixed_size.trees$", recursive = TRUE, full.names = TRUE)
 
 # read trees from remaster log
-read_remaster <- function(filepath, min_tips = 3) {
-  txt <- paste(readLines(filepath), collapse = "\n")
-  tree_lines <- grep("^\\s*tree\\s+", strsplit(gsub("\\[[^]]*\\]", "", gsub("\r\n|\r", "\n", txt)), "\n")[[1]], ignore.case = TRUE, value = TRUE)
-  newick <- sub("^[^=]*=\\s*", "", tree_lines)
-  trees <- lapply(newick, function(t) ape::read.tree(text = t))
-  names(trees) <- seq_along(trees)
+read_remaster <- function(file) {
+  trees <- lapply(treeio::read.beast(file), ape::as.phylo)
   class(trees) <- "multiPhylo"
-  print(trees)
-  return(trees)
-}
-
-# calculate summary statistics
-stats_list <- list()
-all_trees <- list()
-psi_list <- list()
-for (file in tree_files) {
-  trees <- read_remaster(file)
   group <- basename(dirname(file))
   parts <- strsplit(group, "[psi]")[[1]]
   psi <- parts[5]
-  for (tree in trees) {
-    stats_list[[length(stats_list) + 1]] <- data.frame(
+  file_stats_list <- lapply(trees, function(tree) {
+    data.frame(
       group = paste0("psi = ", psi, ", p = ", gsub('.{1}$', '', parts[2])),
       colless = treestats::colless(tree, normalization = "yule"), 
       cherries = treestats::cherries(tree, normalization = "yule"), 
@@ -40,14 +27,19 @@ for (file in tree_files) {
       mean_branch_length = treestats::mean_branch_length(tree),
       var_branch_length = treestats::var_branch_length(tree)
     )
-  }
-  all_trees[[as.character(psi)]] <- c(all_trees[[as.character(psi)]], trees)
-  psi_list <- unique(c(psi_list, as.character(psi)))
+  })
+  file_stats_df <- do.call(rbind, file_stats_list)
+  return(list(stats = file_stats_df, trees = trees, psi = psi))
 }
-stats_df <- do.call(rbind, stats_list)
-for (psi in psi_list){
-  class(all_trees[[psi]]) <- "multiPhylo"
-}
+results <- lapply(tree_files, read_remaster)
+stats_df <- do.call(rbind, lapply(results, `[[`, "stats"))
+trees_list <- lapply(results, `[[`, "trees")
+psi_list <- sapply(results, `[[`, "psi")
+all_trees <- lapply(split(trees_list, psi_list), function(trees) {
+  combined <- do.call(c, trees)
+  class(combined) <- "multiPhylo"
+  return(combined)
+})
 
 # boxplots
 df_long <- stats_df %>% pivot_longer(cols = -group, names_to = "param", values_to = "val")
@@ -62,6 +54,7 @@ ggsave(file.path(outdir, "boxplots_fixed_size.png"), width = 8, height = 4)
 # treespace
 stats_df$psi <- stats_df
 for (psi in psi_list) {
+  class(all_trees[[psi]]) <- "multiPhylo"
   space <- treespace::treespace(all_trees[[psi]], nf = 3, lambda = 0.5)
   pco <- as.data.frame(space$pco$li)
   names(pco)[1:2] <- c("PCo1", "PCo2")

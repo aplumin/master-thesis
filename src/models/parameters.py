@@ -6,7 +6,9 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
+_DERIVED_FROM = frozenset({"R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s"})
 
 class Params(NamedTuple):
     """
@@ -89,7 +91,7 @@ class Params(NamedTuple):
         Parameters for the full model with presymptomatic and asymptomatic transmission.
         Uses SARS-CoV-2 parameters by default.
         """
-        # weighted infectiousness sum, s.t. r = R_0 / beta
+        # weighted infectiousness sum: r = R_0 / beta
         r = calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, mu_s_inv=mu_s_inv)
         # weighted infectiousness sum with symptomatic isolation
         r_eps = calculate_r(p=p, phi_a=phi_a, phi_p=phi_p, mu_a_inv=mu_a_inv, sigma_inv=sigma_inv, epsilon_s=epsilon_s, mu_s_inv=mu_s_inv)
@@ -137,10 +139,9 @@ class Params(NamedTuple):
         )
 
     def update(self, **kwargs) -> "Params":
-        """Update any parameter(s). Recomputes derived parameters beta and rho if not specified."""
-        base_params = {"R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s"}
-        if base_params & kwargs.keys():
-            v = {f: kwargs.get(f, getattr(self, f)) for f in base_params}
+        """Update any parameter(s)."""
+        if _DERIVED_FROM & kwargs.keys():
+            v = {f: kwargs.get(f, getattr(self, f)) for f in _DERIVED_FROM}
             r = calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"])
             r_eps = calculate_r(p=v["p"], phi_a=v["phi_a"], mu_a_inv=v["mu_a_inv"], phi_p=v["phi_p"], sigma_inv=v["sigma_inv"], mu_s_inv=v["mu_s_inv"], epsilon_s=v["epsilon_s"])
             kwargs.setdefault("beta", jnp.where(r > 0, v["R_0"]/r, 0.0))
@@ -149,7 +150,20 @@ class Params(NamedTuple):
         return self._replace(**kwargs)
     
     def concrete(self) -> "Params":
-        return self._replace(**{f: int(getattr(self, f)) if f in ("n_W", "n_B") else float(getattr(self, f)) for f in self._fields})
+        """Untraced values for Gillespie algorithm with numba."""
+        def _concretise(value):
+            arr = np.asarray(value)
+            if arr.ndim:
+                return arr.astype(float)
+            if arr.dtype == bool:
+                return bool(arr)
+            if np.issubdtype(arr.dtype, np.integer):
+                return int(arr)
+            return float(arr)
+        try:
+            return self._replace(**{f: _concretise(getattr(self, f)) for f in self._fields})
+        except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
+            raise TypeError
 
 
 def _register_static_pytree(cls, static_fields=("n_W", "n_B")):
@@ -157,26 +171,22 @@ def _register_static_pytree(cls, static_fields=("n_W", "n_B")):
     fields = cls._fields
     dynamic = tuple(f for f in fields if f not in static_fields)
     static = tuple(f for f in fields if f in static_fields)
-
     def _flatten(p):
         return (tuple(getattr(p, f) for f in dynamic), tuple(getattr(p, f) for f in static))
-
     def _unflatten(aux, children):
-        values = dict(zip(dynamic, children))
-        values.update(zip(static, aux))
+        values = dict(zip(dynamic, children, strict=True))
+        values.update(zip(static, aux, strict=True))
         return cls(**values)
-
     jax.tree_util.register_pytree_node(
         nodetype=cls, 
         flatten_func=_flatten, 
         unflatten_func=_unflatten
     )
     return cls
-
 _register_static_pytree(Params)
 
 
-def logistic_response_function(reproductive_number: float, params: Params, number_infected: float = 0.0):
+def logistic_response_function(reproductive_number: float, params: Params, number_infected: float = 0.0, threshold=jnp.nan):
     """
     Logistic response function of the reproductive number for the wastewater warning response.
     The response scales the transmission rate by f = 1 - epsilon_w * gate_W * gate_I,
@@ -185,11 +195,13 @@ def logistic_response_function(reproductive_number: float, params: Params, numbe
         gate_I = sigma(k_I * log10(I / I_crit))
     with sigma(x) = 1 / (1 + exp(-x)).
     """
-    gate_W = 1.0 / (1.0 + jnp.exp(-jnp.clip(params.k * (reproductive_number - params.R_crit), -80.0, 80.0)))
+    threshold = jnp.nan_to_num(threshold, nan=params.R_crit)
+    gate_W = 1.0 / (1.0 + jnp.exp(-jnp.clip(params.k * (reproductive_number - threshold), -80.0, 80.0)))
     active = params.I_crit > 0.0
-    I_safe = jnp.where(active, jnp.maximum(number_infected, 1e-300), 1.0)
-    I_crit_safe = jnp.where(active, params.I_crit + 1e-30, 1.0)
-    exponent = jnp.clip(params.k_I * jnp.log10(I_safe / I_crit_safe), -80.0, 80.0)
+    exponent = jnp.clip(
+        params.k_I * jnp.log10(
+            jnp.where(active, jnp.maximum(number_infected, 1e-300), 1.0) / jnp.where(active, params.I_crit + 1e-30, 1.0)
+            ), -80.0, 80.0)
     gate_I = jnp.where(active, 1.0 / (1.0 + jnp.exp(-exponent)), 1.0)  # no effect if threshold is 0
     return 1.0 - params.epsilon_w * gate_W * gate_I
 
@@ -197,8 +209,8 @@ def calculate_r(p, phi_a, phi_p, mu_a_inv, sigma_inv, mu_s_inv, epsilon_s=0.0):
     """
     Weighted infectiousness sum, r = R_0 / beta. The contribution from each type is:
     probability of the route * relative infectiousness * mean time
-        asymptomatic : p  * phi_a * (1/mu_a)
-        presymptomatic : (1 - p) * phi_p * (1/sigma)
-        symptomatic : (1 - p) * (1 - epsilon_s) * (1/mu_s)
+        asymptomatic: p * phi_a * (1/mu_a)
+        presymptomatic: (1 - p) * phi_p * (1/sigma)
+        symptomatic: (1 - p) * (1 - epsilon_s) * (1/mu_s)
     """
     return p * phi_a * mu_a_inv + (1-p) * (phi_p * sigma_inv + (1.0 - epsilon_s) * mu_s_inv)

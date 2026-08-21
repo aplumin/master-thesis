@@ -5,12 +5,16 @@ infected stage (E, Ia, Ip, Is) is a linear chain of multiple subcompartments.
 
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.scipy.stats import gamma
 
 from models.parameters import _register_static_pytree
 
 _ERLANG_STATIC_FIELDS = ("n_W", "n_B", "nE", "nP", "nS", "nA", "weighted")
+_WEIGHTS_FROM = ("gamma_inv", "sigma_inv", "mu_a_inv", "mu_s_inv", "shape", "scale", "nP", "nS", "nA", "weighted")
+_DERIVED_FROM = ("R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s", "w_a", "w_p", "w_s", "nP", "nS", "nA")
 
 
 class ParamsErlang(NamedTuple):
@@ -44,7 +48,7 @@ class ParamsErlang(NamedTuple):
         w_a, w_p, w_s (jnp array): Infectiousness weights.
         shape, scale (float): Shape and scale of the Gamma infectiousness profile.
         nE, nP, nS, nA (int): Number of compartments in the respective linear chains.
-        weighted (bool): Whether the subcompartments are weighted individually (default False).
+        weighted (bool): Whether the subcompartments are weighted individually (default True).
     """
     R_0: float
     beta: float
@@ -109,9 +113,9 @@ class ParamsErlang(NamedTuple):
             nP: int = 10,
             nS: int = 10,
             nA: int = 10,
-            weighted: bool = False,
+            weighted: bool = True,
         ) -> "ParamsErlang":
-        w_a, w_p, w_s = compute_weights(gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, p=p, phi_a=phi_a, phi_p=phi_p, shape=shape, scale=scale, nP=nP, nS=nS, nA=nA, weighted=weighted)
+        w_a, w_p, w_s = compute_weights(gamma_inv=gamma_inv, sigma_inv=sigma_inv, mu_a_inv=mu_a_inv, mu_s_inv=mu_s_inv, shape=shape, scale=scale, nP=nP, nS=nS, nA=nA, weighted=weighted)
         r = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
         r_eps = _r_weighted(p, phi_a, phi_p, sigma_inv, mu_a_inv, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
         beta = R_0 / r
@@ -124,61 +128,18 @@ class ParamsErlang(NamedTuple):
             w_a=w_a, w_p=w_p, w_s=w_s, shape=shape, scale=scale, 
             nE=int(nE), nP=int(nP), nS=int(nS), nA=int(nA), weighted=bool(weighted),
         )
-    
-    @classmethod
-    def for_SEIR(cls, 
-            R_0: float = 1.95,
-            gamma_inv: float = 8.5,
-            mu_s_inv: float = 5.0,
-            epsilon_s: float = 0.0,
-            epsilon_w: float = 0.0,
-            k: float = 10.0,
-            R_crit: float = 1.0,
-            tau_W: float = 14.0,
-            tau_B: float = 7.0,
-            I_crit: float = 0.0, 
-            k_I: float = 1e6,
-            n_W: int = 3,
-            n_B: int = 1,
-            R_off: float = 1.0,
-            eval_interval: float = 14.0,
-            T_lead: float = 0.0,
-            shape: float = 8.0,
-            scale: float = 5.5/8.0,
-            nE: int = 10,
-            nP: int = 10,
-            nS: int = 10,
-            nA: int = 10,
-            weighted: bool = False,
-        ) -> "ParamsErlang":
-        # TODO: this uses flat infectiousness
-        w_a, w_p, w_s = jnp.ones(nA), jnp.ones(nP), jnp.ones(nS)
-        r = _r_weighted(0.0, 0.0, 0.0, 0.0, 0.0, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=0.0)
-        r_eps = _r_weighted(0.0, 0.0, 0.0, 0.0, 0.0, mu_s_inv, w_a, w_p, w_s, nP, nS, nA, epsilon_s=epsilon_s)
-        beta = R_0 / r
-        rho = r_eps / r
-        return cls(
-            R_0=R_0, phi_a=0.0, phi_p=0.0, beta=beta, gamma_inv=gamma_inv, sigma_inv=0.0, 
-            mu_a_inv=0.0, mu_s_inv=mu_s_inv, p=0.0, epsilon_s=epsilon_s, epsilon_w=epsilon_w, 
-            k=k, R_crit=R_crit, tau_W=tau_W, tau_B=tau_B, rho=rho, I_crit=I_crit, k_I=k_I,
-            n_W=int(n_W), n_B=int(n_B), R_off=R_off, eval_interval=eval_interval, T_lead=T_lead,
-            w_a=w_a, w_p=w_p, w_s=w_s, shape=shape, scale=scale,
-            nE=int(nE), nP=int(nP), nS=int(nS), nA=int(nA), weighted=bool(weighted),
-        )
 
-    _WEIGHTS_FROM = ["gamma_inv", "sigma_inv", "mu_a_inv", "mu_s_inv", "shape", "scale", "nP", "nS", "nA", "weighted"]
-    _DERIVED_FROM = ["R_0", "p", "phi_a", "phi_p", "mu_a_inv", "sigma_inv", "mu_s_inv", "epsilon_s", "w_a", "w_p", "w_s", "nP", "nS", "nA"]
     def update(self, **kwargs) -> "ParamsErlang":
         """Update any parameter(s)."""
         for f in _ERLANG_STATIC_FIELDS:
             if f in kwargs:
                 kwargs[f] = bool(kwargs[f]) if f == "weighted" else int(kwargs[f])
         explicit_weights = {"w_a", "w_p", "w_s"} & kwargs.keys()
-        if (set(self._WEIGHTS_FROM) & kwargs.keys()) and not explicit_weights:
-            v = {f: kwargs.get(f, getattr(self, f)) for f in self._WEIGHTS_FROM}
+        if (set(_WEIGHTS_FROM) & kwargs.keys()) and not explicit_weights:
+            v = {f: kwargs.get(f, getattr(self, f)) for f in _WEIGHTS_FROM}
             kwargs["w_a"], kwargs["w_p"], kwargs["w_s"] = compute_weights(**v)
-        if set(self._DERIVED_FROM) & kwargs.keys():
-            v = {f: kwargs.get(f, getattr(self, f)) for f in self._DERIVED_FROM}
+        if set(_DERIVED_FROM) & kwargs.keys():
+            v = {f: kwargs.get(f, getattr(self, f)) for f in _DERIVED_FROM}
             base_params = {
                 "p": v["p"], "phi_a": v["phi_a"], "phi_p": v["phi_p"], "sigma_inv": v["sigma_inv"],
                 "mu_a_inv": v["mu_a_inv"], "mu_s_inv": v["mu_s_inv"], "w_a": v["w_a"], "w_p": v["w_p"], 
@@ -189,10 +150,26 @@ class ParamsErlang(NamedTuple):
             kwargs.setdefault("rho", jnp.where(r > 0, r_eps / r, 1.0))
             kwargs["R_0"] = jnp.where(r > 0, v["R_0"], 0.0)
         return self._replace(**kwargs)
+    
+    def concrete(self) -> "ParamsErlang":
+        """Untraced values for numba."""
+        def _concretise(value):
+            arr = np.asarray(value)
+            if arr.ndim:
+                return arr.astype(float)
+            if arr.dtype == bool:
+                return bool(arr)
+            if np.issubdtype(arr.dtype, np.integer):
+                return int(arr)
+            return float(arr)
+        try:
+            return self._replace(**{f: _concretise(getattr(self, f)) for f in self._fields})
+        except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
+            raise TypeError
 
 _register_static_pytree(ParamsErlang, _ERLANG_STATIC_FIELDS)
 
-def compute_weights(gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, p, phi_a, phi_p, shape, scale, nP, nS, nA, weighted=True):
+def compute_weights(gamma_inv, sigma_inv, mu_a_inv, mu_s_inv, shape, scale, nP, nS, nA, weighted=True):
     """
     Infectiousness weights for the infectious subcompartments.
     Computed from a Gamma pdf with given shape and scale parameters.

@@ -1,27 +1,22 @@
 """
 Control theory stability analysis of the warning feedback loop.
-Linearising the loop around R_t = R_crit gives the open-loop transfer function:
-    L(s) = L0 * (1 + s*tau_W/n_W)^(-n_W) * (1 + s*tau_B/n_B)^(-n_B),
-with static loop gain L0 = L(0).
 """
 
-from functools import partial
 from math import comb
 
-import jax
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import brentq
 
 from models.parameters import Params
 
 
+def logistic(x):
+    """sigma(x) = 1 / (1 + exp(-x)). Clipped to -80 < x < 80."""
+    return 1.0 / (1.0 + np.exp(-np.clip(np.asarray(x, dtype=float), -80.0, 80.0)))
+
 def arg_L(omega, tau_W, tau_B, n_W=3, n_B=1):
     """Phase of the open-loop transfer function, L(j*omega)."""
     return -n_W*np.arctan(omega*tau_W/n_W) - n_B*np.arctan(omega*tau_B/n_B)
-
-def _logistic(x):
-    return 1.0 / (1.0 + np.exp(-x))
 
 def _operating_point(R, eps_w, k, R_crit=1.0):
     """
@@ -29,21 +24,22 @@ def _operating_point(R, eps_w, k, R_crit=1.0):
     where R = R_0 * rho * S is the reproductive number before the warning response.
     """
     def f(r):
-        return R * (1.0 - eps_w * _logistic(k * (r - R_crit))) - r
+        return R * (1.0 - eps_w * logistic(k * (r - R_crit))) - r
     return brentq(f, 1e-9, max(10.0, 2.0 * R))
 
 def loop_gain(R, eps_w, k, R_crit=1.0, at_midpoint=True):
     """Static loop gain L(0) = K * R_eps = eps_w * k * R_crit / (2 * (2 - eps_w))."""
     if at_midpoint:
         return (eps_w * k * R_crit) / (2.0 * (2.0 - eps_w))
-    s = _logistic(k * (_operating_point(R, eps_w, k, R_crit) - R_crit))
+    s = logistic(k * (_operating_point(R, eps_w, k, R_crit) - R_crit))
     return R * eps_w * k * s * (1.0 - s)
 
 def _characteristic_polynomial(ps: Params):
     """Closed-loop characteristic polynomial pW(s) * pB(s) + L0."""
     P = np.convolve(
         np.array([comb(ps.n_W, j) * (ps.tau_W/ps.n_W)**j for j in range(ps.n_W+1)]),
-        np.array([comb(ps.n_B, j) * (ps.tau_B/ps.n_B)**j for j in range(ps.n_B+1)]))
+        np.array([comb(ps.n_B, j) * (ps.tau_B/ps.n_B)**j for j in range(ps.n_B+1)])
+    )
     P[0] += loop_gain(ps.R_0 * ps.rho, ps.epsilon_w, ps.k, ps.R_crit)
     return P
 
@@ -51,26 +47,18 @@ def dominant_pole(ps: Params):
     """Dominant complex root of characteristic polynomial."""
     roots = np.roots(_characteristic_polynomial(ps)[::-1])
     complex_roots = roots[np.abs(roots.imag) > 1e-9]
-    if complex_roots.size == 0: return np.nan
+    if complex_roots.size == 0: 
+        return complex(np.nan, np.nan)
     return complex_roots[np.argmax(complex_roots.real)]
 
-@partial(jax.jit, static_argnames=['model'])
-def compute_rt_grid(model, base_params, taus_W, taus_B, t1=300.0):
-    """True Rt in (tau_W, tau_B)."""
-    def _rt(tau_W, tau_B):
-        params = base_params.update(tau_W=tau_W, tau_B=tau_B)
-        _, yy = model(params=params, t1=t1)
-        return params.R_0 * params.rho * yy[:,-1] * yy[:,0]
-    return jax.vmap(jax.vmap(_rt, in_axes=(None, 0)), in_axes=(0, None))(taus_W, taus_B)
-
-def period_and_damping(t, x, t0=50.0, t1=250.0, smoothing_days=20.0, peak_threshold=0.2, T_min=4.0, T_max=200.0):
+def period_and_damping(t, x, t0=50.0, t1=250.0, peak_threshold=0.2, T_min=4.0, T_max=200.0):
     """Estimate period and damping rate from a trajectory x."""
     t_m = t[(t>t0) & (t<t1)]
     x_m = x[(t>t0) & (t<t1)]
     dt = float(t_m[1] - t_m[0])
 
-    x_m = x_m - gaussian_filter1d(x_m, sigma=smoothing_days/dt) # Gaussian smoothing
-    x_m = x_m - x_m.mean() # normalise around 0
+    # normalise around 0
+    x_m = x_m - x_m.mean()
     if x_m.std() < 1e-9: return np.nan, np.nan # no oscillations
 
     # period from autocorrelation
@@ -124,6 +112,7 @@ def gain_margin(L0, tau_W, tau_B, n_W=3, n_B=1):
     return (1.0/L0) * (1 + (omega_PC*tau_W/n_W)**2)**(n_W/2) * (1 + (omega_PC*tau_B/n_B)**2)**(n_B/2)
 
 def phase_margin(L0, tau_W, tau_B, n_W=3, n_B=1):
+    """M_P = pi + arg L(j omega_c) at the gain crossover |L| = 1."""
     def g(w):
         return (L0**2 * (1 + (w*tau_W/n_W)**2)**(-n_W) * (1 + (w*tau_B/n_B)**2)**(-n_B) - 1)
     if g(0) <= 0:
@@ -151,8 +140,7 @@ def critical_loop_gain(tau_W=14.0, tau_B=7.0, n_W=3, n_B=1):
 def k_crit(L0c, eps_w, R_crit=1.0):
     """k_crit(eps_w) = 2 * L0_crit * (2 - eps_w) / (eps_w * R_crit)."""
     eps_w = np.asarray(eps_w, dtype=float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.where(eps_w > 0, 2.0 * L0c * (2.0 - eps_w) / (eps_w * R_crit), np.inf)
+    return np.where(eps_w > 0, 2.0 * L0c * (2.0 - eps_w) / (eps_w * R_crit), np.inf)
 
 def eps_w_crit(L0c, k, R_crit=1.0):
     """eps_w_crit(k) = 4 * L0_crit / (k R_crit + 2 * L0_crit)."""

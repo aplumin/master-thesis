@@ -1,6 +1,5 @@
 <beast version="2.7" namespace="beast.base.inference:beast.base.inference.parameter:remaster">
 
-<!-- Multi-type birth-death-sampling SEIPAR model (only symptomatics are sampled). -->
   <run spec="Simulator" nSims="$(nSims)">
     <simulate spec="SimulatedTree" id="tree">
 
@@ -32,7 +31,7 @@
     </logger>
 
     <logger fileName="$(filebase).trees" mode="tree">
-      <log spec="TypedTreeLogger" tree="@tree" removeSingletonNodes="true"/>
+      <log spec="TypedTreeLogger" tree="@tree" removeSingletonNodes="true" noLabels="true"/>
     </logger>
     
   </run>

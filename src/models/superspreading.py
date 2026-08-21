@@ -9,11 +9,12 @@ import jax
 import numpy as np
 from numba import njit
 
-from models.gillespie import (
+from models.compartmental_gillespie import (
     _advance_chain,
     _exponential_dt,
     _response,
     _select_event,
+    init_gillespie_state,
     to_uniform_grid,
 )
 from models.metrics import (
@@ -24,7 +25,7 @@ from models.metrics import (
 from models.parameters import Params
 
 
-@njit(cache=True, fastmath=True)
+@njit(cache=True)
 def gillespie_SEIPAR_W_superspreading(
     params, N: int, t1: float, k_ss: float, a_ss: bool = False, p_ss: bool = False, s_ss: bool = False, seed: int = -1):
     """Gillespie algorithm with exact integration of the delay compartments and superspreading."""
@@ -37,8 +38,6 @@ def gillespie_SEIPAR_W_superspreading(
     n_B = params.n_B
     W_start = num_mass
     B_start = num_mass + n_W
-    num_states = num_mass + n_W + n_B
-    n_rows = int(N * 4) + 20
 
     N_inv = 1.0 / float(N)
     beta = params.beta
@@ -68,15 +67,7 @@ def gillespie_SEIPAR_W_superspreading(
     ss_p = p_ss and can_superspread # presymptomatics can superspread
     ss_s = s_ss and can_superspread # symptomatics can superspread
 
-    current_state = np.zeros(num_states, dtype=np.float64)
-    current_state[0] = float(N - 1) # S
-    current_state[1] = 1.0 # E
-    for i in range(n_B):
-        current_state[B_start + i] = 1.0
-
-    states = np.zeros((n_rows, num_states), dtype=np.float64)
-    times = np.zeros(n_rows)
-    states[0] = current_state
+    current_state, states, times, n_rows = init_gillespie_state(N, num_mass, n_W, n_B)
 
     a = np.zeros(num_reactions, dtype=np.float64)
     coeffs_W = np.zeros(n_W, dtype=np.float64)
@@ -96,8 +87,8 @@ def gillespie_SEIPAR_W_superspreading(
         B_out = current_state[B_start + n_B - 1]
 
         base_infection_rate = B_out * beta * (S * N_inv)
-        a[0] = base_infection_rate * phi_a * Ia # infection from asymptomatic
-        a[1] = base_infection_rate * phi_p * Ip # infection from presymptomatic
+        a[0] = base_infection_rate * phi_a * Ia      # infection from asymptomatic
+        a[1] = base_infection_rate * phi_p * Ip      # infection from presymptomatic
         a[2] = base_infection_rate * eps_s_comp * Is # infection from symptomatic
         a[3] = E * rate_E_Ia # E -> Ia
         a[4] = E * rate_E_Ip # E -> Ip
@@ -136,12 +127,12 @@ def gillespie_SEIPAR_W_superspreading(
         states[step, :] = current_state
         step += 1
         if step >= n_rows:
-            break
+            raise RuntimeError
     return times[:step], states[:step]
 
 
-def _summarise(values, reducer=np.mean):
-    return float(reducer(values)) if len(values) else float("nan")
+def _summarise(values, fn=np.mean):
+    return float(fn(values)) if len(values) else float("nan")
 
 def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, scenario, npz, seed=0, alpha=0.01):
     shape = (len(eps_ww), len(kk))
@@ -169,8 +160,8 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
                     samples[k].append(float(v))
             n_kept[i, j] = len(samples["Rt"])
             for k in keys:
-                reducer = (lambda x: np.percentile(x, 95)) if k == "extinction_time" else np.mean
-                mean_grids[k][i, j] = _summarise(samples[k], reducer)
+                fn = (lambda x: np.percentile(x, 95)) if k == "extinction_time" else np.mean
+                mean_grids[k][i, j] = _summarise(samples[k], fn)
                 var_grids[k][i, j] = _summarise(samples[k], np.var)
 
     np.savez_compressed(npz, 
