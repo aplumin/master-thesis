@@ -160,10 +160,7 @@ class Params(NamedTuple):
             if np.issubdtype(arr.dtype, np.integer):
                 return int(arr)
             return float(arr)
-        try:
-            return self._replace(**{f: _concretise(getattr(self, f)) for f in self._fields})
-        except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
-            raise TypeError
+        return self._replace(**{f: _concretise(getattr(self, f)) for f in self._fields})
 
 
 def _register_static_pytree(cls, static_fields=("n_W", "n_B")):

@@ -36,8 +36,8 @@ from models.metrics import (
 from models.parameters import Params, calculate_r, logistic_response_function
 from models.parameters_erlang import ParamsErlang, compute_weights
 from models.sensitivity import (
-    DUMMY, ELASTICITY_NAMES, SensitivityResults, Rt_elasticities, partial_rank_residuals, 
-    run_sensitivity_analysis, target_Rt_efficacies,
+    DUMMY, ELASTICITY_NAMES, SensitivityResults, Rt_elasticities, ordered_params, param_symbol, 
+    partial_rank_residuals, run_sensitivity_analysis, target_Rt_efficacies, load_sensitivity_results, 
 )
 from models.spatial import (
     ALL_GE_PAIRS, ALL_ZH_PAIRS, SpatialParams, get_canton_pair_stats, load_and_preprocess_phone_data, 
@@ -48,7 +48,7 @@ from models.stability import (
     arg_L, critical_loop_gain, delay_margin, dominant_pole, eps_w_crit, 
     gain_margin, k_crit, loop_gain, period_and_damping, phase_margin,
 )
-from models.superspreading import gillespie_SEIPAR_W_superspreading, simulate_superspreading_outcomes
+from models.superspreading import gillespie_SEIPAR_W_superspreading, simulate_superspreading_outcomes, _summarise
 from models.uncertainty import (
     Marginal, Priors, analytic_boundary, epi_quantities, get_epi_characteristics_dict, 
     get_model_prior_list, joint_ci, params_from_priors, probability_uncontrollable, 
@@ -160,7 +160,7 @@ def as_uniform(pr):
 SENSITIVITY_RANGES = {p: as_uniform(PRIORS[p]) for p in PATHOGENS}
 PRCC_SCENARIOS = ['start', 'threshold']
 PRCC_OUTCOMES = ['Rt', 'Itot']
-PRCC_SCENARIO_TITLES = {'start': r'$I_{\text{crit}}=0$', 'threshold': r'$I_{\text{crit}}=10^{-4}$'}
+PRCC_SCENARIO_TITLES = {'start': r'$I_{\text{crit}}=0$', 'threshold': r'$I_{\text{crit}}=10^{-3}$'}
 PRCC_OUTCOME_TITLES = {'Rt': r'$\mathcal{R}_t$', 'Itot': r'$I_\text{tot}$'}
 K_RANGE = (3.2, 16.0)
 
@@ -561,7 +561,7 @@ rule compute_prcc:
         results = run_sensitivity_analysis(
             model=MODELS[wildcards.pathogen], scenario=wildcards.scenario, outcome=wildcards.outcome,
             base_params=PARAMETERS[wildcards.pathogen].update(epsilon_s=EPSILON_S, epsilon_w=EPSILON_W),
-            priors=None if around_mean else SENSITIVITY_RANGES[wildcards.pathogen],
+            priors=None if around_mean else SENSITIVITY_RANGES[wildcards.pathogen], icrit=1e-3,
             t1=t1, E0=E0, n_lhs=5000, n_sobol_base=1024, around_mean=around_mean, do_sobol=True,
         )
         np.savez_compressed(
@@ -830,7 +830,7 @@ rule plot_true_vs_reported_Rt_heatmaps:
         plt.ylabel('Total fraction infected')
         plt.savefig(f"{wildcards.outdir}/compartmental/true_vs_reported_Rt_{wildcards.pathogen}_k{wildcards.k}_scatter_amplitudes_vs_fractions.png"); plt.close()
 
-        kwargs = dict(x_logscale=False, y_logscale=True, xlabel='Behavioural delay ($\\tau_B$)', ylabel='Reporting delay ($\\tau_W$)', )
+        kwargs = dict(x_logscale=False, xlabel='Behavioural delay ($\\tau_B$)', ylabel='Reporting delay ($\\tau_W$)')
         scenario = f'({wildcards.pathogen}, $k={k:g}$)'
         fig, _ = plot_heatmap(taus_B, taus_W, amplitudes, cmap='magma', cbar_label='Amplitude of oscillations', title=f'Stability of delayed response', **kwargs)
         fig.savefig(output.amplitudes); plt.close(fig)
@@ -1120,6 +1120,8 @@ rule simulate_stochastic_outcomes:
         peak_Is_var_grid = np.full(shape, np.nan)
         extinction_time_grid = np.full(shape, np.nan)
         extinction_time_var_grid = np.full(shape, np.nan)
+        n_alive_grid = np.zeros(shape, dtype=int)
+        n_kept_grid = np.zeros(shape, dtype=int)
 
         for i, ew in enumerate(eps_ww):
             for j, es in enumerate(eps_ss):
@@ -1138,34 +1140,35 @@ rule simulate_stochastic_outcomes:
                     if (wildcards.scenario == 'establishment') & (np.max(yy[:,1] + yy[:,2] + yy[:,3] + yy[:,4]) < Iest):
                         continue
 
-                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, PARAMETERS[wildcards.pathogen].update(epsilon_s=es, epsilon_w=ew), t1, population_size=N)
+                    t_alive = extinction_time_from_counts(tt, yy)
+                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, PARAMETERS[wildcards.pathogen].update(epsilon_s=es, epsilon_w=ew), t1, population_size=N, t_alive=t_alive)
                     Rt_list.append(Rt)
                     time_to_below_list.append(time_to_below)
                     Itot_list.append(Itot)
                     peak_Is_list.append(peak_Is)
                     extinction_time_list.append(extinction_time)
 
-                Rt_grid[i,j] = np.mean(Rt_list)
-                Rt_var_grid[i,j] = np.var(Rt_list)
-                time_to_below_grid[i,j] = np.mean(time_to_below_list)
-                time_to_below_var_grid[i,j] = np.var(time_to_below_list)
-                Itot_grid[i,j] = np.mean(Itot_list)
-                Itot_var_grid[i,j] = np.var(Itot_list)
-                peak_Is_grid[i,j] = np.mean(peak_Is_list)
-                peak_Is_var_grid[i,j] = np.var(peak_Is_list)
-                percentile_95 = np.nan
-                try: percentile_95 = np.percentile(extinction_time_list, 95)
-                except: pass
-                extinction_time_grid[i,j] = percentile_95
-                extinction_time_var_grid[i,j] = np.var(extinction_time_list)
+                n_kept_grid[i,j] = len(Rt_list)
+                n_alive_grid[i,j] = int(np.sum(np.isfinite(np.asarray(Rt_list, dtype=float))))
+                Rt_grid[i,j] = _summarise(Rt_list, np.mean)
+                Rt_var_grid[i,j] = _summarise(Rt_list, np.var)
+                time_to_below_grid[i,j] = _summarise(time_to_below_list, np.mean)
+                time_to_below_var_grid[i,j] = _summarise(time_to_below_list, np.var)
+                Itot_grid[i,j] = _summarise(Itot_list, np.mean)
+                Itot_var_grid[i,j] = _summarise(Itot_list, np.var)
+                peak_Is_grid[i,j] = _summarise(peak_Is_list, np.mean)
+                peak_Is_var_grid[i,j] = _summarise(peak_Is_list, np.var)
+                extinction_time_grid[i,j] = _summarise(extinction_time_list, lambda v: np.percentile(v, 95))
+                extinction_time_var_grid[i,j] = _summarise(extinction_time_list, np.var)
         
         np.savez_compressed(
             output.npz,
             Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid,
             time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid,
-            Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid,
+            Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid, 
             peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid,
-            extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid
+            extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid,
+            n_alive=n_alive_grid, n_kept=n_kept_grid
         )
 
 rule plot_stochastic_intervention_grid:
@@ -1180,6 +1183,8 @@ rule plot_stochastic_intervention_grid:
         eps_ww = np.linspace(0.0, 0.999, res)
         eps_ss = np.linspace(0.0, 0.999, res)
         data = np.load(input.npz)[f"{metric}_grid"]
+
+        if metric=="Rt": print(data)
         
         fig, ax = plot_heatmap(
             eps_ww, eps_ss, data.T, 
@@ -1361,8 +1366,8 @@ rule simulate_superspreading_outcomes: # only nonsymptomatics
             num_simulations = int(wildcards.num_simulations), 
             scenario = wildcards.scenario, 
             npz=output.npz,
-            base_params = PARAMETERS[wildcards.pathogen],
-            a_ss=True, p_ss=True, s_ss=False,
+            # base_params = PARAMETERS[wildcards.pathogen],
+            # a_ss=True, p_ss=True, s_ss=False,
         )
 
 rule plot_superspreading_intervention_grid:
@@ -1378,7 +1383,7 @@ rule plot_superspreading_intervention_grid:
         eps_ww = np.linspace(0.0, 0.999, res)
         kk = np.logspace(-4, 1, res)
         npz = np.load(input.npz)
-        data = np.where(np.divide(npz["n_censored"], np.maximum(npz["n_kept"], 1)) > 0.5, np.nan, npz[f"{metric}_grid"])  # >50 % censored
+        data = npz[f"{metric}_grid"] #np.where(np.divide(npz["n_censored"], np.maximum(npz["n_kept"], 1)) > 0.5, np.nan, )  # >50 % censored
         fig, ax = plot_heatmap(
             eps_ww, kk, data.T, 
             cmap='magma' if metric.startswith('extinction_time') else 'RdBu_r' if metric == 'Rt' else 'viridis', 
@@ -1411,6 +1416,8 @@ rule simulate_superspreading_outcomes_all_superspreading:
         peak_Is_var_grid = np.zeros((len(eps_ww), len(kk)))
         extinction_time_grid = np.zeros((len(eps_ww), len(kk)))
         extinction_time_var_grid = np.zeros((len(eps_ww), len(kk)))
+        n_alive_grid = np.zeros((len(eps_ww), len(kk)), dtype=int)
+        n_kept_grid = np.zeros((len(eps_ww), len(kk)), dtype=int)
 
         for i, ew in enumerate(eps_ww):
             for j, k_ss in enumerate(kk):
@@ -1429,27 +1436,27 @@ rule simulate_superspreading_outcomes_all_superspreading:
                     if (wildcards.scenario == 'establishment') & (np.max(yy[:,1] + yy[:,2] + yy[:,3] + yy[:,4]) < Iest):
                         continue
 
-                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, PARAMETERS[wildcards.pathogen].update(epsilon_s=es, epsilon_w=ew), t1, population_size=N)
+                    t_alive = extinction_time_from_counts(tt, yy)
+                    Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = outcome_metrics(tt, yy, PARAMETERS[wildcards.pathogen].update(epsilon_s=es, epsilon_w=ew), t1, population_size=N, t_alive=t_alive)
                     Rt_list.append(Rt)
                     time_to_below_list.append(time_to_below)
                     Itot_list.append(Itot)
                     peak_Is_list.append(peak_Is)
                     extinction_time_list.append(extinction_time)
 
-                Rt_grid[i,j] = np.mean(Rt_list)
-                Rt_var_grid[i,j] = np.var(Rt_list)
-                time_to_below_grid[i,j] = np.mean(time_to_below_list)
-                time_to_below_var_grid[i,j] = np.var(time_to_below_list)
-                Itot_grid[i,j] = np.mean(Itot_list)
-                Itot_var_grid[i,j] = np.var(Itot_list)
-                peak_Is_grid[i,j] = np.mean(peak_Is_list)
-                peak_Is_var_grid[i,j] = np.var(peak_Is_list)
-                percentile_95 = np.nan
-                try: percentile_95 = np.percentile(extinction_time_list, 95)
-                except: pass
-                extinction_time_grid[i,j] = percentile_95
-                extinction_time_var_grid[i,j] = np.var(extinction_time_list)
-        np.savez_compressed(output.npz, Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid, time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid, Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid, peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid, extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid)
+                n_kept_grid[i,j] = len(Rt_list)
+                n_alive_grid[i,j] = int(np.sum(np.isfinite(np.asarray(Rt_list, dtype=float))))
+                Rt_grid[i,j] = _summarise(Rt_list, np.mean)
+                Rt_var_grid[i,j] = _summarise(Rt_list, np.var)
+                time_to_below_grid[i,j] = _summarise(time_to_below_list, np.mean)
+                time_to_below_var_grid[i,j] = _summarise(time_to_below_list, np.var)
+                Itot_grid[i,j] = _summarise(Itot_list, np.mean)
+                Itot_var_grid[i,j] = _summarise(Itot_list, np.var)
+                peak_Is_grid[i,j] = _summarise(peak_Is_list, np.mean)
+                peak_Is_var_grid[i,j] = _summarise(peak_Is_list, np.var)
+                extinction_time_grid[i,j] = _summarise(extinction_time_list, lambda v: np.percentile(v, 95))
+                extinction_time_var_grid[i,j] = _summarise(extinction_time_list, np.var)
+        np.savez_compressed(output.npz, Rt_grid=Rt_grid, Rt_var_grid=Rt_var_grid, time_to_below_grid=time_to_below_grid, time_to_below_var_grid=time_to_below_var_grid, Itot_grid=Itot_grid, Itot_var_grid=Itot_var_grid, peak_Is_grid=peak_Is_grid, peak_Is_var_grid=peak_Is_var_grid, extinction_time_grid=extinction_time_grid, extinction_time_var_grid=extinction_time_var_grid, n_alive=n_alive_grid, n_kept=n_kept_grid)
 
 rule plot_superspreading_intervention_grid_all_superspreading:
     input:

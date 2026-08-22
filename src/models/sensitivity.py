@@ -26,8 +26,6 @@ from models.uncertainty import Priors
 
 DEFAULT_BATCH_SIZE = 512
 SENSITIVITY_MAX_STEPS = 200_000
-RETRY_MAX_STEPS = 1_000_000
-RETRY_BATCH_SIZE = 16
 MODEL_NAMES = {simulate_SEIPAR_W: "SEIPAR_W", simulate_SEIR_W: "SEIR_W"}
 DUMMY = "dummy"
 _PRIMITIVES = {
@@ -37,6 +35,19 @@ _PRIMITIVES = {
 _INTERVENTION_BOUNDS = {"epsilon_s": (0.0, 1.0), "epsilon_w": (0.0, 1.0), "tau_W": (1.0, 30.0), "tau_B": (1.0, 30.0), "log_k": (0.0, float(np.log10(30.0))), "R_crit": (0.8, 1.2)}
 _THRESHOLD_BOUNDS = {"log_kI": (2.0, 6.0), "log_I_crit": (-6.0, -2.0)}
 ELASTICITY_NAMES = list(_PRIMITIVES["SEIPAR_W"]) + list(_INTERVENTION_BOUNDS)
+PARAM_LABELS = {
+    "R_0": r"$\mathcal{R}_0$", "gamma_inv": r"$1/\gamma$", "sigma_inv": r"$1/\sigma$", "mu_s_inv": r"$1/\mu_s$", "p": r"$p$",
+    "RR_a": r"$\mathrm{RR}_a$", "RR_p": r"$\mathrm{RR}_p$", "epsilon_s": r"$\varepsilon_s$", "epsilon_w": r"$\varepsilon_w$",
+    "tau_W": r"$\tau_W$", "tau_B": r"$\tau_B$", "log_k": r"$\log_{10} k$", "k": r"$k$", "R_crit": r"$\mathcal{R}_{\text{crit}}$",
+    "log_kI": r"$\log_{10}k_I$", "log_I_crit": r"$\log_{10} I_{\text{crit}}$", DUMMY: r"dummy",
+}
+def param_symbol(name):
+    return PARAM_LABELS.get(name, name)
+
+def ordered_params(names) -> list[str]:
+    seen = list(dict.fromkeys(names))
+    known = [n for n in PARAM_LABELS if n in seen]
+    return known + [n for n in seen if n not in PARAM_LABELS]
 
 
 def _Rt(tt, yy, params, dep_lo: float = 1e-6, dep_hi: float = 1e-2):
@@ -135,29 +146,13 @@ def _outcome_metric(model, names, outcome, t1, E0, max_steps=SENSITIVITY_MAX_STE
         return outcome_metrics(tt, yy, params, t1)[2]
     return jax.jit(jax.vmap(_out, in_axes=(None, 0)))
 
-def _evaluate_samples(model, base_params, bounds, samples, t1, E0=1e-6, outcome="Rt", batch_size=DEFAULT_BATCH_SIZE, max_steps=SENSITIVITY_MAX_STEPS, retry_max_steps=RETRY_MAX_STEPS, retry_batch_size=RETRY_BATCH_SIZE):
+def _evaluate_samples(model, base_params, bounds, samples, t1, E0=1e-6, outcome="Rt", batch_size=DEFAULT_BATCH_SIZE, max_steps=SENSITIVITY_MAX_STEPS):
     m = _outcome_metric(model, tuple(bounds), outcome, float(t1), float(E0), max_steps)
     samples = np.asarray(samples)
     n_samples = samples.shape[0]
     n_pad = (-n_samples) % batch_size
     padded = np.vstack([samples, np.repeat(samples[-1:], n_pad, axis=0)]) if n_pad else samples
-    out = np.concatenate([m(base_params, padded[s:s+batch_size]) for s in range(0, len(padded), batch_size)])[:n_samples]
-
-    # retry
-    failed = np.flatnonzero(~np.isfinite(out))
-    if failed.size:
-        # m_retry = _outcome_metric(model, tuple(bounds), outcome, float(t1), float(E0), retry_max_steps)
-        # for s in range(0, failed.size, retry_batch_size):
-        #     idx = failed[s:s + retry_batch_size]
-        #     block = samples[idx]
-        #     pad = retry_batch_size - len(idx) # pad to fixed shape to avoid recompiling
-        #     if pad:
-        #         block = np.vstack([block, np.repeat(block[-1:], pad, axis=0)])
-        #     out[idx] = np.asarray(m_retry(base_params, block))[:len(idx)]
-        # if failed[~np.isfinite(out[failed])].size:
-        #     raise RuntimeError
-        print(failed.size + " samples failed")
-    return out
+    return np.concatenate([m(base_params, padded[s:s+batch_size]) for s in range(0, len(padded), batch_size)])[:n_samples]
 
 
 # PRCC
@@ -226,16 +221,16 @@ class SensitivityResults(NamedTuple):
     sobol_S1_sum: float = np.nan
 
 def run_sensitivity_analysis(
-    model, base_params: Params, scenario="start", outcome="Rt", bounds=None, t1=50.0, E0=1e-6, n_lhs=5000, n_sobol_base=1024, 
-    do_sobol=True, around_mean=False, priors=None, batch_size=DEFAULT_BATCH_SIZE, seed=0, max_steps=SENSITIVITY_MAX_STEPS, retry_max_steps=RETRY_MAX_STEPS,
+    model, base_params: Params, scenario="start", outcome="Rt", bounds=None, icrit=1e-3, t1=50.0, E0=1e-6, n_lhs=5000, n_sobol_base=1024, 
+    do_sobol=True, around_mean=False, priors=None, batch_size=DEFAULT_BATCH_SIZE, seed=0, max_steps=SENSITIVITY_MAX_STEPS,
 ) -> SensitivityResults:
     if bounds is None:
         if around_mean: bounds = _parameter_bounds_around_mean(model, base_params, scenario=scenario)
         else: bounds = _parameter_bounds_from_priors(model, priors, scenario=scenario)
 
     names = list(bounds)
-    base_params = base_params.update(I_crit=0.0) if scenario == "start" else base_params
-    m = partial(_evaluate_samples, model=model, base_params=base_params, bounds=bounds, t1=t1, E0=E0, outcome=outcome, batch_size=batch_size, max_steps=max_steps, retry_max_steps=retry_max_steps)
+    base_params = base_params.update(I_crit=0.0) if scenario == "start" else base_params.update(I_crit=icrit)
+    m = partial(_evaluate_samples, model=model, base_params=base_params, bounds=bounds, t1=t1, E0=E0, outcome=outcome, batch_size=batch_size, max_steps=max_steps)
     X = _construct_latin_hypercube(bounds, n_lhs, seed=seed)
     y = m(samples=X)
     prcc = _partial_rank_corr_coeff(X, y)
@@ -251,6 +246,17 @@ def run_sensitivity_analysis(
     return SensitivityResults(
         param_names=names, bounds=bounds, samples=X, outputs=y, prcc_mean=prcc, prcc_lower=lo, prcc_upper=hi, 
         sobol_S1=S1, sobol_S1_conf=S1c, sobol_ST=ST, sobol_ST_conf=STc, sobol_S1_sum=float(np.nansum(S1)),
+    )
+
+def load_sensitivity_results(path: str) -> SensitivityResults:
+    d = np.load(path, allow_pickle=False)
+    names = [str(n) for n in d["param_names"]]
+    bounds = {n: (float(lo), float(hi)) for n, lo, hi in zip(names, d["lower_bounds"], d["upper_bounds"])}
+    return SensitivityResults(
+        param_names=names, bounds=bounds, samples=d["samples"], outputs=d["outputs"], 
+        prcc_mean=d["prcc_mean"], prcc_lower=d["prcc_lower"], prcc_upper=d["prcc_upper"],
+        sobol_S1=d["sobol_S1"], sobol_S1_conf=d["sobol_S1_conf"], 
+        sobol_ST=d["sobol_ST"], sobol_ST_conf=d["sobol_ST_conf"]
     )
 
 def partial_rank_residuals(X: np.ndarray, y: np.ndarray, i: int):

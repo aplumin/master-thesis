@@ -20,6 +20,7 @@ from models.compartmental_gillespie import (
 from models.metrics import (
     calculate_mt_branching_q_with_superspreading,
     establishment_threshold,
+    extinction_time_from_counts,
     outcome_metrics,
 )
 from models.parameters import Params
@@ -132,7 +133,9 @@ def gillespie_SEIPAR_W_superspreading(
 
 
 def _summarise(values, fn=np.mean):
-    return float(fn(values)) if len(values) else float("nan")
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    return float(fn(v)) if v.size else float("nan")
 
 def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, scenario, npz, seed=0, alpha=0.01):
     shape = (len(eps_ww), len(kk))
@@ -140,6 +143,7 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
     mean_grids = {k: np.full(shape, np.nan) for k in keys}
     var_grids = {k: np.full(shape, np.nan) for k in keys}
     n_kept = np.zeros(shape, dtype=int)
+    n_alive = np.zeros(shape, dtype=int)
 
     metrics_fn = jax.jit(outcome_metrics, static_argnames=("population_size",))
 
@@ -155,10 +159,12 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
                 tt, yy = to_uniform_grid(tt, yy, t1)
                 if scenario == "establishment" and np.max(yy[:, 2] + yy[:, 3] + yy[:, 4]) < Iest:
                     continue
-                Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = metrics_fn(tt, yy, ps, t1, population_size=N)
+                t_alive = extinction_time_from_counts(tt, yy)
+                Rt, time_to_below, Itot, peak_Is, extinction_time, _, _, _ = metrics_fn(tt, yy, ps, t1, population_size=N, t_alive=t_alive)
                 for k, v in zip(keys, (Rt, time_to_below, Itot, peak_Is, extinction_time)):
                     samples[k].append(float(v))
             n_kept[i, j] = len(samples["Rt"])
+            n_alive[i, j] = int(np.sum(np.isfinite(samples["Rt"])))
             for k in keys:
                 fn = (lambda x: np.percentile(x, 95)) if k == "extinction_time" else np.mean
                 mean_grids[k][i, j] = _summarise(samples[k], fn)
@@ -170,4 +176,4 @@ def simulate_superspreading_outcomes(eps_ww, kk, eps_s, t1, N, num_simulations, 
         Itot_grid=mean_grids["Itot"], Itot_var_grid=var_grids["Itot"],
         peak_Is_grid=mean_grids["peak_Is"], peak_Is_var_grid=var_grids["peak_Is"],
         extinction_time_grid=mean_grids["extinction_time"], extinction_time_var_grid=var_grids["extinction_time"],
-        n_kept=n_kept)
+        n_kept=n_kept, n_alive=n_alive)

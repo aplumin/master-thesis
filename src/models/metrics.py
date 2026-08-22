@@ -61,20 +61,21 @@ def column(yy, index):
     col = yy[:, index]
     return jnp.sum(col, axis=-1) if col.ndim > 1 else col
 
-def rt_amplitude(tt, rt_true, window: str = "initial"):
+def rt_amplitude(tt, rt_true, window: str = "initial", t_alive=None):
     """Maximum Rt amplitude over first 1% or final third."""
     if window == "final":
-        return _rt_amp_final(tt, rt_true)
+        return _rt_amp_final(tt, rt_true, tt[-1] if t_alive is None else t_alive)
     return _rt_amp_initial(tt, rt_true)
 
 def _rt_amp_initial(tt, rt_true):
     initial = rt_true[:max(rt_true.shape[0] // 100, 1)]
     return jnp.max(initial) - jnp.min(initial)
 
-def _rt_amp_final(tt, rt_true):
-    final = tt >= 2.0 * tt[-1] / 3.0
+def _rt_amp_final(tt, rt_true, t_alive):
+    final = (tt >= 2.0 * t_alive / 3.0) & (tt <= t_alive)
     lo, hi = jnp.min(rt_true), jnp.max(rt_true)
-    return jnp.max(jnp.where(final, rt_true, lo)) - jnp.min(jnp.where(final, rt_true, hi))
+    amplitude = jnp.max(jnp.where(final, rt_true, lo)) - jnp.min(jnp.where(final, rt_true, hi))
+    return jnp.where(jnp.any(final), amplitude, jnp.nan)
 
 def trapz_to(tt, f, t1):
     """Trapezoidal integral of f over [0, t1]. Interpolated at the endpoint."""
@@ -105,13 +106,14 @@ def oscillation_period(tt, f, t_a, t_b, T_min=4.0, T_max=200.0, peak_threshold=0
     n = x.shape[0]
     
     nfft = 1 << int(np.ceil(np.log2(2*n-1))) # pad length of the FFT window to the next power of 2
-    freq = jnp.fft.rfftfreq(nfft, d=dt) # sample frequency
     F = jnp.fft.rfft(x, n=nfft) # Fourier transform
-    # Gaussian high-pass filter: 1 - exp(-2pi * freq * smoothing window)^2
-    F_hp = F * (1.0 - jnp.exp(-2.0 * (jnp.pi * freq * detrend_days) ** 2))
+
+    # # Gaussian high-pass filter: 1 - exp(-2pi * freq * smoothing window)^2
+    # freq = jnp.fft.rfftfreq(nfft, d=dt) # sample frequency
+    # F = F * (1.0 - jnp.exp(-2.0 * (jnp.pi * freq * detrend_days) ** 2))
     
     # autocorrelation: multiply spectrum by its complex conjugate, then inverse FFT
-    ac = jnp.fft.irfft(F_hp * jnp.conj(F_hp), n=nfft)[:n]
+    ac = jnp.fft.irfft(F * jnp.conj(F), n=nfft)[:n]
     # normalise by number of overlapping 
     ac = ac / jnp.maximum(num_points - jnp.arange(n), 1)
     # normalize to 1
@@ -130,9 +132,14 @@ def oscillation_period(tt, f, t_a, t_b, T_min=4.0, T_max=200.0, peak_threshold=0
     offset = jnp.where(denom != 0.0, 0.5 * (ac[i-1] - ac[i+1]) / jnp.where(denom != 0.0, denom, 1.0), 0.0)
     return jnp.where(jnp.any(peak), (i + offset) * dt, jnp.nan)
 
-def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, max_window=10.0, max_periods=10):
+def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, t_alive=None, min_window=1.0, max_window=10.0, max_periods=10):
     """Average Rt after interventions take effect but before susceptible depletion."""
-    t_I_crit = get_crossing(tt, Is, params.I_crit, rising=True, fallback=tt[jnp.argmax(Is)])
+    t_I_crit = jnp.where(
+        params.I_crit > 0.0,
+        get_crossing(tt, Is, params.I_crit, rising=True, fallback=tt[jnp.argmax(Is)]),
+        tt[0],
+    )
+    t_last = tt[-1] if t_alive is None else jnp.where(jnp.isnan(t_alive), tt[-1], t_alive)
     sd = jnp.sqrt(params.tau_W**2 / params.n_W + params.tau_B**2 / params.n_B)
     t_0 = jnp.clip(t_I_crit + params.tau_W + params.tau_B + 2.0 * sd, tt[0], tt[-1])
     # only look for depletion after t_0
@@ -142,22 +149,27 @@ def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, max_window=10.0
     T_osc = oscillation_period(tt, rt_true, t_0, t_1, detrend_days=params.tau_W + params.tau_B)
     m = jnp.clip(jnp.floor((t_1 - t_0) / T_osc), 0.0, float(max_periods))
     t_end = jnp.where(jnp.isfinite(T_osc) & (m >= 1.0), t_0 + m * T_osc, t_1)
-    return jnp.where((t_1 - t_0) < 1.0, jnp.interp(t_0, tt, rt_true), _window_mean(tt, rt_true, t_0, t_end))
+    Rt = jnp.where((t_1 - t_0) < 1.0, jnp.interp(t_0, tt, rt_true), _window_mean(tt, rt_true, t_0, t_end))
+    if t_alive is None:
+        return Rt
+    return jnp.where((t_last - t_0) < min_window, jnp.nan, Rt)
 
-def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window="final", n_S=None):
+def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window="final", n_S=None, t_alive=None):
     """Compute outcome metrics from model trajectories."""
     idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B, n_S=n_Is_stages(params) if n_S is None else n_S)
     S = column(yy, idx["S"]) / population_size
     Is = column(yy, idx["Is"]) / population_size
     R = column(yy, idx["R"]) / population_size
     rt_true = params.R_0 * params.rho * column(yy, idx["B_out"]) * S
+    t_last = tt[-1] if t_alive is None else jnp.where(jnp.isnan(t_alive), tt[-1], t_alive)
 
     # basic metrics
-    Rt_final = calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep)
-    time_to_below = get_crossing(tt, -rt_true, -1.0, rising=True, fallback=t1)
+    Rt_final = calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, t_alive=t_alive)
+    time_to_below = get_crossing(tt, -rt_true, -1.0, rising=True, fallback=np.inf)
+    time_to_below = jnp.where(time_to_below <= t_last, time_to_below, np.inf)
     Itot = S[0] - S[-1]
     peak_Is = jnp.max(Is)
-    amplitude = rt_amplitude(tt, rt_true, amplitude_window)
+    amplitude = rt_amplitude(tt, rt_true, amplitude_window, t_alive=t_alive)
 
     # extinction time
     infected = (1.0 - S - R) * population_size
@@ -171,8 +183,8 @@ def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warni
         above = (warning_state >= 0.5).astype(jnp.float32)
     else:
         above = (column(yy, idx["W_out"]) >= params.R_crit).astype(jnp.float32)
-    total_time_above = _integral_to(tt, above, _cumulative_trapezoid(tt, above), jnp.clip(t1, tt[0], tt[-1]))
-    num_crossings = jnp.sum(jnp.diff(above) > 0.0)
+    total_time_above = _integral_to(tt, above, _cumulative_trapezoid(tt, above), jnp.clip(jnp.minimum(t1, t_last), tt[0], tt[-1]))
+    num_crossings = jnp.sum((jnp.diff(above) > 0.0) & (tt[1:] <= t_last))
     return Rt_final, time_to_below, Itot, peak_Is, extinction_time, amplitude, total_time_above, num_crossings
 
 def R0_decomposition(params: Params, include_isolation: bool = False):
@@ -263,10 +275,10 @@ def infectious_fractions(params: Params):
     return infectious_fractions
 
 def eps_s_boundary(R_0, theta, eps_w, k=None, R_crit=1.0):
-    """eps_s = (1 - 1/(R_0 * m(eps_w))) / (1 - theta)."""
-    m = np.asarray(mean_warning_multiplier(eps_w, k=k, R_crit=R_crit), dtype=float)
+    """eps_s = (1 - 1/(R_0 * kappa * eps_w)) / (1 - theta)."""
+    kappa = np.asarray(mean_warning_multiplier(eps_w, k=k, R_crit=R_crit), dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        eps_s = (1.0 - 1.0 / (R_0 * m)) / (1.0 - theta)
+        eps_s = (1.0 - 1.0 / (R_0 * kappa)) / (1.0 - theta)
     return np.where(np.isfinite(eps_s), eps_s, np.nan)
 
 def mean_warning_multiplier(epsilon_w: float, k: float | None = None, R_crit: float = 1.0):

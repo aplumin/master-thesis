@@ -5,7 +5,6 @@ infected stage (E, Ia, Ip, Is) is a linear chain of multiple subcompartments.
 
 from typing import NamedTuple
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.scipy.stats import gamma
@@ -162,10 +161,7 @@ class ParamsErlang(NamedTuple):
             if np.issubdtype(arr.dtype, np.integer):
                 return int(arr)
             return float(arr)
-        try:
-            return self._replace(**{f: _concretise(getattr(self, f)) for f in self._fields})
-        except (jax.errors.TracerArrayConversionError, jax.errors.ConcretizationTypeError):
-            raise TypeError
+        return self._replace(**{f: _concretise(getattr(self, f)) for f in self._fields})
 
 _register_static_pytree(ParamsErlang, _ERLANG_STATIC_FIELDS)
 
