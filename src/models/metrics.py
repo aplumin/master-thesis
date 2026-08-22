@@ -47,7 +47,7 @@ def _window_mean(tt, f, t_a, t_b):
     num = _integral_to(tt, f, C, t_b) - _integral_to(tt, f, C, t_a)
     return num / width
 
-def n_Is_stages(params):
+def n_Is_compartments(params):
     """Number of symptomatic subcompartments."""
     return int(getattr(params, "nS", 1)) # exponential Params don't have nS attribute
 
@@ -156,7 +156,7 @@ def calculate_averaged_Rt(params, tt, S, Is, rt_true, delta_dep, t_alive=None, m
 
 def outcome_metrics(tt, yy, params, t1, delta_dep=0.05, population_size=1, warning_state=None, amplitude_window="final", n_S=None, t_alive=None):
     """Compute outcome metrics from model trajectories."""
-    idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B, n_S=n_Is_stages(params) if n_S is None else n_S)
+    idx = trajectory_indices(n_W=params.n_W, n_B=params.n_B, n_S=n_Is_compartments(params) if n_S is None else n_S)
     S = column(yy, idx["S"]) / population_size
     Is = column(yy, idx["Is"]) / population_size
     R = column(yy, idx["R"]) / population_size

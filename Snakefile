@@ -30,7 +30,7 @@ from models.compartmental_gillespie import gillespie_SEIPAR_W, gillespie_SEIPAR_
 from models.metrics import (
     calculate_mt_branching_q, calculate_mt_branching_q_with_superspreading, column,
     calculate_averaged_Rt, eps_s_boundary, establishment_threshold, growth_rate,
-    dispersion_from_individual, growth_rate_erlang, mean_warning_multiplier, n_Is_stages,
+    dispersion_from_individual, growth_rate_erlang, mean_warning_multiplier, n_Is_compartments,
     outcome_metrics, R_boundary, trajectory_indices, extinction_time_from_counts, pathogen_RRs,
 )
 from models.parameters import Params, calculate_r, logistic_response_function
@@ -249,7 +249,7 @@ def _efficacy_grid(model, base_params, eps_ww, eps_ss, t1=6000.0, E0=E0, n_ts=No
     def baseline_metrics(eps_w, eps_s):
         ps = base_params.update(epsilon_w=eps_w, epsilon_s=eps_s)
         tt, yy, *_ = model(params=ps, t1=t1, E0=E0, n_ts=n_ts, max_steps=max_steps)
-        idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_stages(ps))
+        idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_compartments(ps))
         S, Is, R, B_out = column(yy, idx["S"]), column(yy, idx["Is"]), column(yy, idx["R"]), column(yy, idx["B_out"])
         Rt = calculate_averaged_Rt(ps, tt, S, Is, ps.R_0 * ps.rho * B_out * S, delta_dep)
         cost = _integral_to_wave_end(tt, eps_s * Is + (1.0 - B_out), 1.0 - S - R, wave_floor)
@@ -1503,14 +1503,14 @@ rule plot_alternative_warning_strategies_eps_w:
     run:
         plot_strategies_vs_eps_w(
             output.plot, wildcards.pathogen, MODELS_PIECEWISE[wildcards.pathogen],
-            PARAMETERS[wildcards.pathogen], eps_s=EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0, t1=T1)
+            PARAMETERS[wildcards.pathogen], eps_s=EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0)
 
 rule plot_alternative_warning_strategies_eps_w_lct:
     output: plot="{outdir}/lct/alternative_warning_strategies_{pathogen}_epsW_lct.png"
     run:
         plot_strategies_vs_eps_w(
             output.plot, wildcards.pathogen, MODELS_PIECEWISE_LCT[wildcards.pathogen],
-            PARAMETERS_LCT[wildcards.pathogen], eps_s=EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0, t1=T1)
+            PARAMETERS_LCT[wildcards.pathogen], eps_s=EPSILON_S if wildcards.pathogen == "SARS-CoV-2" else 0.0)
 
 ###############################################
 # SPATIAL

@@ -23,7 +23,7 @@ from models.metrics import (
     column,
     cost_and_time_above,
     get_crossing,
-    n_Is_stages,
+    n_Is_compartments,
     rt_amplitude,
     trajectory_indices,
     trapz_to,
@@ -90,7 +90,7 @@ def run_scenario(base_params, model, eps_s, eps_w, strategy="baseline", t1=T_END
     return ps, tt, yy, ms
 
 def scenario_metrics(ps, tt, yy, ms=None, itot_baseline=None, wave_floor=E0, delta_dep=0.05):
-    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_stages(ps))
+    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_compartments(ps))
     S = np.asarray(yy[:, idx["S"]])
     R = np.asarray(yy[:, idx["R"]])
     B_out = np.asarray(yy[:, idx["B_out"]])
@@ -127,13 +127,13 @@ def _warning_state(ps, yy, ms=None):
     """Array of published warning states (1 = warning on)."""
     if ms is not None:
         return (np.asarray(ms) >= 0.5).astype(float)
-    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_stages(ps))
+    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_compartments(ps))
     W_out = np.asarray(column(yy, idx["W_out"]))
     return (W_out >= float(ps.R_crit)).astype(float)
 
 def _true_and_reported_Rt(ps, yy):
     """True Rt and reported (delayed) Rt from a trajectory."""
-    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_stages(ps))
+    idx = trajectory_indices(ps.n_W, ps.n_B, n_S=n_Is_compartments(ps))
     S = np.asarray(yy[:, idx["S"]])
     B_out = np.asarray(column(yy, idx["B_out"]))
     rt_true = float(ps.R_0) * float(ps.rho) * B_out * S
@@ -236,7 +236,8 @@ def plot_strategies_vs_eps_w(path, pathogen, model, base_params, eps_s, eps_ww=N
     R_crits = R_CRITS if R_crits is None else list(R_crits)
     palette = PALETTE if palette is None else palette
     linestyles = LINESTYLES if linestyles is None else linestyles
-    nM, nR = len(METRIC_NAMES), len(R_crits)
+    nM = len(METRIC_NAMES)
+    nR = len(R_crits)
 
     fig, axs = plt.subplots(nrows=nR, ncols=nM, sharex=True, figsize=(10, 10 * nR / 6), squeeze=False)
     for row, rc in enumerate(R_crits):
@@ -249,9 +250,10 @@ def plot_strategies_vs_eps_w(path, pathogen, model, base_params, eps_s, eps_ww=N
             spec = STRATEGIES[s]
             params = strategy_params(bp, s, eps_s, 0.0, R_off=R_off, eval_interval=eval_interval)
             y = np.asarray(strategy_metrics_over_epsw(model, params, jnp.asarray(eps_ww), t1, spec["asymmetric"], spec["discrete_eval"], check_interval, float(params.T_lead) > 0.0)).T
-            for r in range(nM):
+            for r in range(nM-2):
+                axs[row, r].plot(eps_ww, y[r], ls=linestyles[i % len(linestyles)], color=palette[i], lw=1.3, alpha=0.9, label=s)
+            for r in range(nM-2, nM):
                 axs[row, r].plot(eps_ww, y[r] / baseline[r], ls=linestyles[i % len(linestyles)], color=palette[i], lw=1.3, alpha=0.9, label=s)
-
         for r in range(nM):
             axs[row, r].set_ylim(bottom=0.0)
             axs[row, r].set_xlim(0, 1)
@@ -262,7 +264,8 @@ def plot_strategies_vs_eps_w(path, pathogen, model, base_params, eps_s, eps_ww=N
         axs[row, 0].set_ylabel(rf"$\mathcal{{R}}_\mathrm{{crit}}={rc:.1f}$")
 
     fig.legend(handles=[Line2D([0], [0], color=palette[i], ls=linestyles[i % len(linestyles)], label=s) for i, s in enumerate(names)], loc="outside lower center", ncol=len(names), frameon=False, fontsize=10)
-    fig.suptitle(rf"Warning strategies for varying response strengths ($\varepsilon_s={eps_s:g}$)")
+    pathogen_title = pathogen + ", LCT" if n_Is_compartments(base_params) > 1 else pathogen
+    fig.suptitle(rf"Warning strategies for varying response strengths ({pathogen_title}, $\varepsilon_s={eps_s:g}$)")
     fig.savefig(path)
     plt.close(fig)
 
@@ -291,7 +294,6 @@ def plot_true_vs_reported_Rt(path, pathogen, model, base_params, strategy, k, ep
     fig.savefig(path)
     plt.close(fig)
 
-
 def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_eval, check_interval, T_lead_on=False):
     """
     Summary metrics for one piecewise warning strategy given delays (tau_W, tau_B):
@@ -300,20 +302,19 @@ def strategy_metrics(tau_W, tau_B, model, base_params, t1, asymmetric, discrete_
     params = base_params.update(tau_W=tau_W, tau_B=tau_B)
     n_W, n_B = params.n_W, params.n_B
     ts, ys, ms = model(params=params, t1=t1, asymmetric=asymmetric, discrete_eval=discrete_eval, check_interval=check_interval)
-    idx = trajectory_indices(n_W, n_B, n_S=n_Is_stages(params))
+    idx = trajectory_indices(n_W, n_B, n_S=n_Is_compartments(params))
     S, B_out = ys[:, idx["S"]], ys[:, idx["B_out"]]
     rt_true = params.R_0 * params.rho * B_out * S
     amplitude = rt_amplitude(ts, rt_true, window="final")
     if asymmetric or discrete_eval:
-        time_above = ms.mean() * t1
+        time_above = jnp.trapezoid(ms, ts)
     else:
         W_out = ys[:, idx["W_out"]]
         if T_lead_on:
             R_est = W_out + params.T_lead * (n_W / params.tau_W) * (ys[:, idx["W_out"] - 1] - W_out)
         else:
             R_est = W_out
-        time_above = (R_est >= params.R_crit).mean() * t1
-
+        time_above = jnp.trapezoid((R_est >= params.R_crit), ts)
     cost = jnp.trapezoid(1.0 - B_out, ts)
     Itot = S[0] - S[-1]
     Is = column(ys, idx["Is"])
