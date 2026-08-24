@@ -33,10 +33,10 @@ def plot_heatmap(
     X, Y, Z, 
     cmap='viridis', shading='auto', norm=None,
     contour_metric=None, contour_levels=None, contour_colors='black', contour_linestyles=('-',), contour_alpha=1.0,
-    title=None, title_fontsize=14, title_pad=None, figsize=(6, 6),
-    xlabel=None, ylabel=None, xlabelsize=12, ylabelsize=12,
+    title=None, title_fontsize=18, title_pad=None, figsize=(6, 6),
+    xlabel=None, ylabel=None, xlabelsize=14, ylabelsize=14,
     x_logscale=False, y_logscale=False, 
-    cbar_shrink=0.8, cbar_aspect=30, cbar_label=None, cbar_labelsize=12, cbar_labelpad=10,
+    cbar_shrink=0.75, cbar_aspect=30, cbar_label=None, cbar_labelsize=14, cbar_labelpad=10,
     cbar_axhlines=(), cbar_axhlines_colors=(), cbar_axhlines_linestyles=(), cbar_ticks=(),
 ):
     """General heatmap plotting function."""
