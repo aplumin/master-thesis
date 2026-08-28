@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import CenteredNorm, LogNorm, Normalize, TwoSlopeNorm
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from models.compartmental import simulate_SEIPAR_W, simulate_SEIR_W
 from models.compartmental_piecewise import simulate_SEIPAR_W_piecewise, simulate_SEIR_W_piecewise
@@ -264,12 +265,12 @@ rule plot_main_intervention_grid:
         eps_ss = jnp.linspace(0.0, 0.999, 100)
         t1 = 30000.0
         k = float(wildcards.k)
-        R_crit = 0.8
+        R_crit = 0.8 # TODO: back to 1
 
         # compute per pathogen
         Rt_g, tRt_g, Itot_g, peakIs_g, Rt_k1, Rt_lo, Rt_hi, cost_g = {}, {}, {}, {}, {}, {}, {}, {}
         for pathogen in PATHOGENS:
-            ps = PARAMETERS[pathogen].update(I_crit=1e-3, R_crit=R_crit, k=k, k_I=10)
+            ps = PARAMETERS[pathogen].update(I_crit=1e-3, R_crit=R_crit, k=k, k_I=10) # TODO: back to Icrit=0
             # Rt, tRt, It, pk = compute_metrics(model=MODELS[pathogen], base_params=ps, eps_ww=eps_ww, eps_ss=eps_ss, t1=t1, E0=E0)
             # Rt_g[pathogen] = np.array(Rt)
             # tRt_g[pathogen] = np.array(tRt)
@@ -316,6 +317,66 @@ rule plot_main_intervention_grid:
             cbar.set_label(label, fontsize=12, labelpad=8)
             if center_at_one: cbar.ax.axhline(1.0, color='black', linewidth=1.0)
         fig.savefig(output.plot); plt.close(fig)
+
+
+rule plot_main_intervention_grid_lct_comparison:
+    output:
+        plot="{outdir}/lct/main_intervention_grid_lct_comparison.png"
+    run:
+        eps_ww = jnp.linspace(0.0, 0.999, 100)
+        eps_ss = jnp.linspace(0.0, 0.999, 100)
+        t1 = 30_000.0
+        k = 10
+        R_crit = 1.0
+
+        # compute per pathogen
+        Rt_g, tRt_g, Itot_g, peakIs_g, Rt_k1, Rt_lo, Rt_hi, cost_g = {}, {}, {}, {}, {}, {}, {}, {}
+        for pathogen in ["SARS-CoV-2"]:
+            for model, model_name in zip([MODELS[pathogen], MODELS_LCT[pathogen]], ["Exponential", "Erlang"]):
+                ps = PARAMETERS[pathogen] if model_name=="Exponential" else PARAMETERS_LCT[pathogen]
+                # _, yy0 = model(params=ps.update(epsilon_s=0.0, epsilon_w=0.0), t1=t1, E0=E0, n_ts=t1)
+                # Is0 = yy0[:, -(ps.n_W + ps.n_B + 2)]
+                Rt_g[model_name], itot, peak, cost_g[model_name] = _efficacy_grid(model, ps, eps_ww, eps_ss, t1, E0, int(t1))
+                Itot_g[model_name] = itot #/ float(yy0[0,0] - yy0[-1,0])
+                peakIs_g[model_name] = peak #/ float(np.max(Is0))
+                Rt_k1[model_name], _, _, _ = compute_metrics(model=model, base_params=ps.update(k=1), eps_ww=eps_ww, eps_ss=eps_ss, t1=1000.0, E0=E0)
+                Rt_lo[model_name], _, Rt_hi[model_name] = analytic_boundary(PRIORS[pathogen], eps_ww=eps_ww, n=200_000, R_crit=R_crit)
+        # plot
+        rows = [ # label, data, cmap, center_at_one, log
+            ('$\\mathcal{R}_t$', Rt_g, 'RdBu_r', True, False),
+            # ('Time to $\\mathcal{R}_t<1$', tRt_g, 'magma', False, True),
+            ('$I_\\text{tot}$ (unnormalised)', Itot_g, 'viridis', False, False),
+            ('Peak $I_s$ (unnormalised)', peakIs_g, 'viridis', False, False),
+            ('total cost', cost_g, 'magma', False, True),
+        ]
+        fig, axs = plt.subplots(nrows=len(rows), ncols=2, figsize=(9, 16), sharex=True, sharey=True)
+        for row_idx, (label, data, cmap, center_at_one, logscale) in enumerate(rows):
+            # normalisation
+            vals = np.concatenate([d.ravel() for d in data.values()])
+            vmin, vmax = float(np.nanmin(vals)), float(np.nanmax(vals))
+            norm = TwoSlopeNorm(vcenter=1, vmin=0) if center_at_one else LogNorm(vmin=np.max([vmin,1]), vmax=np.max([vmax,1])) if logscale else Normalize(vmin=vmin, vmax=vmax)
+            # meshgrid
+            meshes = []
+            for col_idx, model_name in enumerate(["Exponential", "Erlang"]):
+                ax = axs[row_idx, col_idx]
+                mesh = ax.pcolormesh(np.array(eps_ww), np.array(eps_ss), data[model_name], cmap=cmap, norm=norm, shading='auto', rasterized=True)
+                meshes.append(mesh)
+                ax.set_aspect('equal')
+                if center_at_one:
+                    ax.contour(np.array(eps_ww), np.array(eps_ss), Rt_k1[model_name], levels=[1.0], colors='black', linewidths=1.0, linestyles='-')
+                    ax.plot(np.array(eps_ww), Rt_lo[model_name], c='k', lw=1.0, ls=':')
+                    ax.plot(np.array(eps_ww), Rt_hi[model_name], c='k', lw=1.0, ls=':')
+                    ax.set_ylim(0.0, 1.0)
+                if row_idx == 0: ax.set_title(model_name, fontsize=14)
+                if row_idx == len(rows) - 1: ax.set_xlabel('Warning response efficacy $\\varepsilon_w$', fontsize=11)
+                if col_idx == 0: ax.set_ylabel('Isolation efficacy $\\varepsilon_s$', fontsize=11)
+            # colorbar
+            cbar = fig.colorbar(meshes[-1], ax=axs[row_idx, :].tolist(), shrink=0.85, aspect=25, pad=0.02)
+            cbar.set_label(label, fontsize=12, labelpad=8)
+            if center_at_one: cbar.ax.axhline(1.0, color='black', linewidth=1.0)
+        fig.savefig(output.plot); plt.close(fig)
+
+
 
 rule plot_R_1_contours:
     output:
@@ -614,7 +675,7 @@ rule plot_prcc_monotonicity:
         fig.supxlabel('partial rank of parameter', fontsize=24)
         fig.supylabel('partial rank of output', fontsize=24)
         fig.suptitle(f'{wildcards.pathogen}, {PRCC_SCENARIO_TITLES[wildcards.scenario]}, {PRCC_OUTCOME_TITLES[wildcards.outcome]}', fontsize=32)
-        fig.savefig(output.plot); plt.close(fig)
+        fig.savefig(output.plot, dpi=300); plt.close(fig)
 
 rule plot_prcc_grid:
     input:
@@ -666,7 +727,7 @@ rule plot_prcc_grid:
                 if r == 0: ax.set_title(PRCC_OUTCOME_TITLES.get(outcome, outcome), fontsize=20)
         fig.legend(
             handles=[Patch(facecolor='gray', label=r'PRCC ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
-                Patch(facecolor='gray', hatch='////', label=r'PRCC ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3, alpha=0.5)],
+                Patch(facecolor='gray', hatch='////', label=r'PRCC ($I_\text{crit}=10^{-3}$)', edgecolor='k', linewidth=0.3, alpha=0.5)],
             loc='outside lower center', ncol=6, fontsize=14, frameon=True)
         fig.savefig(output.plot); plt.close(fig)
 
@@ -723,11 +784,11 @@ rule plot_combined_sensitivity_grid:
         fig.legend(
             handles=[
                 Patch(facecolor='gray', label=r'|PRCC| ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
-                Patch(facecolor='gray', hatch='////', label=r'|PRCC| ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', hatch='////', label=r'|PRCC| ($I_\text{crit}=10^{-3}$)', edgecolor='k', linewidth=0.3),
                 Patch(facecolor='gray', alpha=0.7, label=r'$S_1$ ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
-                Patch(facecolor='gray', alpha=0.7, hatch='////', label=r'$S_1$ ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3),
+                Patch(facecolor='gray', alpha=0.7, hatch='////', label=r'$S_1$ ($I_\text{crit}=10^{-3}$)', edgecolor='k', linewidth=0.3),
                 Patch(facecolor='gray', alpha=0.35, label=r'$S_T$ ($I_\text{crit}=0$)', edgecolor='k', linewidth=0.3),
-                Patch(facecolor='gray', alpha=0.35, hatch='////', label=r'$S_T$ ($I_\text{crit}=10^{-4}$)', edgecolor='k', linewidth=0.3)], 
+                Patch(facecolor='gray', alpha=0.35, hatch='////', label=r'$S_T$ ($I_\text{crit}=10^{-3}$)', edgecolor='k', linewidth=0.3)], 
             loc='outside lower center', ncol=6, fontsize=16, frameon=True)
         fig.savefig(output.plot); plt.close(fig)
 
@@ -806,6 +867,7 @@ rule plot_true_vs_reported_Rt_scenarios_piecewise:
 
 rule plot_true_vs_reported_Rt_heatmaps:
     output:
+        oscillations ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_scatter_amplitudes_vs_fractions_{scenario}.png",
         Rt_final ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_Rt_final_{scenario}.png",
         time_to_below ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_time_to_below_{scenario}.png",
         Itot ="{outdir}/compartmental/true_vs_reported_Rt_{pathogen}_k{k}_heatmap_Itot_{scenario}.png",
@@ -828,12 +890,14 @@ rule plot_true_vs_reported_Rt_heatmaps:
 
         fig, ax = plt.subplots(figsize=FIGSIZE)
         sc = ax.scatter(amplitudes, Itot, c=delay, alpha=0.2, s=2)
+        ax.set_box_aspect(1)
+        cax = make_axes_locatable(ax).append_axes("right", size="5%")
+        cbar = fig.colorbar(sc, cax=cax)
+        cbar.set_label(r'total delay ($\tau_W+\tau_B$)', fontsize=14)
         ax.set_title('Effect of oscillations', fontsize=18)
         ax.set_xlabel('Oscillation amplitudes', fontsize=14)
         ax.set_ylabel('Total fraction infected', fontsize=14)
-        cbar = fig.colorbar(sc, ax=ax)
-        cbar.set_label(r'total delay ($\tau_W+\tau_B$)', fontsize=14, labelpad=10)
-        plt.savefig(f"{wildcards.outdir}/compartmental/true_vs_reported_Rt_{wildcards.pathogen}_k{wildcards.k}_scatter_amplitudes_vs_fractions_{wildcards.scenario}.png"); plt.close()
+        plt.savefig(output.oscillations); plt.close()
 
         kwargs = dict(x_logscale=False, xlabel='Behavioural delay ($\\tau_B$)', ylabel='Reporting delay ($\\tau_W$)')
         scenario = f'({wildcards.pathogen}, $k={k:g}$)'
@@ -999,7 +1063,7 @@ rule plot_period_and_damping_scatter:
             ax.plot(lim, lim, 'k--', lw=1)
             ax.axhline(0, color='k', lw=0.5, ls='--'); ax.axvline(0, color='k', lw=0.5, ls='--')
             ax.set_ylim(lim)
-        ax.set_aspect('equal')
+        ax.set_box_aspect(1) # ax.set_aspect("equal", adjustable="box")
         ax.set_xlabel('analytical', fontsize=14)
         ax.set_ylabel('simulated', fontsize=14)
         ax.set_title(f'Decay rates ({wildcards.pathogen}, $k={k:g}$)', fontsize=18)
@@ -1018,10 +1082,12 @@ rule plot_hopf_boundary:
         fig, ax = plt.subplots(figsize=FIGSIZE)
         ax.fill_between(eps_w, kc, 1e3, color="r", alpha=0.1, lw=0)
         ax.fill_between(eps_w, K_RANGE[0], K_RANGE[1], color="k", alpha=0.1, lw=0)
+        ax.axhline(10, color="grey")
         ax.plot(eps_w, kc, "k-")
-        ax.text(0.9, 60, "unstable", ha="right", va="top", color="r", fontsize=10)
-        ax.text(0.3, 20, "stable", ha="left", va="bottom", color="0.3", fontsize=10)
-        ax.text(0.5, 5, r"plausible range $k\in[%g,%g]$" % K_RANGE, ha="center", va="center", color="k", fontsize=10)
+        ax.text(0.9, 60, "unstable", ha="right", va="top", color="r", fontsize=14)
+        ax.text(0.3, 20, "stable", ha="left", va="bottom", color="k", fontsize=14)
+        ax.text(0.5, 12, "$k=10$", ha="center", va="center", color="grey", fontsize=14)
+        ax.text(0.5, 5, r"plausible range $k\in[%g,%g]$" % K_RANGE, ha="center", va="center", color="k", fontsize=14)
         ax.set_yscale("log")
         ax.set_ylim(1, 100)
         ax.set_xlim(0.05, 1.0)
@@ -1099,7 +1165,7 @@ rule plot_linearised_branching_process_extinction_probabilities:
         plt.savefig(output.plot); plt.close()
 
         fig, ax = plot_heatmap(eps_ww, eps_ss, Iest, cmap='plasma', 
-            norm=LogNorm(vmin=np.max([float(np.nanmin(Iest)),1]), vmax=np.min([np.max([float(np.nanmax(Iest)),1]), 1e9])),
+            norm=LogNorm(vmin=np.max([float(np.nanmin(Iest)),1]), vmax=np.min([np.max([float(np.nanmax(Iest)),1]), 1e2])),
             xlabel='Warning response efficacy $\\varepsilon_w$', ylabel='Isolation efficacy $\\varepsilon_s$',
             title='$I_\\text{establishment}$', title_fontsize=20)
         plt.savefig(output.I_establishment); plt.close()
@@ -1594,11 +1660,11 @@ rule plot_spatial_trajectories:
             d = unpack_spatial(ys, epi_params, model=MODEL_NAMES[pathogen])
             ax.plot(ts, d["Is_A"] / N_A, label="surveilled deme A", color="blue", alpha=0.7)
             ax.plot(ts, d["Is_B"] / (1-N_A), label="unsurveilled deme B", color="red", alpha=0.7)
-            ax.set_title(f"m = {m}/day")
-            ax.set_xlabel("time (days)")
-        axs[0].set_ylabel("symptomatic prevalence")
-        axs[0].legend(fontsize=8, loc="upper right")
-        fig.suptitle(f"Spatial model: effect of migration rate ($N_A=N_B=0.5$)")
+            ax.set_title(f"m = {m}/day", fontsize=14)
+            ax.set_xlabel("time (days)", fontsize=14)
+        axs[0].set_ylabel("symptomatic prevalence", fontsize=14)
+        axs[0].legend(fontsize=14, loc="upper right")
+        fig.suptitle(f"Spatial model: effect of migration rate ($N_A=N_B=0.5$)", fontsize=20)
         plt.savefig(f"{output.migration}")
         plt.close()
 
@@ -1612,11 +1678,11 @@ rule plot_spatial_trajectories:
             d = unpack_spatial(ys, epi_params, model=MODEL_NAMES[pathogen])
             ax.plot(ts, d["Is_A"] / N_A, label="surveilled deme A", color="blue", alpha=0.7)
             ax.plot(ts, d["Is_B"] / (1-N_A), label="unsurveilled deme B", color="red", alpha=0.7)
-            ax.set_title(f"$N_A$ = {N_A}")
-            ax.set_xlabel("time (days)")
-        axs[0].set_ylabel("symptomatic prevalence")
-        axs[0].legend(fontsize=8, loc="upper right")
-        fig.suptitle(f"Spatial model: effect of population split (m = {m}/day)")
+            ax.set_title(f"$N_A$ = {N_A}", fontsize=14)
+            ax.set_xlabel("time (days)", fontsize=14)
+        axs[0].set_ylabel("symptomatic prevalence", fontsize=14)
+        axs[0].legend(fontsize=14, loc="upper right")
+        fig.suptitle(f"Spatial model: effect of population split (m = {m}/day)", fontsize=20)
         plt.savefig(f"{output.split}")
         plt.close()
 
@@ -1887,8 +1953,8 @@ MAX_TIME = 500.0
 START_SAMPLING = 0.0 #50.0
 MIN_SAMPLES = 100
 MAX_SAMPLES = 100
-P_GRID = [0.351, 0.5725] #[0.0, 0.351, 0.8]
-PSI_GRID = [0.05, 0.1] #[0.01, 0.1]
+P_GRID = [0.351, 0.6755] #0.5725] #[0.0, 0.351, 0.8] #
+PSI_GRID = [0.05, 0.1] #[0.01, 0.1] #
 
 rule remaster_params_fixed_sample_size:
     output:
@@ -2002,6 +2068,7 @@ rule all:
         expand(rules.plot_baseline_trajectories.output.plot, pathogen=PATHOGENS, outdir=OUTDIR),
         expand(rules.plot_trajectory.output.plot, outdir=OUTDIR, pathogen=PATHOGENS, epsilon_s=[0.0, 0.4, 0.8], epsilon_w=[0.0, 0.4, 0.8]),
         expand(rules.plot_main_intervention_grid.output.plot, outdir=OUTDIR, k=[10]),
+        expand(rules.plot_main_intervention_grid_lct_comparison.output.plot, outdir=OUTDIR),
         expand(rules.plot_R_1_contours.output.plot, outdir=OUTDIR),
         expand(rules.plot_combined_contour_grid_R1_Itot.output.plot, outdir=OUTDIR),
         expand(rules.delayed_ww_intervention.output.plot, outdir=OUTDIR, pathogen=["SARS-CoV-2"]),

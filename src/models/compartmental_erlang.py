@@ -69,9 +69,9 @@ def erlang_initial_state(E0, idx: ErlangIndices, n_W, n_B):
     ])
 
 
-@partial(jax.jit, static_argnames=['t1', 'n_ts'])
+@partial(jax.jit, static_argnames=['t1', 'n_ts', 'max_steps'])
 def simulate_SEIPAR_W_Erlang(params: ParamsErlang = ParamsErlang.for_SEIPAR(), t1: float = 100.0,
-        E0: float = 1e-6, n_ts=None):
+        E0: float = 1e-6, n_ts=None, max_steps=50_000):
     """SEIPAR model with wastewater feedback and linear chains for infected compartments."""
     idx = get_erlang_indices(params)
     n_W, n_B = params.n_W, params.n_B
@@ -90,4 +90,4 @@ def simulate_SEIPAR_W_Erlang(params: ParamsErlang = ParamsErlang.for_SEIPAR(), t
         dB = chain_derivative(B, reported, n_B / params.tau_B)
         return jnp.concatenate([dFlow, dW, dB])
 
-    return solve(_SEIPAR_W, erlang_initial_state(E0, idx, n_W, n_B), params, t1, n_ts)
+    return solve(_SEIPAR_W, erlang_initial_state(E0, idx, n_W, n_B), params, t1, n_ts, max_steps=max_steps)
